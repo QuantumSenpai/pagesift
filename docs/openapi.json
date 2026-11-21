@@ -1,0 +1,1649 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PageSift Backend API",
+    "version": "1.0.0",
+    "description": "PageSift backend API for extension authentication, account settings, project organization, and explicitly saved design artifacts."
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {}
+  },
+  "paths": {
+    "/v1/health/live": {
+      "get": {
+        "summary": "Liveness probe",
+        "tags": ["Operations"],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "timestamp"],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["ok"]
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/health/ready": {
+      "get": {
+        "summary": "Readiness probe checking PostgreSQL connectivity with timeout",
+        "tags": ["Operations"],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "database", "latencyMs", "timestamp"],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["ready"]
+                    },
+                    "database": {
+                      "type": "string",
+                      "enum": ["up"]
+                    },
+                    "latencyMs": {
+                      "type": "integer"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/oauth/google/start": {
+      "post": {
+        "summary": "Initiate Google OAuth 2.0 / OIDC sign-in with PKCE",
+        "tags": ["Authentication"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["redirectUri", "codeChallenge", "codeChallengeMethod"],
+                "properties": {
+                  "redirectUri": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "codeChallenge": {
+                    "type": "string",
+                    "minLength": 43,
+                    "maxLength": 128
+                  },
+                  "codeChallengeMethod": {
+                    "type": "string",
+                    "enum": ["S256"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["authorizationUrl", "state", "expiresAt"],
+                  "properties": {
+                    "authorizationUrl": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/oauth/google/callback": {
+      "get": {
+        "summary": "OAuth 2.0 / OIDC callback from Google returning a PKCE-locked handoff code",
+        "tags": ["Authentication"],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "code",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "state",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "error",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "error_description",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "scope",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "authuser",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "prompt",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v1/auth/token/exchange": {
+      "post": {
+        "summary": "Exchange single-use handoff code and client PKCE codeVerifier for session tokens",
+        "tags": ["Authentication"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["handoffCode", "state", "codeVerifier"],
+                "properties": {
+                  "handoffCode": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "codeVerifier": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "accessToken",
+                    "accessTokenExpiresAt",
+                    "refreshToken",
+                    "refreshTokenExpiresAt",
+                    "account"
+                  ],
+                  "properties": {
+                    "accessToken": {
+                      "type": "string"
+                    },
+                    "accessTokenExpiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "refreshToken": {
+                      "type": "string"
+                    },
+                    "refreshTokenExpiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "account": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "provider",
+                        "email",
+                        "displayName",
+                        "avatarUrl",
+                        "createdAt",
+                        "updatedAt"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "provider": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string",
+                          "format": "email"
+                        },
+                        "displayName": {
+                          "type": "string"
+                        },
+                        "avatarUrl": {
+                          "type": ["string", "null"]
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/token/refresh": {
+      "post": {
+        "summary": "Rotate refresh token and issue new access token",
+        "tags": ["Authentication"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["refreshToken"],
+                "properties": {
+                  "refreshToken": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "accessToken",
+                    "accessTokenExpiresAt",
+                    "refreshToken",
+                    "refreshTokenExpiresAt",
+                    "account"
+                  ],
+                  "properties": {
+                    "accessToken": {
+                      "type": "string"
+                    },
+                    "accessTokenExpiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "refreshToken": {
+                      "type": "string"
+                    },
+                    "refreshTokenExpiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "account": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "provider",
+                        "email",
+                        "displayName",
+                        "avatarUrl",
+                        "createdAt",
+                        "updatedAt"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "provider": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string",
+                          "format": "email"
+                        },
+                        "displayName": {
+                          "type": "string"
+                        },
+                        "avatarUrl": {
+                          "type": ["string", "null"]
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/signout": {
+      "post": {
+        "summary": "Revoke current session or all sessions for the authenticated account",
+        "tags": ["Authentication"],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v1/account": {
+      "get": {
+        "summary": "Retrieve the authenticated account profile",
+        "tags": ["Account"],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["account"],
+                  "properties": {
+                    "account": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "provider",
+                        "email",
+                        "displayName",
+                        "avatarUrl",
+                        "createdAt",
+                        "updatedAt"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "provider": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string",
+                          "format": "email"
+                        },
+                        "displayName": {
+                          "type": "string"
+                        },
+                        "avatarUrl": {
+                          "type": ["string", "null"]
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete the authenticated account and cascade cleanup of all owned data",
+        "tags": ["Account"],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v1/account/settings": {
+      "get": {
+        "summary": "Retrieve authenticated account preferences",
+        "tags": ["Settings"],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["settings"],
+                  "properties": {
+                    "settings": {
+                      "type": "object",
+                      "required": [
+                        "defaultExportFormat",
+                        "colorFormat",
+                        "spacingUnit",
+                        "includeResponsiveBreakpoints",
+                        "redactQueryParamsInUrls",
+                        "defaultPromptTarget",
+                        "updatedAt"
+                      ],
+                      "properties": {
+                        "defaultExportFormat": {
+                          "type": "string",
+                          "enum": ["markdown", "json", "html_css"]
+                        },
+                        "colorFormat": {
+                          "type": "string",
+                          "enum": ["hex", "rgb", "hsl", "oklch"]
+                        },
+                        "spacingUnit": {
+                          "type": "string",
+                          "enum": ["px", "rem"]
+                        },
+                        "includeResponsiveBreakpoints": {
+                          "type": "boolean"
+                        },
+                        "redactQueryParamsInUrls": {
+                          "type": "boolean"
+                        },
+                        "defaultPromptTarget": {
+                          "type": "string",
+                          "enum": ["generic", "react_tailwind", "html_css", "vue_css"]
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Replace authenticated account preferences with strictly validated settings",
+        "tags": ["Settings"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "defaultExportFormat",
+                  "colorFormat",
+                  "spacingUnit",
+                  "includeResponsiveBreakpoints",
+                  "redactQueryParamsInUrls",
+                  "defaultPromptTarget"
+                ],
+                "properties": {
+                  "defaultExportFormat": {
+                    "type": "string",
+                    "enum": ["markdown", "json", "html_css"]
+                  },
+                  "colorFormat": {
+                    "type": "string",
+                    "enum": ["hex", "rgb", "hsl", "oklch"]
+                  },
+                  "spacingUnit": {
+                    "type": "string",
+                    "enum": ["px", "rem"]
+                  },
+                  "includeResponsiveBreakpoints": {
+                    "type": "boolean"
+                  },
+                  "redactQueryParamsInUrls": {
+                    "type": "boolean"
+                  },
+                  "defaultPromptTarget": {
+                    "type": "string",
+                    "enum": ["generic", "react_tailwind", "html_css", "vue_css"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["settings"],
+                  "properties": {
+                    "settings": {
+                      "type": "object",
+                      "required": [
+                        "defaultExportFormat",
+                        "colorFormat",
+                        "spacingUnit",
+                        "includeResponsiveBreakpoints",
+                        "redactQueryParamsInUrls",
+                        "defaultPromptTarget",
+                        "updatedAt"
+                      ],
+                      "properties": {
+                        "defaultExportFormat": {
+                          "type": "string",
+                          "enum": ["markdown", "json", "html_css"]
+                        },
+                        "colorFormat": {
+                          "type": "string",
+                          "enum": ["hex", "rgb", "hsl", "oklch"]
+                        },
+                        "spacingUnit": {
+                          "type": "string",
+                          "enum": ["px", "rem"]
+                        },
+                        "includeResponsiveBreakpoints": {
+                          "type": "boolean"
+                        },
+                        "redactQueryParamsInUrls": {
+                          "type": "boolean"
+                        },
+                        "defaultPromptTarget": {
+                          "type": "string",
+                          "enum": ["generic", "react_tailwind", "html_css", "vue_css"]
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects": {
+      "post": {
+        "summary": "Create a new project owned by the authenticated account",
+        "tags": ["Projects"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "sourceDomain": {
+                    "type": ["string", "null"],
+                    "maxLength": 253
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["project"],
+                  "properties": {
+                    "project": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "name",
+                        "description",
+                        "sourceDomain",
+                        "version",
+                        "createdAt",
+                        "updatedAt"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "sourceDomain": {
+                          "type": ["string", "null"]
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List projects owned by the authenticated account with deterministic cursor pagination",
+        "tags": ["Projects"],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["items", "nextCursor"],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "name",
+                          "description",
+                          "sourceDomain",
+                          "version",
+                          "createdAt",
+                          "updatedAt"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "sourceDomain": {
+                            "type": ["string", "null"]
+                          },
+                          "version": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    },
+                    "nextCursor": {
+                      "type": ["string", "null"]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}": {
+      "get": {
+        "summary": "Retrieve a project by ID (enforcing ownership)",
+        "tags": ["Projects"],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["project"],
+                  "properties": {
+                    "project": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "name",
+                        "description",
+                        "sourceDomain",
+                        "version",
+                        "createdAt",
+                        "updatedAt"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "sourceDomain": {
+                          "type": ["string", "null"]
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update a project with optimistic concurrency control (expectedVersion)",
+        "tags": ["Projects"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["expectedVersion"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "sourceDomain": {
+                    "type": ["string", "null"],
+                    "maxLength": 253
+                  },
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["project"],
+                  "properties": {
+                    "project": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "name",
+                        "description",
+                        "sourceDomain",
+                        "version",
+                        "createdAt",
+                        "updatedAt"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "sourceDomain": {
+                          "type": ["string", "null"]
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete an owned project and cascade cleanup of its saved artifacts",
+        "tags": ["Projects"],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/artifacts": {
+      "post": {
+        "summary": "Save a versioned artifact under an owned project",
+        "tags": ["Artifacts"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["kind", "title", "schemaVersion", "content"],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "design_reference",
+                      "rebuild_prompt",
+                      "design_token_export",
+                      "asset_manifest"
+                    ]
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "schemaVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "sourceUrl": {
+                    "type": ["string", "null"]
+                  },
+                  "content": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["artifact"],
+                  "properties": {
+                    "artifact": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "projectId",
+                        "kind",
+                        "title",
+                        "schemaVersion",
+                        "sourceUrl",
+                        "byteLength",
+                        "contentSha256",
+                        "version",
+                        "createdAt",
+                        "updatedAt",
+                        "content"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "design_reference",
+                            "rebuild_prompt",
+                            "design_token_export",
+                            "asset_manifest"
+                          ]
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "sourceUrl": {
+                          "type": ["string", "null"]
+                        },
+                        "byteLength": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "contentSha256": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "content": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List artifact metadata for an owned project without loading artifact bodies",
+        "tags": ["Artifacts"],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "design_reference",
+                "rebuild_prompt",
+                "design_token_export",
+                "asset_manifest"
+              ]
+            },
+            "in": "query",
+            "name": "kind",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["items", "nextCursor"],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "projectId",
+                          "kind",
+                          "title",
+                          "schemaVersion",
+                          "sourceUrl",
+                          "byteLength",
+                          "contentSha256",
+                          "version",
+                          "createdAt",
+                          "updatedAt"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "projectId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "design_reference",
+                              "rebuild_prompt",
+                              "design_token_export",
+                              "asset_manifest"
+                            ]
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "schemaVersion": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "sourceUrl": {
+                            "type": ["string", "null"]
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "contentSha256": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    },
+                    "nextCursor": {
+                      "type": ["string", "null"]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/artifacts/{artifactId}": {
+      "get": {
+        "summary": "Retrieve full artifact metadata and body content",
+        "tags": ["Artifacts"],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "artifactId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["artifact"],
+                  "properties": {
+                    "artifact": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "projectId",
+                        "kind",
+                        "title",
+                        "schemaVersion",
+                        "sourceUrl",
+                        "byteLength",
+                        "contentSha256",
+                        "version",
+                        "createdAt",
+                        "updatedAt",
+                        "content"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "design_reference",
+                            "rebuild_prompt",
+                            "design_token_export",
+                            "asset_manifest"
+                          ]
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "sourceUrl": {
+                          "type": ["string", "null"]
+                        },
+                        "byteLength": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "contentSha256": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "content": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update an artifact with optimistic concurrency control (expectedVersion)",
+        "tags": ["Artifacts"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["schemaVersion", "content", "expectedVersion"],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "schemaVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "sourceUrl": {
+                    "type": ["string", "null"]
+                  },
+                  "content": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "artifactId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["artifact"],
+                  "properties": {
+                    "artifact": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "projectId",
+                        "kind",
+                        "title",
+                        "schemaVersion",
+                        "sourceUrl",
+                        "byteLength",
+                        "contentSha256",
+                        "version",
+                        "createdAt",
+                        "updatedAt",
+                        "content"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "design_reference",
+                            "rebuild_prompt",
+                            "design_token_export",
+                            "asset_manifest"
+                          ]
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "sourceUrl": {
+                          "type": ["string", "null"]
+                        },
+                        "byteLength": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "contentSha256": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "content": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete an owned artifact and its stored body",
+        "tags": ["Artifacts"],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "artifactId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "summary": "Retrieve the OpenAPI 3.1.0 specification document",
+        "tags": ["Operations"],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    }
+  }
+}

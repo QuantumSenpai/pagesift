@@ -1,0 +1,70 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: pagesift_test
+          POSTGRES_PASSWORD: pagesift_test_password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pagesift_test -d postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify comment-free authored files
+        run: npm run check:no-comments
+
+      - name: Verify formatting
+        run: npm run format:check
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Run strict type check
+        run: npm run typecheck
+
+      - name: Run unit and PostgreSQL integration tests
+        env:
+          TEST_ADMIN_DATABASE_URL: postgresql://pagesift_test:pagesift_test_password@127.0.0.1:5432/postgres
+        run: npm test
+
+      - name: Build production distribution
+        run: npm run build
+
+      - name: Validate Chrome extension package
+        run: npm run validate:extension
+
+      - name: Run dependency vulnerability audit
+        run: npm audit --audit-level=low
+
+      - name: Run HTTP smoke test on built server
+        env:
+          TEST_ADMIN_DATABASE_URL: postgresql://pagesift_test:pagesift_test_password@127.0.0.1:5432/postgres
+        run: npm run smoke
