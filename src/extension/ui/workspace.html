@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PageSift Workspace — 15 Local Web Inspection & Design Tools</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #1e293b;
+        --border: #334155;
+        --text: #f8fafc;
+        --muted: #94a3b8;
+        --accent: #3b82f6;
+        --success: #10b981;
+        --danger: #ef4444;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-width: 760px;
+        min-height: 560px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 13px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 16px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+      }
+      .brand {
+        font-weight: 700;
+        font-size: 15px;
+        letter-spacing: -0.01em;
+      }
+      .badge {
+        background: #1d4ed8;
+        color: #dbeafe;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        margin-left: 8px;
+      }
+      .top-controls {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      select,
+      input,
+      button,
+      textarea {
+        background: #0f172a;
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 12px;
+      }
+      button {
+        cursor: pointer;
+        background: var(--accent);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+      button.secondary {
+        background: var(--panel);
+        border-color: var(--border);
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 185px 1fr;
+        min-height: calc(100vh - 49px);
+      }
+      nav#tool-dock {
+        background: var(--panel);
+        border-right: 1px solid var(--border);
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      nav#tool-dock button {
+        text-align: left;
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--muted);
+        padding: 7px 10px;
+      }
+      nav#tool-dock button.active {
+        background: #1d4ed8;
+        color: #ffffff;
+        border-color: #3b82f6;
+      }
+      main {
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .control-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .control-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      pre#tool-output {
+        margin: 0;
+        background: #020617;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        overflow: auto;
+        max-height: 360px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+      }
+      .status-bar {
+        font-size: 12px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <span class="brand">PageSift</span>
+        <span class="badge">Local-First MV3 · 15 Tools</span>
+      </div>
+      <div class="top-controls">
+        <label for="project-select">Project:</label>
+        <select id="project-select"></select>
+        <input id="new-project-name" type="text" placeholder="New project name" />
+        <button id="create-project-btn" class="secondary" type="button">New Project</button>
+        <button id="save-artifact-btn" class="secondary" type="button">Save Result to IndexedDB</button>
+        <a href="options.html" target="_blank" style="color: #93c5fd; text-decoration: none; font-size: 12px;">Options &amp; Storage</a>
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav id="tool-dock" aria-label="PageSift 15 Tools">
+        <button type="button" data-tool="inspect" class="active">1. Inspect</button>
+        <button type="button" data-tool="clone_page">2. Clone Page (ZIP)</button>
+        <button type="button" data-tool="clone_prompt">3. Clone Prompt</button>
+        <button type="button" data-tool="design_md">4. Design MD</button>
+        <button type="button" data-tool="assets">5. Assets</button>
+        <button type="button" data-tool="colors">6. Colors</button>
+        <button type="button" data-tool="fonts">7. Fonts</button>
+        <button type="button" data-tool="measure">8. Measure</button>
+        <button type="button" data-tool="edit_text">9. Edit Text</button>
+        <button type="button" data-tool="capture">10. Capture</button>
+        <button type="button" data-tool="responsive">11. Responsive</button>
+        <button type="button" data-tool="swap_font">12. Swap Font</button>
+        <button type="button" data-tool="arrange">13. Arrange</button>
+        <button type="button" data-tool="design_review">14. Design Review</button>
+        <button type="button" data-tool="tech_stack">15. Tech Stack</button>
+      </nav>
+
+      <main>
+        <div class="control-card">
+          <div id="active-tool-title" style="font-weight: 700; font-size: 14px;">1. Inspect Element</div>
+          <div class="control-row">
+            <input id="target-selector-input" type="text" placeholder="CSS selector (e.g. h1, #hero, .card)" style="min-width: 220px;" />
+            <input id="secondary-input" type="text" placeholder="Secondary selector / Text / Font / Offset" style="min-width: 240px;" />
+            <select id="mode-select">
+              <option value="default">Default Mode</option>
+              <option value="react_tailwind">React + Tailwind</option>
+              <option value="html_css">HTML + CSS</option>
+              <option value="vue_css">Vue 3 + CSS</option>
+              <option value="visible">Capture: Visible Viewport</option>
+              <option value="full_page">Capture: Full Page</option>
+              <option value="image/png">Export: PNG</option>
+              <option value="image/jpeg">Export: JPEG</option>
+              <option value="image/webp">Export: WebP</option>
+              <option value="application/pdf">Export: PDF</option>
+              <option value="move">Arrange: Move</option>
+              <option value="hide">Arrange: Hide</option>
+              <option value="remove">Arrange: Remove</option>
+            </select>
+            <button id="run-tool-btn" type="button">Run Tool Locally</button>
+            <button id="toggle-picker-btn" class="secondary" type="button">Toggle On-Page Picker</button>
+          </div>
+          <div class="control-row">
+            <button id="undo-edit-btn" class="secondary" type="button">Undo Edit</button>
+            <button id="redo-edit-btn" class="secondary" type="button">Redo Edit</button>
+            <button id="reset-edit-btn" class="secondary" type="button">Reset All Edits</button>
+            <button id="preview-nvidia-btn" class="secondary" type="button">Preview NVIDIA Data Egress</button>
+            <button id="run-nvidia-btn" class="secondary" type="button">Enhance with Optional NVIDIA AI</button>
+          </div>
+        </div>
+
+        <div id="status-message" class="status-bar">Ready — 100% local execution (no login or backend required).</div>
+        <pre id="tool-output" aria-live="polite">Select any of the 15 tools and click "Run Tool Locally".</pre>
+      </main>
+    </div>
+
+    <script src="workspace.js"></script>
+  </body>
+</html>
