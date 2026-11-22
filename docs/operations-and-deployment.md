@@ -11,7 +11,8 @@ The server validates all environment variables at startup in `src/config/env.ts`
 | `PORT` | No | `3000` | TCP listen port (`0`–`65535`). |
 | `LOG_LEVEL` | No | `info` | Pino log level: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent`. |
 | `TRUST_PROXY` | No | `false` | `true` or `false`. Set `true` only when deployed behind a trusted reverse proxy / load balancer that overwrites `X-Forwarded-For`. |
-| `DATABASE_URL` | **Yes** | — | PostgreSQL connection URL (`postgresql://user:pass@host:5432/dbname`). |
+| `DATABASE_URL` | **Yes** | — | Pooled PostgreSQL connection URL for application queries (`postgresql://user:pass@host:5432/dbname`). On Neon, use the `-pooler` hostname and preserve `sslmode` / query parameters. |
+| `DATABASE_URL_UNPOOLED` | No | Falls back to `DATABASE_URL` | Direct (non-pooled) PostgreSQL connection URL used exclusively for schema migrations (`npm run migrate` and startup migrations) and `pg_dump`/`pg_restore`. On Neon, use the non-pooler endpoint hostname and preserve SSL query parameters. |
 | `DB_POOL_MAX` | No | `20` | Maximum PostgreSQL connections in `pg.Pool` (`1`–`100`). |
 | `DB_CONNECTION_TIMEOUT_MS` | No | `5000` | Pool connection acquisition timeout in milliseconds (`100`–`60000`). |
 | `DB_IDLE_TIMEOUT_MS` | No | `30000` | Idle client timeout in milliseconds (`500`–`300000`). |
@@ -42,16 +43,16 @@ The server validates all environment variables at startup in `src/config/env.ts`
 
 ## 2. Reproducible Local Development Setup
 
-### Option A: Native Node.js + Local PostgreSQL 17
+### Option A: Native Node.js + Local PostgreSQL 17 or Neon PostgreSQL
 1. Install dependencies from the committed lockfile:
    ```bash
    npm ci
    ```
-2. Copy `.env.example` to `.env` and adjust `DATABASE_URL` to point to a local development database:
+2. Copy `.env.example` to `.env` and configure `DATABASE_URL` (pooled application traffic) and `DATABASE_URL_UNPOOLED` (direct migration connection). For local PostgreSQL, `DATABASE_URL_UNPOOLED` may be omitted and will fall back to `DATABASE_URL`. For Neon PostgreSQL, set `DATABASE_URL` to the `-pooler` connection string and `DATABASE_URL_UNPOOLED` to the direct connection string while preserving all Neon-generated SSL query parameters:
    ```bash
    cp .env.example .env
    ```
-3. Run database migrations:
+3. Run database migrations (executes via `DATABASE_URL_UNPOOLED`, falling back to `DATABASE_URL` when unset):
    ```bash
    npm run migrate
    ```
@@ -65,7 +66,9 @@ The server validates all environment variables at startup in `src/config/env.ts`
    npm start
    ```
 
-> **Note on Automated Tests**: `npm test`, `npm run smoke`, and `npm run loadtest` do **not** require a pre-running PostgreSQL server if PostgreSQL binaries (`initdb`, `pg_ctl`) are installed locally; they automatically initialize an isolated disposable PostgreSQL cluster in `os.tmpdir()` and clean it up upon completion. If `TEST_ADMIN_DATABASE_URL` is set, they create and drop isolated disposable databases (`pagesift_test_<id>`) on that instance.
+> **Note on Optional Backend & Extension Boundary**: PageSift's Chrome Extension remains 100% free and local-first without requiring authentication or database connectivity. Do not copy database credentials or Google client secrets into the extension bundle, and do not invent a `chrome-extension://<id>` entry in `CORS_ALLOWED_ORIGINS` or `ALLOWED_REDIRECT_URIS` before an extension ID is established.
+
+> **Note on Automated Tests**: `npm test`, `npm run smoke`, and `npm run loadtest` do **not** require a pre-running PostgreSQL server if PostgreSQL binaries (`initdb`, `pg_ctl`) are installed locally; they automatically initialize an isolated disposable PostgreSQL cluster in `os.tmpdir()` and clean it up upon completion. If `TEST_ADMIN_DATABASE_URL` is set, they create and drop isolated disposable databases (`pagesift_test_<id>`) on that instance. Automated integration tests must never target Neon production data.
 
 ### Option B: Containerized Setup (`Dockerfile` & `docker-compose.yml`)
 1. Start PostgreSQL 17 and the PageSift backend container:
@@ -80,33 +83,34 @@ The server validates all environment variables at startup in `src/config/env.ts`
 
 Migrations are managed by Kysely (`src/db/migrator.ts` and `src/db/migrations/001_initial_schema.ts`).
 
+- **Direct vs. Pooled Connections**: Both `npm run migrate` (`src/db/cli-migrate.ts`) and server startup (`src/server.ts`) call `runMigrationsWithDirectConnection(config)`, which opens a single-connection direct pool against `DATABASE_URL_UNPOOLED` (falling back to `DATABASE_URL` when `DATABASE_URL_UNPOOLED` is unset), executes pending migrations, and closes the direct pool before application traffic begins on the pooled `DATABASE_URL`.
 - **Apply pending migrations**:
   ```bash
   npm run migrate
   ```
-- **On Server Startup**: `src/server.ts` executes `runMigrationsToLatest(dbContext.db)` before binding the HTTP listener. Kysely acquires a database-level migration lock so concurrent migration attempts execute serially, and re-running migrations when already up to date is a safe no-op.
+- **On Server Startup**: `src/server.ts` executes `runMigrationsWithDirectConnection(config)` before opening the pooled application context and binding the HTTP listener. Kysely acquires a database-level migration lock so concurrent migration attempts execute serially, and re-running migrations when already up to date is a safe no-op.
 
 ---
 
 ## 4. Backup and Restore Procedures
 
 ### Creating a Consistent Backup
-Use `pg_dump` in custom compressed format (`-Fc`), which captures schema, data, indexes, and constraints consistently inside a repeatable-read snapshot:
+Use `pg_dump` in custom compressed format (`-Fc`) against a direct (unpooled) connection string (`DATABASE_URL_UNPOOLED`, or `DATABASE_URL` for local PostgreSQL), which captures schema, data, indexes, and constraints consistently inside a repeatable-read snapshot:
 ```bash
 pg_dump --format=custom --no-owner --no-privileges \
   --file="pagesift_backup_$(date -u +%Y%m%dT%H%M%SZ).dump" \
-  "$DATABASE_URL"
+  "${DATABASE_URL_UNPOOLED:-$DATABASE_URL}"
 ```
 
 ### Restoring from a Backup into a Target Database
-1. Verify the target `RESTORE_DATABASE_URL` points to the intended recovery database.
+1. Verify the target `RESTORE_DATABASE_URL` points to the intended direct (unpooled) recovery database.
 2. Restore with `pg_restore`:
    ```bash
    pg_restore --clean --if-exists --no-owner --no-privileges \
      --dbname="$RESTORE_DATABASE_URL" \
      pagesift_backup_YYYYMMDDTHHMMSSZ.dump
    ```
-3. Run `DATABASE_URL="$RESTORE_DATABASE_URL" npm run migrate` to ensure any newer forward migrations are applied, and verify health via `GET /v1/health/ready`.
+3. Run `DATABASE_URL="$RESTORE_DATABASE_URL" DATABASE_URL_UNPOOLED="$RESTORE_DATABASE_URL" npm run migrate` to ensure any newer forward migrations are applied, and verify health via `GET /v1/health/ready`.
 
 ---
 

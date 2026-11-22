@@ -1,9 +1,14 @@
 import { Kysely, PostgresDialect, sql } from 'kysely';
 import pg from 'pg';
-import type { AppConfig } from '../config/env.js';
+import { resolveDirectDatabaseUrl, type AppConfig } from '../config/env.js';
 import type { DatabaseSchema } from './types.js';
 
 const { Pool } = pg;
+
+export interface DatabaseContextOptions {
+  connectionString?: string;
+  poolMax?: number;
+}
 
 export interface DatabaseContext {
   db: Kysely<DatabaseSchema>;
@@ -12,10 +17,13 @@ export interface DatabaseContext {
   close: () => Promise<void>;
 }
 
-export function createDatabaseContext(config: AppConfig): DatabaseContext {
+export function createDatabaseContext(
+  config: AppConfig,
+  options: DatabaseContextOptions = {},
+): DatabaseContext {
   const pool = new Pool({
-    connectionString: config.DATABASE_URL,
-    max: config.DB_POOL_MAX,
+    connectionString: options.connectionString ?? config.DATABASE_URL,
+    max: options.poolMax ?? config.DB_POOL_MAX,
     connectionTimeoutMillis: config.DB_CONNECTION_TIMEOUT_MS,
     idleTimeoutMillis: config.DB_IDLE_TIMEOUT_MS,
     statement_timeout: config.DB_STATEMENT_TIMEOUT_MS,
@@ -68,4 +76,11 @@ export function createDatabaseContext(config: AppConfig): DatabaseContext {
     checkReadiness,
     close,
   };
+}
+
+export function createMigrationDatabaseContext(config: AppConfig): DatabaseContext {
+  return createDatabaseContext(config, {
+    connectionString: resolveDirectDatabaseUrl(config),
+    poolMax: 1,
+  });
 }

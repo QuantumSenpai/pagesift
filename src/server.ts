@@ -1,15 +1,21 @@
 import { buildApp } from './app.js';
 import { loadConfig } from './config/env.js';
 import { createDatabaseContext } from './db/client.js';
-import { runMigrationsToLatest } from './db/migrator.js';
+import { runMigrationsWithDirectConnection } from './db/migrator.js';
 
 async function startServer(): Promise<void> {
   const config = loadConfig(process.env);
+
+  await runMigrationsWithDirectConnection(config);
+
   const dbContext = createDatabaseContext(config);
-
-  await runMigrationsToLatest(dbContext.db);
-
-  const app = await buildApp({ config, dbContext });
+  let app: Awaited<ReturnType<typeof buildApp>>;
+  try {
+    app = await buildApp({ config, dbContext });
+  } catch (err: unknown) {
+    await dbContext.close();
+    throw err;
+  }
 
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {

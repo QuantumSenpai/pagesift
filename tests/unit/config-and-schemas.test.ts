@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../../src/config/env.js';
+import { loadConfig, resolveDirectDatabaseUrl } from '../../src/config/env.js';
 import { AppError } from '../../src/errors/app-error.js';
 import { validateArtifactContent } from '../../src/schemas/artifact-schemas.js';
 import { decodeCursor, encodeCursor } from '../../src/utils/pagination.js';
@@ -22,7 +22,7 @@ const BASE_VALID_ENV: Record<string, string> = {
 
 describe('Environment configuration validation', () => {
   it('parses a valid configuration', () => {
-    const config = loadConfig(BASE_VALID_ENV);
+    const config = loadConfig(BASE_VALID_ENV, null);
     expect(config.PORT).toBe(3000);
     expect(config.CORS_ALLOWED_ORIGINS).toEqual([
       'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -33,45 +33,102 @@ describe('Environment configuration validation', () => {
 
   it('rejects wildcard CORS origins', () => {
     expect(() =>
-      loadConfig({
-        ...BASE_VALID_ENV,
-        CORS_ALLOWED_ORIGINS: '*',
-      }),
+      loadConfig(
+        {
+          ...BASE_VALID_ENV,
+          CORS_ALLOWED_ORIGINS: '*',
+        },
+        null,
+      ),
     ).toThrow(/CORS_ALLOWED_ORIGINS/);
   });
 
   it('rejects insecure non-loopback HTTP redirect URIs and fragments', () => {
     expect(() =>
-      loadConfig({
-        ...BASE_VALID_ENV,
-        ALLOWED_REDIRECT_URIS: 'http://example.com/oauth2',
-      }),
+      loadConfig(
+        {
+          ...BASE_VALID_ENV,
+          ALLOWED_REDIRECT_URIS: 'http://example.com/oauth2',
+        },
+        null,
+      ),
     ).toThrow(/ALLOWED_REDIRECT_URIS/);
 
     expect(() =>
-      loadConfig({
-        ...BASE_VALID_ENV,
-        ALLOWED_REDIRECT_URIS: 'https://example.com/oauth2#fragment',
-      }),
+      loadConfig(
+        {
+          ...BASE_VALID_ENV,
+          ALLOWED_REDIRECT_URIS: 'https://example.com/oauth2#fragment',
+        },
+        null,
+      ),
     ).toThrow(/ALLOWED_REDIRECT_URIS/);
   });
 
   it('rejects short JWT_ACCESS_SECRET values under 32 bytes', () => {
     expect(() =>
-      loadConfig({
-        ...BASE_VALID_ENV,
-        JWT_ACCESS_SECRET: 'too-short-secret',
-      }),
+      loadConfig(
+        {
+          ...BASE_VALID_ENV,
+          JWT_ACCESS_SECRET: 'too-short-secret',
+        },
+        null,
+      ),
     ).toThrow(/JWT_ACCESS_SECRET/);
   });
 
   it('rejects non-PostgreSQL DATABASE_URL values', () => {
     expect(() =>
-      loadConfig({
-        ...BASE_VALID_ENV,
-        DATABASE_URL: 'mysql://localhost:3306/db',
-      }),
+      loadConfig(
+        {
+          ...BASE_VALID_ENV,
+          DATABASE_URL: 'mysql://localhost:3306/db',
+        },
+        null,
+      ),
     ).toThrow(/DATABASE_URL/);
+  });
+
+  it('resolves DATABASE_URL_UNPOOLED for direct migrations with fallback to DATABASE_URL', () => {
+    const configWithoutUnpooled = loadConfig(BASE_VALID_ENV, null);
+    expect(configWithoutUnpooled.DATABASE_URL_UNPOOLED).toBeUndefined();
+    expect(resolveDirectDatabaseUrl(configWithoutUnpooled)).toBe(BASE_VALID_ENV['DATABASE_URL']);
+
+    const configWithBlankUnpooled = loadConfig(
+      {
+        ...BASE_VALID_ENV,
+        DATABASE_URL_UNPOOLED: '   ',
+      },
+      null,
+    );
+    expect(configWithBlankUnpooled.DATABASE_URL_UNPOOLED).toBeUndefined();
+    expect(resolveDirectDatabaseUrl(configWithBlankUnpooled)).toBe(BASE_VALID_ENV['DATABASE_URL']);
+
+    const pooledUrl =
+      'postgresql://owner:pass@ep-example-pooler.us-east-2.aws.neon.tech/pagesift?sslmode=require&channel_binding=require';
+    const directUrl =
+      'postgresql://owner:pass@ep-example.us-east-2.aws.neon.tech/pagesift?sslmode=require&channel_binding=require';
+    const configWithUnpooled = loadConfig(
+      {
+        ...BASE_VALID_ENV,
+        DATABASE_URL: pooledUrl,
+        DATABASE_URL_UNPOOLED: directUrl,
+      },
+      null,
+    );
+    expect(configWithUnpooled.DATABASE_URL).toBe(pooledUrl);
+    expect(configWithUnpooled.DATABASE_URL_UNPOOLED).toBe(directUrl);
+    expect(resolveDirectDatabaseUrl(configWithUnpooled)).toBe(directUrl);
+
+    expect(() =>
+      loadConfig(
+        {
+          ...BASE_VALID_ENV,
+          DATABASE_URL_UNPOOLED: 'sqlite:///tmp/pagesift.db',
+        },
+        null,
+      ),
+    ).toThrow(/DATABASE_URL_UNPOOLED/);
   });
 
   it('loads variables from a .env file while preserving explicit environment overrides', async () => {

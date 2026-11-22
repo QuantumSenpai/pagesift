@@ -33,6 +33,7 @@ services:
       LOG_LEVEL: info
       TRUST_PROXY: "false"
       DATABASE_URL: postgresql://pagesift:pagesift_dev_password@postgres:5432/pagesift
+      DATABASE_URL_UNPOOLED: postgresql://pagesift:pagesift_dev_password@postgres:5432/pagesift
       DB_POOL_MAX: "20"
       DB_CONNECTION_TIMEOUT_MS: "5000"
       DB_IDLE_TIMEOUT_MS: "30000"

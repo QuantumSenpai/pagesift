@@ -145,7 +145,12 @@ Content-Type: application/json
   - Full OAuth initiation, provider PKCE challenge generation, authorization code grant against an external HTTP token endpoint, RS256 ID token verification against a live HTTP JWKS endpoint, single-use handoff code exchange with client PKCE verification, refresh token rotation, session revocation, and cascade account deletion.
 - **What Automated Tests Do Not Prove / Remaining External Setup**:
   - Tests use a local HTTP OIDC boundary server (`tests/helpers/oidc-boundary-mock.ts`) signing real RS256 JWTs rather than calling live Google servers (`https://accounts.google.com` / `https://oauth2.googleapis.com/token`).
-  - Before production deployment, an operator must:
-    1. Create an OAuth 2.0 Client ID (Web Application type) in Google Cloud Console.
-    2. Register the backend callback URL (`https://<api-domain>/v1/auth/oauth/google/callback`) as an Authorized Redirect URI in Google Cloud Console.
-    3. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `CORS_ALLOWED_ORIGINS` (with the published Chrome extension ID), and `ALLOWED_REDIRECT_URIS` (`https://<extension-id>.chromiumapp.org/oauth2`).
+  - Configuring the optional backend with Google OAuth and Neon PostgreSQL does **not** automatically implement Chrome extension sign-in UI or cloud synchronization. PageSift remains a free, local-first extension where all 15 tools run locally without authentication or database connectivity.
+  - **Extension Login Integration (Pending)**: No published or fixed Chrome extension ID is established yet. Once an extension ID is established and optional extension sign-in UI is implemented:
+    1. Add `chrome-extension://<established-extension-id>` to `CORS_ALLOWED_ORIGINS`.
+    2. Add `https://<established-extension-id>.chromiumapp.org/oauth2` to `ALLOWED_REDIRECT_URIS`.
+    3. Keep `GOOGLE_CLIENT_SECRET` and database credentials strictly on the backend — never embed them in the extension bundle.
+  - **Production Deployment Checklist**:
+    1. Use an OAuth 2.0 Client ID (Web Application type) in Google Cloud Console.
+    2. Register the backend callback URL (`https://<api-domain>/v1/auth/oauth/google/callback`, or `http://127.0.0.1:3000/v1/auth/oauth/google/callback` for local development) as an Authorized Redirect URI in Google Cloud Console.
+    3. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `DATABASE_URL` (pooled), `DATABASE_URL_UNPOOLED` (direct), `CORS_ALLOWED_ORIGINS`, and `ALLOWED_REDIRECT_URIS`.

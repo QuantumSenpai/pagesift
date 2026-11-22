@@ -118,3 +118,11 @@
 - **Supporting Links**:
   - https://github.com/vitest-dev/vitest/blob/main/docs/guide/learn/setup-teardown.md
   - https://github.com/vitest-dev/vitest/blob/main/docs/api/hooks.md
+
+### 12. Neon PostgreSQL Official Documentation (`Neon` MCP `search_docs` / `get_doc`)
+- **Documentation Topics Consulted**:
+  - Connection pooling (`docs/connect/connection-pooling`): PgBouncer transaction pooling (`-pooler` hostname for `DATABASE_URL`) vs. direct connections (`DATABASE_URL_UNPOOLED`) for schema migrations, `pg_dump`/`pg_restore`, and session-level operations.
+  - Preserving Neon-generated TLS/SSL query parameters (`sslmode=require`) with `node-postgres` (`pg@8.23.1`) without disabling certificate verification.
+- **Supporting Links**:
+  - https://neon.com/docs/connect/connection-pooling
+  - https://neon.com/docs/connect/choose-connection

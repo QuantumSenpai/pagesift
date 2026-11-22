@@ -71,6 +71,7 @@ async function main(): Promise<void> {
       LOG_LEVEL: 'warn',
       TRUST_PROXY: 'false',
       DATABASE_URL: disposableDb.databaseUrl,
+      DATABASE_URL_UNPOOLED: disposableDb.databaseUrl,
       DB_POOL_MAX: '10',
       DB_CONNECTION_TIMEOUT_MS: '5000',
       DB_IDLE_TIMEOUT_MS: '10000',

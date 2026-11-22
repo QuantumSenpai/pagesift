@@ -5,6 +5,8 @@ import {
   type MigrationProvider,
   type MigrationResultSet,
 } from 'kysely/migration';
+import type { AppConfig } from '../config/env.js';
+import { createMigrationDatabaseContext } from './client.js';
 import type { DatabaseSchema } from './types.js';
 import * as initialSchema from './migrations/001_initial_schema.js';
 
@@ -35,4 +37,15 @@ export async function runMigrationsToLatest(
   }
 
   return resultSet;
+}
+
+export async function runMigrationsWithDirectConnection(
+  config: AppConfig,
+): Promise<MigrationResultSet> {
+  const migrationDbContext = createMigrationDatabaseContext(config);
+  try {
+    return await runMigrationsToLatest(migrationDbContext.db);
+  } finally {
+    await migrationDbContext.close();
+  }
 }

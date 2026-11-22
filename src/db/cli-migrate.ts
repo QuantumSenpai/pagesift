@@ -1,23 +1,17 @@
 import { loadConfig } from '../config/env.js';
-import { createDatabaseContext } from './client.js';
-import { runMigrationsToLatest } from './migrator.js';
+import { runMigrationsWithDirectConnection } from './migrator.js';
 
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
-  const dbContext = createDatabaseContext(config);
-
-  try {
-    const { results } = await runMigrationsToLatest(dbContext.db);
-    const executed = (results ?? []).map((item) => `${item.migrationName}:${item.status}`);
-    process.stdout.write(
-      JSON.stringify({
-        event: 'migrations_completed',
-        executed,
-      }) + '\n',
-    );
-  } finally {
-    await dbContext.close();
-  }
+  const { results } = await runMigrationsWithDirectConnection(config);
+  const executed = (results ?? []).map((item) => `${item.migrationName}:${item.status}`);
+  process.stdout.write(
+    JSON.stringify({
+      event: 'migrations_completed',
+      connectionMode: config.DATABASE_URL_UNPOOLED !== undefined ? 'direct' : 'default_fallback',
+      executed,
+    }) + '\n',
+  );
 }
 
 main().catch((err: unknown) => {

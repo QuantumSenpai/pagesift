@@ -1,8 +1,9 @@
 import { PassThrough } from 'node:stream';
+import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../src/app.js';
 import { createDatabaseContext } from '../../src/db/client.js';
-import { runMigrationsToLatest } from '../../src/db/migrator.js';
+import { runMigrationsToLatest, runMigrationsWithDirectConnection } from '../../src/db/migrator.js';
 import {
   startMockOidcBoundaryServer,
   type MockOidcBoundaryServer,
@@ -51,6 +52,69 @@ describe('Migrations, health checks, security headers, CORS, OpenAPI, rate limit
     } finally {
       await dbContext.close();
       await disposable.drop();
+    }
+  });
+
+  it('runs migrations through DATABASE_URL_UNPOOLED when configured and falls back to DATABASE_URL when omitted', async () => {
+    const directDb = await pgCluster.createDisposableDatabase();
+    const fallbackDb = await pgCluster.createDisposableDatabase();
+
+    const directConfig = buildTestConfig(
+      'postgresql://pagesift_test@127.0.0.1:59999/unreachable_pooled_target',
+      oidcServer,
+      {
+        DATABASE_URL_UNPOOLED: directDb.databaseUrl,
+        DB_CONNECTION_TIMEOUT_MS: '500',
+      },
+    );
+    const fallbackConfig = buildTestConfig(fallbackDb.databaseUrl, oidcServer);
+
+    const directVerifyContext = createDatabaseContext(
+      buildTestConfig(directDb.databaseUrl, oidcServer),
+    );
+    const fallbackVerifyContext = createDatabaseContext(fallbackConfig);
+
+    try {
+      const directFirstRun = await runMigrationsWithDirectConnection(directConfig);
+      expect(directFirstRun.error).toBeUndefined();
+      expect(directFirstRun.results).toHaveLength(1);
+      expect(directFirstRun.results?.[0]?.status).toBe('Success');
+
+      const directSecondRun = await runMigrationsWithDirectConnection(directConfig);
+      expect(directSecondRun.error).toBeUndefined();
+      expect(directSecondRun.results).toHaveLength(0);
+
+      const directTables = await sql<{ tablename: string }>`
+        SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename
+      `.execute(directVerifyContext.db);
+      expect(directTables.rows.map((row) => row.tablename)).toEqual(
+        expect.arrayContaining([
+          'accounts',
+          'account_settings',
+          'oauth_transactions',
+          'sessions',
+          'projects',
+          'artifacts',
+          'artifact_bodies',
+        ]),
+      );
+
+      const fallbackRun = await runMigrationsWithDirectConnection(fallbackConfig);
+      expect(fallbackRun.error).toBeUndefined();
+      expect(fallbackRun.results).toHaveLength(1);
+      expect(fallbackRun.results?.[0]?.status).toBe('Success');
+
+      const fallbackTables = await sql<{ tablename: string }>`
+        SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename
+      `.execute(fallbackVerifyContext.db);
+      expect(fallbackTables.rows.map((row) => row.tablename)).toEqual(
+        expect.arrayContaining(['accounts', 'projects', 'artifacts']),
+      );
+    } finally {
+      await directVerifyContext.close();
+      await fallbackVerifyContext.close();
+      await directDb.drop();
+      await fallbackDb.drop();
     }
   });
 

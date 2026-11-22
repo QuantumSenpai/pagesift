@@ -86,19 +86,29 @@ const redirectUriListSchema = z
     },
   );
 
+const postgresUrlSchema = (fieldName: string) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .refine((val) => val.startsWith('postgresql://') || val.startsWith('postgres://'), {
+      message: `${fieldName} must be a valid PostgreSQL connection string`,
+    });
+
+const optionalPostgresUrlSchema = (fieldName: string) =>
+  z.preprocess(
+    (val) => (typeof val === 'string' && val.trim() === '' ? undefined : val),
+    postgresUrlSchema(fieldName).optional(),
+  );
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   HOST: z.string().trim().min(1).default('127.0.0.1'),
   PORT: z.coerce.number().int().min(0).max(65535).default(3000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   TRUST_PROXY: booleanStringSchema.default(false),
-  DATABASE_URL: z
-    .string()
-    .trim()
-    .min(1)
-    .refine((val) => val.startsWith('postgresql://') || val.startsWith('postgres://'), {
-      message: 'DATABASE_URL must be a valid PostgreSQL connection string',
-    }),
+  DATABASE_URL: postgresUrlSchema('DATABASE_URL'),
+  DATABASE_URL_UNPOOLED: optionalPostgresUrlSchema('DATABASE_URL_UNPOOLED'),
   DB_POOL_MAX: z.coerce.number().int().min(1).max(100).default(20),
   DB_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(100).max(60000).default(5000),
   DB_IDLE_TIMEOUT_MS: z.coerce.number().int().min(500).max(300000).default(30000),
@@ -130,6 +140,12 @@ const envSchema = z.object({
 
 export type AppConfig = z.infer<typeof envSchema>;
 
+export function resolveDirectDatabaseUrl(
+  config: Pick<AppConfig, 'DATABASE_URL' | 'DATABASE_URL_UNPOOLED'>,
+): string {
+  return config.DATABASE_URL_UNPOOLED ?? config.DATABASE_URL;
+}
+
 export function readDotEnvFile(
   envFilePath: string = path.resolve(process.cwd(), '.env'),
 ): Record<string, string> {
@@ -149,9 +165,9 @@ export function readDotEnvFile(
 
 export function loadConfig(
   rawEnv: Record<string, string | undefined> = process.env,
-  envFilePath: string = path.resolve(process.cwd(), '.env'),
+  envFilePath: string | null = path.resolve(process.cwd(), '.env'),
 ): AppConfig {
-  const fileValues = readDotEnvFile(envFilePath);
+  const fileValues = envFilePath === null ? {} : readDotEnvFile(envFilePath);
   const mergedEnv: Record<string, string | undefined> = { ...fileValues };
   for (const [key, value] of Object.entries(rawEnv)) {
     if (value !== undefined) {
