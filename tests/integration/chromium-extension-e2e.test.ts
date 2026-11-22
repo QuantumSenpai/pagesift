@@ -1202,7 +1202,6 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
     const overlayState1 = await fixturePage.evaluate(() => {
       const host = document.getElementById('pagesift-root-host');
       const sr = host?.shadowRoot;
-      const iconImg = sr?.querySelector<HTMLImageElement>('.ps-brand img');
       const panel = sr?.querySelector<HTMLElement>('.ps-panel');
       const styleText = sr?.querySelector('style')?.textContent ?? '';
       const anchor = sr?.querySelector<HTMLElement>('.ps-anchor');
@@ -1212,9 +1211,12 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       const matrix =
         computed && computed.transform !== 'none' ? new DOMMatrix(computed.transform) : null;
       return {
-        pinnedCount: sr?.querySelectorAll('button[data-overlay-bar-tool]').length ?? 0,
+        defaultTheme: anchor?.getAttribute('data-theme') ?? '',
+        dockToolsCount: sr?.querySelectorAll('button[data-overlay-bar-tool]').length ?? 0,
+        betaBadgePresent: Boolean(
+          sr?.querySelector('button[data-overlay-bar-tool="design_review"] .ps-beta-badge'),
+        ),
         panelVisible: Boolean(panel && computed?.display !== 'none'),
-        iconLoaded: Boolean(iconImg && iconImg.complete && iconImg.naturalWidth > 0),
         bottomCenterAligned: Boolean(
           dockRect &&
           Math.abs((dockRect.left + dockRect.right) / 2 - window.innerWidth / 2) < 30 &&
@@ -1229,13 +1231,80 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
           !/[\u2013\u2014]/.test(sr?.textContent ?? ''),
       };
     });
-    expect(overlayState1.pinnedCount).toBeGreaterThanOrEqual(3);
+    expect(overlayState1.defaultTheme).toBe('dark');
+    expect(overlayState1.dockToolsCount).toBe(15);
+    expect(overlayState1.betaBadgePresent).toBe(true);
     expect(overlayState1.panelVisible).toBe(true);
-    expect(overlayState1.iconLoaded).toBe(true);
     expect(overlayState1.bottomCenterAligned).toBe(true);
     expect(overlayState1.noTransformCollision).toBe(true);
     expect(overlayState1.hasDropShadow).toBe(true);
     expect(overlayState1.noPillsOrGradientsOrDashes).toBe(true);
+
+    await probePage.evaluate(async (tid: number) => {
+      const chromeTabs = (
+        globalThis as unknown as {
+          chrome: { tabs: { sendMessage: (id: number, msg: unknown) => Promise<unknown> } };
+        }
+      ).chrome.tabs;
+      await chromeTabs.sendMessage(tid, {
+        schemaVersion: 1,
+        requestId: 'open-overlay-second-click-pip',
+        operation: 'TOGGLE_OVERLAY_DASHBOARD',
+        tabId: tid,
+        payload: { mode: 'action_click' },
+      });
+    }, targetTabId);
+
+    const pipMenuState = await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const pip = sr?.querySelector<HTMLElement>('.ps-pip-menu.open');
+      const iconImg = pip?.querySelector<HTMLImageElement>('.ps-pip-brand img');
+      return {
+        open: Boolean(pip),
+        iconLoaded: Boolean(iconImg && iconImg.complete && iconImg.naturalWidth > 0),
+        hasSettingsBtn: Boolean(pip?.querySelector('button[data-ps-action="open-settings"]')),
+      };
+    });
+    expect(pipMenuState.open).toBe(true);
+    expect(pipMenuState.iconLoaded).toBe(true);
+    expect(pipMenuState.hasSettingsBtn).toBe(true);
+
+    const [pipOpenedOptions] = await Promise.all([
+      context.waitForEvent('page'),
+      fixturePage.evaluate(() => {
+        const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        sr?.querySelector<HTMLButtonElement>('button[data-ps-action="open-settings"]')?.click();
+      }),
+    ]);
+    await pipOpenedOptions.waitForLoadState('domcontentloaded');
+    expect(pipOpenedOptions.url()).toContain('/options.html');
+    await pipOpenedOptions.close();
+
+    await fixturePage.bringToFront();
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-ps-action="toggle-theme"]')?.click();
+    });
+    expect(
+      await fixturePage.evaluate(() =>
+        document
+          .getElementById('pagesift-root-host')
+          ?.shadowRoot?.querySelector('.ps-anchor')
+          ?.getAttribute('data-theme'),
+      ),
+    ).toBe('light');
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-ps-action="toggle-theme"]')?.click();
+    });
+    expect(
+      await fixturePage.evaluate(() =>
+        document
+          .getElementById('pagesift-root-host')
+          ?.shadowRoot?.querySelector('.ps-anchor')
+          ?.getAttribute('data-theme'),
+      ),
+    ).toBe('dark');
 
     await fixturePage.evaluate(() => {
       const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
@@ -1249,7 +1318,7 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       const pRect = dock?.getBoundingClientRect();
       return {
         open: Boolean(drawer?.classList.contains('open')),
-        toolsCount: sr?.querySelectorAll('button[data-overlay-tool]').length ?? 0,
+        toolsCount: sr?.querySelectorAll('button[data-overlay-tool-drawer]').length ?? 0,
         unfoldsUpward: Boolean(dRect && pRect && dRect.bottom <= pRect.top + 4),
       };
     });
@@ -1274,6 +1343,48 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       const expandBtn = sr?.querySelector<HTMLButtonElement>('button[data-ps-action="expand"]');
       expandBtn?.click();
     });
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-overlay-bar-tool="responsive"]')?.click();
+    });
+    const directRespState = await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const wide = sr?.querySelector<HTMLElement>('.ps-drawer.ps-drawer-wide.open');
+      const frame = wide?.querySelector<HTMLIFrameElement>(
+        'iframe[name="pagesift-responsive-frame"]',
+      );
+      sr?.querySelector<HTMLButtonElement>('button[data-ps-resp-mode="grid"]')?.click();
+      const gridFrames =
+        sr?.querySelectorAll('iframe[name="pagesift-responsive-frame"]').length ?? 0;
+      sr?.querySelector<HTMLButtonElement>('button[data-ps-resp-rotate="true"]')?.click();
+      const rotatedW =
+        sr?.querySelector<HTMLInputElement>('input[data-ps-resp-width]')?.value ?? '';
+      return {
+        wideOpen: Boolean(wide),
+        firstFrameStyleW: frame?.style.width ?? '',
+        gridFrames,
+        rotatedW,
+      };
+    });
+    expect(directRespState.wideOpen).toBe(true);
+    expect(directRespState.firstFrameStyleW).toBe('375px');
+    expect(directRespState.gridFrames).toBe(2);
+    expect(directRespState.rotatedW).toBe('812');
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-overlay-bar-tool="capture"]')?.click();
+    });
+    await fixturePage.waitForFunction(
+      () => {
+        const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        const img = sr?.querySelector<HTMLImageElement>('img.ps-capture-preview');
+        return Boolean(img && img.src.startsWith('data:image/png'));
+      },
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
 
     await fixturePage.evaluate(() => {
       const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
@@ -1309,6 +1420,7 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
 
     await fixturePage.evaluate(() => {
       const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-ps-action="pip-menu"]')?.click();
       sr?.querySelector<HTMLButtonElement>('button[data-ps-action="customize"]')?.click();
     });
     const customDockMoved = await fixturePage.evaluate(() => {
@@ -1360,6 +1472,7 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       context.waitForEvent('page'),
       fixturePage.evaluate(() => {
         const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        sr?.querySelector<HTMLButtonElement>('button[data-ps-action="pip-menu"]')?.click();
         const openBtn = sr?.querySelector<HTMLButtonElement>(
           'button[data-ps-action="open-dashboard"]',
         );

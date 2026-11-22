@@ -6,6 +6,7 @@ import {
 } from '../engines/assets-engine.js';
 import {
   buildCapturePlan,
+  encodeBytesToBase64,
   executeDomCaptureCoordinator,
   type CaptureMode,
   type CaptureRect,
@@ -181,6 +182,10 @@ export class ContentScriptRuntime {
       return;
     }
     if (this.overlayDashboard && this.overlayDashboard.getMode() !== 'closed') {
+      if (this.overlayDashboard.isPipMenuOpen()) {
+        this.overlayDashboard.togglePipMenu(false);
+        return;
+      }
       this.closeOverlayAndHost();
     }
   };
@@ -620,6 +625,14 @@ export class ContentScriptRuntime {
         }),
         getResourceUrl: (relPath) =>
           chromeApi?.runtime?.getURL ? chromeApi.runtime.getURL(relPath) : null,
+        getInteractiveSnapshotHtml: () => {
+          const prepared = prepareStaticPageClone(this.doc, this.win, {});
+          const combinedCss = prepared.cssBlocks.map((b) => b.cssText).join('\n');
+          return prepared.sanitizedHtmlTemplate.replace(
+            '</head>',
+            `<style>${combinedCss.replace(/<\/style/gi, '<\\/style')}</style></head>`,
+          );
+        },
         onRunOverlayTool: (tool, options) => this.executeOverlayTool(tool, options),
         onEditHistoryCommand: (command) => {
           if (command === 'EDIT_UNDO') this.editController.undo();
@@ -631,7 +644,7 @@ export class ContentScriptRuntime {
             message: `${command.replace('EDIT_', '')} applied (undo stack: ${st.undoCount}, redo: ${st.redoCount}).`,
           });
         },
-        onSaveCustomization: async (next: Partial<OverlayCustomizationState>) => {
+        onSaveCustomization: async (next) => {
           if (!this.adapters.sendBackgroundMessage) {
             return;
           }
@@ -642,12 +655,52 @@ export class ContentScriptRuntime {
               operation: 'UPDATE_OVERLAY_CUSTOMIZATION',
               documentId: this.documentId,
               payload: {
+                ...(next.theme ? { theme: next.theme } : {}),
                 ...(next.position ? { overlayPosition: next.position } : {}),
                 ...(next.themeMode ? { overlayThemeMode: next.themeMode } : {}),
                 ...(next.pinnedTools ? { overlayPinnedTools: next.pinnedTools } : {}),
               },
             })
             .catch(() => undefined);
+        },
+        onOpenSettings: async () => {
+          if (!this.adapters.sendBackgroundMessage) {
+            return;
+          }
+          await this.adapters
+            .sendBackgroundMessage({
+              schemaVersion: 1,
+              requestId: `open-opt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              operation: 'OPEN_OPTIONS_PAGE',
+              documentId: this.documentId,
+              payload: {},
+            })
+            .catch(() => undefined);
+        },
+        onOpenSiteResponsiveWindows: async () => {
+          if (!this.adapters.sendBackgroundMessage) {
+            return { ok: false, message: 'Background channel unavailable.' };
+          }
+          const res = await this.adapters
+            .sendBackgroundMessage({
+              schemaVersion: 1,
+              requestId: `ov-resp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              operation: 'OPEN_SITE_RESPONSIVE_WINDOWS',
+              documentId: this.documentId,
+              payload: { syncEnabled: true },
+            })
+            .catch(() => null);
+          if (!res || !res.ok) {
+            return {
+              ok: false,
+              message: res?.error.message ?? 'Could not open responsive browser windows.',
+            };
+          }
+          const data = res.data as { openedTabIds?: number[] };
+          return {
+            ok: true,
+            message: `Opened ${(data.openedTabIds ?? []).length} synced viewport window(s).`,
+          };
         },
         onStartPickerForTool: (tool) => {
           this.restoreOverlayAfterPick = true;
@@ -726,16 +779,16 @@ export class ContentScriptRuntime {
           }
         ).settings;
         const theme = settings?.theme;
-        if (theme === 'dark') {
-          this.overlayDashboard.setResolvedTheme('dark');
+        if (theme === 'light') {
+          this.overlayDashboard.setResolvedTheme('light');
         } else if (theme === 'system') {
           const prefersDark =
             typeof this.win.matchMedia === 'function'
               ? this.win.matchMedia('(prefers-color-scheme: dark)').matches
-              : false;
+              : true;
           this.overlayDashboard.setResolvedTheme(prefersDark ? 'dark' : 'light');
         } else {
-          this.overlayDashboard.setResolvedTheme('light');
+          this.overlayDashboard.setResolvedTheme('dark');
         }
         this.overlayDashboard.applyCustomization({
           ...(settings?.overlayPosition ? { position: settings.overlayPosition } : {}),
@@ -749,8 +802,11 @@ export class ContentScriptRuntime {
   }
 
   public toggleOverlayDashboard(
-    mode: 'toggle' | 'open' | 'close' | 'minimize' = 'toggle',
+    mode: 'toggle' | 'open' | 'close' | 'minimize' | 'action_click' | 'pip' = 'toggle',
   ): 'expanded' | 'minimized' | 'closed' {
+    if (this.win.name === 'pagesift-responsive-frame') {
+      return 'closed';
+    }
     const currentMode = this.overlayDashboard?.getMode() ?? 'closed';
     if (mode === 'close' || (mode === 'toggle' && currentMode !== 'closed')) {
       this.closeOverlayAndHost();
@@ -761,6 +817,13 @@ export class ContentScriptRuntime {
       this.onPageDock.style.display = 'none';
     }
     void this.syncOverlayThemeFromSettings();
+    if (mode === 'action_click') {
+      return dash.handleToolbarActionClick();
+    }
+    if (mode === 'pip') {
+      dash.togglePipMenu();
+      return dash.getMode();
+    }
     if (mode === 'minimize') {
       dash.minimize(this.doc.location.hostname || 'PageSift');
       return 'minimized';
@@ -911,6 +974,76 @@ export class ContentScriptRuntime {
           title: 'Typography',
           summary: summaryText,
           copyableText: JSON.stringify(report, null, 2),
+        };
+      }
+      if (tool === 'clone_page') {
+        const cloned = await exportStaticPageClone(this.doc, this.win, {
+          ...(this.adapters.fetchAssetBinary ? { fetcher: this.adapters.fetchAssetBinary } : {}),
+        });
+        const summaryText = `${cloned.manifest.files.length} packaged files (${(cloned.zipBytes.byteLength / 1024).toFixed(1)} KiB sanitized ZIP)`;
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Clone Page Snapshot ZIP',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          resultSummary: summaryText,
+        });
+        return {
+          tool,
+          title: 'Clone Page ZIP Ready',
+          summary: summaryText,
+          downloadFilename: 'pagesift-clone.zip',
+          downloadMime: 'application/zip',
+          downloadBase64: encodeBytesToBase64(cloned.zipBytes),
+        };
+      }
+      if (tool === 'assets') {
+        const report = extractPageAssets(this.doc, this.win);
+        const archived = await buildAssetsZipArchive(report, this.adapters.fetchAssetBinary);
+        const summaryText = `${archived.packagedFilesCount} assets packaged from ${report.summary.totalDiscovered} discovered`;
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Extract Assets ZIP',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          resultSummary: summaryText,
+        });
+        return {
+          tool,
+          title: 'Assets Extracted',
+          summary: summaryText,
+          copyableText: JSON.stringify(report, null, 2),
+          downloadFilename: 'pagesift-assets.zip',
+          downloadMime: 'application/zip',
+          downloadBase64: encodeBytesToBase64(archived.zipBytes),
+        };
+      }
+      if (tool === 'capture') {
+        if (!this.adapters.sendBackgroundMessage) {
+          throw new Error('Background capture channel unavailable');
+        }
+        const capRes = await this.adapters.sendBackgroundMessage({
+          schemaVersion: 1,
+          requestId: activityId,
+          operation: 'CAPTURE_OWN_TAB',
+          documentId: this.documentId,
+          payload: { format: 'image/png' },
+        });
+        if (!capRes.ok) {
+          throw new Error(capRes.error.message);
+        }
+        const capData = capRes.data as { dataUrl: string; mimeType: string };
+        const base64Part = capData.dataUrl.split(',')[1] ?? '';
+        return {
+          tool,
+          title: 'Page Capture Ready',
+          summary: 'Captured visible viewport as PNG locally.',
+          imageDataUrl: capData.dataUrl,
+          downloadFilename: 'pagesift-capture.png',
+          downloadMime: capData.mimeType || 'image/png',
+          downloadBase64: base64Part,
         };
       }
       if (tool === 'design_md') {
@@ -1228,8 +1361,14 @@ export class ContentScriptRuntime {
 
         case 'TOGGLE_OVERLAY_DASHBOARD': {
           const reqMode =
-            (msg.payload['mode'] as 'toggle' | 'open' | 'close' | 'minimize' | undefined) ??
-            'toggle';
+            (msg.payload['mode'] as
+              | 'toggle'
+              | 'open'
+              | 'close'
+              | 'minimize'
+              | 'action_click'
+              | 'pip'
+              | undefined) ?? 'toggle';
           const nextMode = this.toggleOverlayDashboard(reqMode);
           return createSuccessResponse(
             msg,

@@ -348,7 +348,7 @@ export class BackgroundCoordinator {
           requestId: `act-toggle-${Date.now()}`,
           operation: 'TOGGLE_OVERLAY_DASHBOARD',
           tabId: tab.id,
-          payload: { mode: 'toggle' },
+          payload: { mode: 'action_click' },
         });
         if (res.ok) {
           return { opened: 'overlay' };
@@ -382,6 +382,133 @@ export class BackgroundCoordinator {
       updatedAt: new Date().toISOString(),
     };
     return this.env.storage.upsertJob(next);
+  }
+
+  private async openManagedResponsiveWindows(
+    requestId: string,
+    targetUrl: string,
+    openWindows: boolean,
+    syncEnabled: boolean,
+    customViewports?: ResponsiveViewportPreset[],
+  ): Promise<{
+    plan: ReturnType<typeof createResponsiveInspectionPlan>;
+    openedTabIds: number[];
+    session: ResponsiveSessionState | null;
+  }> {
+    const plan = createResponsiveInspectionPlan(targetUrl, customViewports);
+    const managedWindows: ManagedResponsiveWindowRecord[] = [];
+    const openedTabIds: number[] = [];
+
+    if (openWindows && this.env.openResponsiveWindow) {
+      if (this.responsiveSession) {
+        await this.closeActiveResponsiveSession();
+      }
+
+      for (const vp of plan.viewports) {
+        const opened = await this.env.openResponsiveWindow(plan.targetUrl, vp.width, vp.height);
+        if (!opened) {
+          continue;
+        }
+        openedTabIds.push(opened.tabId);
+        let actualInnerWidth: number | null = null;
+        let actualInnerHeight: number | null = null;
+        let chromeDeltaWidth: number | null = null;
+        let chromeDeltaHeight: number | null = null;
+
+        const initialMetrics = await this.waitForResponsiveTabMetrics(opened.tabId, 4500);
+        if (initialMetrics) {
+          actualInnerWidth = initialMetrics.innerWidth;
+          actualInnerHeight = initialMetrics.innerHeight;
+          chromeDeltaWidth = Math.max(0, initialMetrics.outerWidth - initialMetrics.innerWidth);
+          chromeDeltaHeight = Math.max(0, initialMetrics.outerHeight - initialMetrics.innerHeight);
+
+          if (
+            this.env.updateResponsiveWindow &&
+            (actualInnerWidth !== vp.width || actualInnerHeight !== vp.height)
+          ) {
+            await this.env
+              .updateResponsiveWindow(
+                opened.windowId,
+                vp.width + chromeDeltaWidth,
+                vp.height + chromeDeltaHeight,
+              )
+              .catch(() => undefined);
+            await new Promise((r) => setTimeout(r, 120));
+            const afterMetrics = await this.waitForResponsiveTabMetrics(opened.tabId, 1500);
+            if (afterMetrics) {
+              actualInnerWidth = afterMetrics.innerWidth;
+              actualInnerHeight = afterMetrics.innerHeight;
+            }
+          }
+        }
+
+        const sizeConstrainedByBrowser =
+          actualInnerWidth !== null &&
+          actualInnerHeight !== null &&
+          (Math.abs(actualInnerWidth - vp.width) > 4 ||
+            Math.abs(actualInnerHeight - vp.height) > 4);
+
+        managedWindows.push({
+          presetId: vp.id,
+          label: vp.label,
+          windowId: opened.windowId,
+          tabId: opened.tabId,
+          requestedWidth: vp.width,
+          requestedHeight: vp.height,
+          actualInnerWidth,
+          actualInnerHeight,
+          chromeDeltaWidth,
+          chromeDeltaHeight,
+          sizeConstrainedByBrowser,
+        });
+      }
+
+      this.scrollSync.clearAllManagedTabs();
+      this.scrollSync.setEnabled(syncEnabled);
+      this.scrollSync.registerManagedTabs(openedTabIds);
+
+      this.responsiveSession = {
+        sessionId: `resp-${Date.now()}`,
+        targetUrl: plan.targetUrl,
+        syncEnabled,
+        windows: managedWindows,
+        createdAt: new Date().toISOString(),
+      };
+      await this.persistResponsiveSession();
+
+      const sendToTabFn = this.env.sendToTab;
+      if (sendToTabFn) {
+        await Promise.all(
+          openedTabIds.map((tId) =>
+            sendToTabFn(tId, {
+              schemaVersion: 1,
+              requestId: `sync-init-${Date.now()}-${tId}`,
+              operation: 'SET_RESPONSIVE_SYNC',
+              tabId: tId,
+              payload: { enabled: syncEnabled },
+            }).catch(() => undefined),
+          ),
+        );
+      }
+    }
+
+    if (openWindows && openedTabIds.length > 0) {
+      await this.recordActivityLifecycle({
+        activityId: requestId,
+        tool: 'responsive',
+        actionLabel: 'Open Responsive Windows',
+        rawUrl: plan.targetUrl,
+        status: 'completed',
+        optionsSummary: { syncEnabled, viewportCount: openedTabIds.length },
+        resultSummary: `Opened ${openedTabIds.length} managed responsive viewport window(s)`,
+      });
+    }
+
+    return {
+      plan,
+      openedTabIds,
+      session: this.responsiveSession,
+    };
   }
 
   private async verifyTargetTabForCapture(
@@ -523,6 +650,9 @@ export class BackgroundCoordinator {
 
         case 'UPDATE_OVERLAY_CUSTOMIZATION': {
           const partial: Record<string, unknown> = {};
+          if (typeof msg.payload['theme'] === 'string') {
+            partial['theme'] = msg.payload['theme'];
+          }
           if (typeof msg.payload['overlayPosition'] === 'string') {
             partial['overlayPosition'] = msg.payload['overlayPosition'];
           }
@@ -879,6 +1009,68 @@ export class BackgroundCoordinator {
           const artifactId = String(msg.payload['artifactId']);
           await this.env.storage.deleteArtifact(artifactId);
           return createSuccessResponse(msg, { deleted: true, artifactId });
+        }
+
+        case 'OPEN_OPTIONS_PAGE': {
+          if (this.env.openDashboardTab) {
+            await this.env.openDashboardTab('options.html');
+          }
+          return createSuccessResponse(msg, { openedUrl: 'options.html' });
+        }
+
+        case 'OPEN_SITE_RESPONSIVE_WINDOWS': {
+          const senderUrl = sender.tab?.url ?? '';
+          if (!isHttpOrHttpsUrl(senderUrl)) {
+            return createErrorResponse(
+              msg.requestId,
+              'UNAUTHORIZED_SENDER',
+              'Responsive windows can only be opened for the active HTTP(S) page',
+              msg.operation,
+            );
+          }
+          const customViewports = msg.payload['customViewports'] as
+            | ResponsiveViewportPreset[]
+            | undefined;
+          const syncEnabled = msg.payload['syncEnabled'] !== false;
+          const result = await this.openManagedResponsiveWindows(
+            msg.requestId,
+            senderUrl,
+            true,
+            syncEnabled,
+            customViewports,
+          );
+          return createSuccessResponse(msg, result);
+        }
+
+        case 'CAPTURE_OWN_TAB': {
+          const ownTabId = sender.tab?.id;
+          if (typeof ownTabId !== 'number' || !this.env.captureVisibleTab) {
+            return createErrorResponse(
+              msg.requestId,
+              'TOOL_EXECUTION_ERROR',
+              'Visible capture requires an active browser tab and captureVisibleTab API',
+              msg.operation,
+            );
+          }
+          const tabInfo = await this.verifyTargetTabForCapture(ownTabId, sender.tab?.url);
+          const format = msg.payload['format'] === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+          const dataUrl = await this.env.captureVisibleTab(
+            tabInfo.windowId,
+            format === 'image/jpeg' ? 'jpeg' : 'png',
+          );
+          await this.recordActivityLifecycle({
+            activityId: msg.requestId,
+            tool: 'capture',
+            actionLabel: 'Overlay Quick Capture',
+            rawUrl: tabInfo.url,
+            status: 'completed',
+            resultSummary: `Captured visible viewport (${format})`,
+          });
+          return createSuccessResponse(msg, {
+            dataUrl,
+            mimeType: format,
+            pageUrl: tabInfo.url,
+          });
         }
 
         case 'OPEN_FULL_DASHBOARD': {
@@ -1319,132 +1511,16 @@ export class BackgroundCoordinator {
           const customViewports = msg.payload['customViewports'] as
             | ResponsiveViewportPreset[]
             | undefined;
-          const plan = createResponsiveInspectionPlan(targetUrl, customViewports);
           const openWindows = msg.payload['openWindows'] !== false;
           const syncEnabled = msg.payload['syncEnabled'] !== false;
-          const managedWindows: ManagedResponsiveWindowRecord[] = [];
-          const openedTabIds: number[] = [];
-
-          if (openWindows && this.env.openResponsiveWindow) {
-            if (this.responsiveSession) {
-              await this.closeActiveResponsiveSession();
-            }
-
-            for (const vp of plan.viewports) {
-              const opened = await this.env.openResponsiveWindow(
-                plan.targetUrl,
-                vp.width,
-                vp.height,
-              );
-              if (!opened) {
-                continue;
-              }
-              openedTabIds.push(opened.tabId);
-              let actualInnerWidth: number | null = null;
-              let actualInnerHeight: number | null = null;
-              let chromeDeltaWidth: number | null = null;
-              let chromeDeltaHeight: number | null = null;
-
-              const initialMetrics = await this.waitForResponsiveTabMetrics(opened.tabId, 4500);
-              if (initialMetrics) {
-                actualInnerWidth = initialMetrics.innerWidth;
-                actualInnerHeight = initialMetrics.innerHeight;
-                chromeDeltaWidth = Math.max(
-                  0,
-                  initialMetrics.outerWidth - initialMetrics.innerWidth,
-                );
-                chromeDeltaHeight = Math.max(
-                  0,
-                  initialMetrics.outerHeight - initialMetrics.innerHeight,
-                );
-
-                if (
-                  this.env.updateResponsiveWindow &&
-                  (actualInnerWidth !== vp.width || actualInnerHeight !== vp.height)
-                ) {
-                  await this.env
-                    .updateResponsiveWindow(
-                      opened.windowId,
-                      vp.width + chromeDeltaWidth,
-                      vp.height + chromeDeltaHeight,
-                    )
-                    .catch(() => undefined);
-                  await new Promise((r) => setTimeout(r, 120));
-                  const afterMetrics = await this.waitForResponsiveTabMetrics(opened.tabId, 1500);
-                  if (afterMetrics) {
-                    actualInnerWidth = afterMetrics.innerWidth;
-                    actualInnerHeight = afterMetrics.innerHeight;
-                  }
-                }
-              }
-
-              const sizeConstrainedByBrowser =
-                actualInnerWidth !== null &&
-                actualInnerHeight !== null &&
-                (Math.abs(actualInnerWidth - vp.width) > 4 ||
-                  Math.abs(actualInnerHeight - vp.height) > 4);
-
-              managedWindows.push({
-                presetId: vp.id,
-                label: vp.label,
-                windowId: opened.windowId,
-                tabId: opened.tabId,
-                requestedWidth: vp.width,
-                requestedHeight: vp.height,
-                actualInnerWidth,
-                actualInnerHeight,
-                chromeDeltaWidth,
-                chromeDeltaHeight,
-                sizeConstrainedByBrowser,
-              });
-            }
-
-            this.scrollSync.clearAllManagedTabs();
-            this.scrollSync.setEnabled(syncEnabled);
-            this.scrollSync.registerManagedTabs(openedTabIds);
-
-            this.responsiveSession = {
-              sessionId: `resp-${Date.now()}`,
-              targetUrl: plan.targetUrl,
-              syncEnabled,
-              windows: managedWindows,
-              createdAt: new Date().toISOString(),
-            };
-            await this.persistResponsiveSession();
-
-            const sendToTabFn = this.env.sendToTab;
-            if (sendToTabFn) {
-              await Promise.all(
-                openedTabIds.map((tId) =>
-                  sendToTabFn(tId, {
-                    schemaVersion: 1,
-                    requestId: `sync-init-${Date.now()}-${tId}`,
-                    operation: 'SET_RESPONSIVE_SYNC',
-                    tabId: tId,
-                    payload: { enabled: syncEnabled },
-                  }).catch(() => undefined),
-                ),
-              );
-            }
-          }
-
-          if (openWindows && openedTabIds.length > 0) {
-            await this.recordActivityLifecycle({
-              activityId: msg.requestId,
-              tool: 'responsive',
-              actionLabel: 'Open Responsive Windows',
-              rawUrl: plan.targetUrl,
-              status: 'completed',
-              optionsSummary: { syncEnabled, viewportCount: openedTabIds.length },
-              resultSummary: `Opened ${openedTabIds.length} managed responsive viewport window(s)`,
-            });
-          }
-
-          return createSuccessResponse(msg, {
-            plan,
-            openedTabIds,
-            session: this.responsiveSession,
-          });
+          const result = await this.openManagedResponsiveWindows(
+            msg.requestId,
+            targetUrl,
+            openWindows,
+            syncEnabled,
+            customViewports,
+          );
+          return createSuccessResponse(msg, result);
         }
 
         case 'SET_RESPONSIVE_SYNC': {

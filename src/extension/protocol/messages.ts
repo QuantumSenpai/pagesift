@@ -76,6 +76,9 @@ export const messageOperationSchema = z.enum([
   'TOGGLE_OVERLAY_DASHBOARD',
   'UPDATE_OVERLAY_CUSTOMIZATION',
   'OPEN_FULL_DASHBOARD',
+  'OPEN_OPTIONS_PAGE',
+  'OPEN_SITE_RESPONSIVE_WINDOWS',
+  'CAPTURE_OWN_TAB',
   'RECORD_LOCAL_ACTIVITY',
   'QUERY_ACTIVITY_HISTORY',
   'LIST_SITE_ACTIVITY',
@@ -273,9 +276,10 @@ const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = 
     confirmedPayloadDigest: z.string().trim().min(16).max(128).optional(),
   }),
   TOGGLE_OVERLAY_DASHBOARD: z.strictObject({
-    mode: z.enum(['toggle', 'open', 'close', 'minimize']).default('toggle'),
+    mode: z.enum(['toggle', 'open', 'close', 'minimize', 'action_click', 'pip']).default('toggle'),
   }),
   UPDATE_OVERLAY_CUSTOMIZATION: z.strictObject({
+    theme: z.enum(['system', 'light', 'dark']).optional(),
     overlayPosition: z.enum(['bottom-center', 'bottom-right', 'top-center']).optional(),
     overlayThemeMode: z.enum(['follow', 'light', 'dark']).optional(),
     overlayPinnedTools: z.array(toolIdSchema).min(3).max(6).optional(),
@@ -284,6 +288,14 @@ const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = 
     tool: toolIdSchema.optional(),
     autorun: z.boolean().optional(),
     section: z.enum(['tools', 'history', 'saved', 'settings']).optional(),
+  }),
+  OPEN_OPTIONS_PAGE: z.strictObject({}),
+  OPEN_SITE_RESPONSIVE_WINDOWS: z.strictObject({
+    syncEnabled: z.boolean().default(true),
+    customViewports: z.array(responsiveViewportSchema).min(1).max(6).optional(),
+  }),
+  CAPTURE_OWN_TAB: z.strictObject({
+    format: z.enum(['image/png', 'image/jpeg']).default('image/png'),
   }),
   RECORD_LOCAL_ACTIVITY: z.strictObject({
     activityId: z.string().trim().min(4).max(128),

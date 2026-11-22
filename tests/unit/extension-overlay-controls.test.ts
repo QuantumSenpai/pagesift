@@ -27,7 +27,47 @@ describe('Overlay edit controls', () => {
       onFetchSiteActivity: () => Promise.resolve([]),
       onCloseOverlay: () => undefined,
     });
-    overlay.openExpanded();
+    expect(shadow.querySelector('.ps-anchor')?.getAttribute('data-theme')).toBe('dark');
+    expect(shadow.querySelectorAll('button[data-overlay-bar-tool]').length).toBe(15);
+
+    expect(overlay.handleToolbarActionClick()).toBe('expanded');
+    expect(overlay.isPipMenuOpen()).toBe(false);
+    expect(overlay.handleToolbarActionClick()).toBe('expanded');
+    expect(overlay.isPipMenuOpen()).toBe(true);
+    expect(
+      shadow.querySelector('.ps-pip-menu.open button[data-ps-action="open-settings"]'),
+    ).not.toBeNull();
+    expect(overlay.handleToolbarActionClick()).toBe('expanded');
+    expect(overlay.isPipMenuOpen()).toBe(false);
+
+    shadow.querySelector<HTMLButtonElement>('button[data-overlay-bar-tool="responsive"]')?.click();
+    expect(shadow.querySelector('.ps-drawer.ps-drawer-wide.open')).not.toBeNull();
+    expect(shadow.querySelectorAll('iframe[name="pagesift-responsive-frame"]').length).toBe(1);
+    shadow.querySelector<HTMLButtonElement>('button[data-ps-resp-mode="grid"]')?.click();
+    expect(shadow.querySelectorAll('iframe[name="pagesift-responsive-frame"]').length).toBe(2);
+
+    overlay.showResultSummary({
+      tool: 'tech_stack',
+      title: 'Tech Stack (2 Detected)',
+      summary: 'Next.js, React',
+      techStackSummary: {
+        totalDetected: 2,
+        oneLiner: 'Next.js, React',
+        groups: [
+          {
+            category: 'framework',
+            label: 'Frameworks & Runtimes',
+            items: [
+              { technology: 'Next.js', confidence: 'high', shortReason: '#__next root' },
+              { technology: 'React', confidence: 'medium', shortReason: 'React mount' },
+            ],
+          },
+        ],
+      },
+    });
+    expect(shadow.querySelectorAll('.tech-badge-icon svg').length).toBe(2);
+    expect(shadow.querySelectorAll('.tech-cat-icon').length).toBe(1);
+
     overlay.showEditor('edit_text', 'h1', 'Original heading');
     expect(calls).toEqual([]);
     const input = shadow.querySelector<HTMLTextAreaElement>('[data-ps-edit-text]');

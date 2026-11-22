@@ -84,7 +84,7 @@ const overlayToolIdSchema = z.enum([
 ]);
 
 export const extensionSettingsSchema = z.strictObject({
-  theme: z.enum(['system', 'light', 'dark']).default('light'),
+  theme: z.enum(['system', 'light', 'dark']).default('dark'),
   overlayPosition: z.enum(['bottom-center', 'bottom-right', 'top-center']).default('bottom-center'),
   overlayThemeMode: z.enum(['follow', 'light', 'dark']).default('follow'),
   overlayPinnedTools: z

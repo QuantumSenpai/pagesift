@@ -2,10 +2,15 @@ import type { TechStackOrganizedSummary } from '../engines/tech-stack-engine.js'
 import type { ToolId } from '../protocol/messages.js';
 import type { ActivityQueryItem } from '../storage/activity-history.js';
 import type { ExtensionSettings } from '../storage/settings-storage.js';
-import { createSvgIcon, triggerTapFeedback } from '../ui/theme.js';
+import {
+  createSvgIcon,
+  createTechCategoryIcon,
+  createTechIconElement,
+  triggerTapFeedback,
+} from '../ui/theme.js';
 
 export type OverlayMode = 'closed' | 'expanded' | 'minimized';
-export type OverlayDrawerTab = 'none' | 'tools' | 'result' | 'editor' | 'customize';
+export type OverlayDrawerTab = 'none' | 'tools' | 'result' | 'editor' | 'customize' | 'responsive';
 export type OverlayPosition = ExtensionSettings['overlayPosition'];
 export type OverlayThemeMode = ExtensionSettings['overlayThemeMode'];
 
@@ -14,10 +19,12 @@ export interface OverlayToolSummary {
   title: string;
   summary: string;
   techStackSummary?: TechStackOrganizedSummary;
+  imageDataUrl?: string;
   copyableText?: string;
   downloadFilename?: string;
   downloadMime?: string;
   downloadText?: string;
+  downloadBase64?: string;
 }
 
 export interface OverlayCustomizationState {
@@ -37,6 +44,7 @@ export interface OverlayEditOptions {
 export interface OverlayDashboardCallbacks {
   getPageInfo: () => { hostname: string; url: string; title: string };
   getResourceUrl: (path: string) => string | null;
+  getInteractiveSnapshotHtml?: () => string;
   onCloseOverlay: () => void;
   onStartPickerForTool: (tool: ToolId) => void;
   onRunOverlayTool: (
@@ -46,10 +54,14 @@ export interface OverlayDashboardCallbacks {
   onOpenFullDashboard: (options?: {
     tool?: ToolId;
     autorun?: boolean;
-    section?: 'tools' | 'history' | 'saved';
+    section?: 'tools' | 'history' | 'saved' | 'settings';
   }) => Promise<void>;
+  onOpenSettings?: () => Promise<void>;
+  onOpenSiteResponsiveWindows?: () => Promise<{ ok: boolean; message: string }>;
   onFetchSiteActivity: () => Promise<ActivityQueryItem[]>;
-  onSaveCustomization?: (next: Partial<OverlayCustomizationState>) => Promise<void>;
+  onSaveCustomization?: (
+    next: Partial<OverlayCustomizationState> & { theme?: ExtensionSettings['theme'] },
+  ) => Promise<void>;
   onEditHistoryCommand?: (
     command: 'EDIT_UNDO' | 'EDIT_REDO' | 'EDIT_RESET',
   ) => Promise<{ ok: boolean; message: string }>;
@@ -61,7 +73,8 @@ interface OverlayToolDef {
   group: string;
   keywords: string;
   isPicker?: boolean;
-  isDashboardTool?: boolean;
+  isResponsiveStage?: boolean;
+  badgeText?: string;
 }
 
 const OVERLAY_TOOLS: OverlayToolDef[] = [
@@ -73,17 +86,28 @@ const OVERLAY_TOOLS: OverlayToolDef[] = [
     isPicker: true,
   },
   {
-    id: 'measure',
-    label: 'Measure',
-    group: 'Inspect & Measure',
-    keywords: 'distance gap spacing',
-    isPicker: true,
+    id: 'clone_page',
+    label: 'Clone Page',
+    group: 'Extract & Export',
+    keywords: 'zip snapshot html sanitize',
   },
   {
-    id: 'tech_stack',
-    label: 'Tech Stack',
-    group: 'Inspect & Measure',
-    keywords: 'framework stack next react tailwind',
+    id: 'clone_prompt',
+    label: 'Clone Prompt',
+    group: 'Extract & Export',
+    keywords: 'prompt react brief',
+  },
+  {
+    id: 'design_md',
+    label: 'Design MD',
+    group: 'Extract & Export',
+    keywords: 'design system markdown',
+  },
+  {
+    id: 'assets',
+    label: 'Assets',
+    group: 'Extract & Export',
+    keywords: 'images svg zip media',
   },
   {
     id: 'colors',
@@ -98,44 +122,11 @@ const OVERLAY_TOOLS: OverlayToolDef[] = [
     keywords: 'typography font-face family',
   },
   {
-    id: 'clone_page',
-    label: 'Clone Page',
-    group: 'Extract & Export',
-    keywords: 'zip snapshot html sanitize',
-    isDashboardTool: true,
-  },
-  {
-    id: 'assets',
-    label: 'Assets',
-    group: 'Extract & Export',
-    keywords: 'images svg zip media',
-    isDashboardTool: true,
-  },
-  {
-    id: 'design_md',
-    label: 'Design MD',
-    group: 'Extract & Export',
-    keywords: 'design system markdown',
-  },
-  {
-    id: 'clone_prompt',
-    label: 'Clone Prompt',
-    group: 'Extract & Export',
-    keywords: 'prompt react brief',
-  },
-  {
-    id: 'capture',
-    label: 'Capture',
-    group: 'Capture & Viewports',
-    keywords: 'screenshot png pdf full page',
-    isDashboardTool: true,
-  },
-  {
-    id: 'responsive',
-    label: 'Responsive',
-    group: 'Capture & Viewports',
-    keywords: 'mobile tablet viewport sync',
-    isDashboardTool: true,
+    id: 'measure',
+    label: 'Measure',
+    group: 'Inspect & Measure',
+    keywords: 'distance gap spacing',
+    isPicker: true,
   },
   {
     id: 'edit_text',
@@ -143,6 +134,19 @@ const OVERLAY_TOOLS: OverlayToolDef[] = [
     group: 'Live Preview & Audit',
     keywords: 'copy preview inline edit',
     isPicker: true,
+  },
+  {
+    id: 'capture',
+    label: 'Capture',
+    group: 'Capture & Viewports',
+    keywords: 'screenshot png pdf full page',
+  },
+  {
+    id: 'responsive',
+    label: 'Responsive',
+    group: 'Capture & Viewports',
+    keywords: 'mobile tablet viewport sync interactive preview',
+    isResponsiveStage: true,
   },
   {
     id: 'swap_font',
@@ -162,7 +166,14 @@ const OVERLAY_TOOLS: OverlayToolDef[] = [
     id: 'design_review',
     label: 'Design Review',
     group: 'Live Preview & Audit',
-    keywords: 'wcag contrast audit spacing',
+    keywords: 'wcag contrast audit spacing ai slop',
+    badgeText: 'Beta',
+  },
+  {
+    id: 'tech_stack',
+    label: 'Tech Stack',
+    group: 'Inspect & Measure',
+    keywords: 'framework stack next react tailwind',
   },
 ];
 
@@ -173,6 +184,12 @@ const OVERLAY_GROUPS = [
   'Live Preview & Audit',
 ];
 
+const RESPONSIVE_STAGE_PRESETS = [
+  { id: 'mobile', label: 'Mobile', width: 375, height: 812 },
+  { id: 'tablet', label: 'Tablet', width: 768, height: 1024 },
+  { id: 'laptop', label: 'Laptop', width: 1280, height: 800 },
+] as const;
+
 const PAGESIFT_ROOT_ATTR = 'data-pagesift-root';
 
 function formatRelativeTime(utcIso: string): string {
@@ -182,6 +199,15 @@ function formatRelativeTime(utcIso: string): string {
   return new Date(utcIso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return bytes;
+}
+
 export class OnPageOverlayDashboard {
   private readonly doc: Document;
   private readonly shadow: ShadowRoot;
@@ -189,11 +215,12 @@ export class OnPageOverlayDashboard {
 
   private mode: OverlayMode = 'closed';
   private drawerTab: OverlayDrawerTab = 'none';
-  private resolvedTheme: 'light' | 'dark' = 'light';
+  private pipMenuOpen = false;
+  private resolvedTheme: 'light' | 'dark' = 'dark';
   private customization: OverlayCustomizationState = {
     position: 'bottom-center',
     themeMode: 'follow',
-    pinnedTools: ['inspect', 'tech_stack', 'colors', 'fonts', 'capture'],
+    pinnedTools: ['inspect', 'tech_stack', 'colors', 'fonts', 'responsive'],
   };
   private activeFilter = '';
   private busy = false;
@@ -205,15 +232,24 @@ export class OnPageOverlayDashboard {
     statusText?: string;
   } | null = null;
 
+  private respWidth = 375;
+  private respHeight = 812;
+  private respLayout: 'single' | 'grid' = 'single';
+  private respSourceMode: 'live' | 'snapshot' = 'live';
+  private respScale = 0.72;
+  private respStatusMsg = 'Interactive preview active inside overlay.';
+
   private anchor: HTMLElement | null = null;
   private stage: HTMLElement | null = null;
   private dockBar: HTMLElement | null = null;
-  private pinnedStrip: HTMLElement | null = null;
+  private toolsStrip: HTMLElement | null = null;
+  private themeToggleBtn: HTMLButtonElement | null = null;
+  private pipMenuEl: HTMLElement | null = null;
+  private pipBtn: HTMLButtonElement | null = null;
   private minBar: HTMLElement | null = null;
   private drawer: HTMLElement | null = null;
   private drawerContent: HTMLElement | null = null;
   private allToolsBtn: HTMLButtonElement | null = null;
-  private customizeBtn: HTMLButtonElement | null = null;
   private minStatusText: HTMLElement | null = null;
 
   public constructor(doc: Document, shadow: ShadowRoot, callbacks: OverlayDashboardCallbacks) {
@@ -227,11 +263,24 @@ export class OnPageOverlayDashboard {
     return this.mode;
   }
 
+  public isPipMenuOpen(): boolean {
+    return this.pipMenuOpen;
+  }
+
   public setResolvedTheme(theme: 'light' | 'dark'): void {
     this.resolvedTheme = theme;
-    const effective =
-      this.customization.themeMode === 'follow' ? theme : this.customization.themeMode;
+    const effective = this.getEffectiveTheme();
     this.anchor?.setAttribute('data-theme', effective);
+    this.syncThemeButtonIcon();
+    if (this.pipMenuOpen) {
+      this.renderPipMenu();
+    }
+  }
+
+  public getEffectiveTheme(): 'light' | 'dark' {
+    return this.customization.themeMode === 'follow'
+      ? this.resolvedTheme
+      : this.customization.themeMode;
   }
 
   public applyCustomization(next: Partial<OverlayCustomizationState>): void {
@@ -245,7 +294,6 @@ export class OnPageOverlayDashboard {
     };
     this.syncAnchorPlacement();
     this.setResolvedTheme(this.resolvedTheme);
-    this.renderPinnedBarTools();
     if (this.drawerTab === 'customize') {
       this.renderDrawer();
     }
@@ -253,6 +301,8 @@ export class OnPageOverlayDashboard {
 
   public openExpanded(openDrawer = false): void {
     this.mode = 'expanded';
+    this.pipMenuOpen = false;
+    this.syncPipVisibility();
     if (this.dockBar) {
       this.dockBar.style.display = 'flex';
       this.dockBar.classList.remove('ps-enter');
@@ -270,9 +320,33 @@ export class OnPageOverlayDashboard {
     }
   }
 
+  public togglePipMenu(force?: boolean): boolean {
+    if (this.mode === 'closed') {
+      this.openExpanded(false);
+    }
+    const next = force ?? !this.pipMenuOpen;
+    this.pipMenuOpen = next;
+    if (next) {
+      this.renderPipMenu();
+    }
+    this.syncPipVisibility();
+    return this.pipMenuOpen;
+  }
+
+  public handleToolbarActionClick(): 'expanded' | 'minimized' | 'closed' {
+    if (this.mode === 'closed') {
+      this.openExpanded(false);
+      return 'expanded';
+    }
+    this.togglePipMenu();
+    return this.mode;
+  }
+
   public minimize(statusText?: string): void {
     this.mode = 'minimized';
     this.drawerTab = 'none';
+    this.pipMenuOpen = false;
+    this.syncPipVisibility();
     this.syncDrawerVisibility();
     if (this.dockBar) {
       this.dockBar.style.display = 'none';
@@ -297,6 +371,18 @@ export class OnPageOverlayDashboard {
   public showResultSummary(summary: OverlayToolSummary): void {
     this.lastSummary = summary;
     this.drawerTab = 'result';
+    this.pipMenuOpen = false;
+    this.syncPipVisibility();
+    if (this.mode !== 'expanded') {
+      this.openExpanded(false);
+    }
+    this.renderDrawer();
+  }
+
+  public showResponsivePreview(): void {
+    this.drawerTab = 'responsive';
+    this.pipMenuOpen = false;
+    this.syncPipVisibility();
     if (this.mode !== 'expanded') {
       this.openExpanded(false);
     }
@@ -321,63 +407,117 @@ export class OnPageOverlayDashboard {
   public close(): void {
     this.mode = 'closed';
     this.drawerTab = 'none';
+    this.pipMenuOpen = false;
     this.anchor?.remove();
     this.anchor = null;
     this.stage = null;
     this.dockBar = null;
-    this.pinnedStrip = null;
+    this.toolsStrip = null;
+    this.themeToggleBtn = null;
+    this.pipMenuEl = null;
+    this.pipBtn = null;
     this.minBar = null;
     this.drawer = null;
     this.drawerContent = null;
-  }
-
-  public refreshSiteActivity(): Promise<void> {
-    if (this.drawerTab === 'tools') {
-      this.renderDrawer();
-    }
-    return Promise.resolve();
+    this.allToolsBtn = null;
+    this.minStatusText = null;
   }
 
   private syncAnchorPlacement(): void {
-    if (!this.anchor) {
-      return;
-    }
+    if (!this.anchor) return;
     this.anchor.setAttribute('data-pos', this.customization.position);
   }
 
-  private injectFontsStyle(): void {
-    const fonts = [
-      { fam: 'Instrument Sans', weight: 400, file: 'fonts/instrument-sans-400.woff2' },
-      { fam: 'Instrument Sans', weight: 500, file: 'fonts/instrument-sans-500.woff2' },
-      { fam: 'Instrument Sans', weight: 600, file: 'fonts/instrument-sans-600.woff2' },
-      { fam: 'Instrument Sans', weight: 700, file: 'fonts/instrument-sans-700.woff2' },
-      { fam: 'IBM Plex Mono', weight: 400, file: 'fonts/ibm-plex-mono-400.woff2' },
-      { fam: 'IBM Plex Mono', weight: 500, file: 'fonts/ibm-plex-mono-500.woff2' },
-      { fam: 'IBM Plex Mono', weight: 600, file: 'fonts/ibm-plex-mono-600.woff2' },
-    ];
-    let css = '';
-    for (const f of fonts) {
-      const url = this.callbacks.getResourceUrl(f.file);
-      if (url) {
-        css += `@font-face { font-family: "${f.fam}"; font-style: normal; font-weight: ${f.weight}; font-display: swap; src: url("${url}") format("woff2"); }\n`;
-      }
-    }
-    if (css) {
-      const style = this.doc.createElement('style');
-      style.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
-      style.textContent = css;
-      this.shadow.appendChild(style);
-    }
+  private syncThemeButtonIcon(): void {
+    if (!this.themeToggleBtn) return;
+    const effective = this.getEffectiveTheme();
+    this.themeToggleBtn.textContent = '';
+    this.themeToggleBtn.appendChild(
+      createSvgIcon(effective === 'dark' ? 'sun' : 'moon', '', this.doc),
+    );
+    this.themeToggleBtn.setAttribute(
+      'aria-label',
+      effective === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
+    );
+    this.themeToggleBtn.title = effective === 'dark' ? 'Switch to Light' : 'Switch to Dark';
+  }
+
+  private syncPipVisibility(): void {
+    this.pipMenuEl?.classList.toggle('open', this.pipMenuOpen);
+    this.pipBtn?.classList.toggle('active', this.pipMenuOpen);
+  }
+
+  private toggleQuickTheme(): void {
+    const current = this.getEffectiveTheme();
+    const next: 'light' | 'dark' = current === 'dark' ? 'light' : 'dark';
+    this.customization.themeMode = 'follow';
+    this.setResolvedTheme(next);
+    void this.callbacks.onSaveCustomization?.({ theme: next, themeMode: 'follow' });
   }
 
   private mountDom(): void {
-    this.injectFontsStyle();
-    const iconUrl = this.callbacks.getResourceUrl('icons/icon-32.png');
+    const fontsCss = ['400', '500', '600', '700']
+      .map((w) => {
+        const u = this.callbacks.getResourceUrl(`fonts/instrument-sans-${w}.woff2`);
+        return u
+          ? `@font-face{font-family:'Instrument Sans';font-style:normal;font-weight:${w};font-display:swap;src:url('${u}') format('woff2');}`
+          : '';
+      })
+      .join('');
+    const monoCss = ['400', '500', '600']
+      .map((w) => {
+        const u = this.callbacks.getResourceUrl(`fonts/ibm-plex-mono-${w}.woff2`);
+        return u
+          ? `@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:${w};font-display:swap;src:url('${u}') format('woff2');}`
+          : '';
+      })
+      .join('');
 
     const styleEl = this.doc.createElement('style');
-    styleEl.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
     styleEl.textContent = `
+      ${fontsCss}${monoCss}
       .ps-anchor {
+        --bg: #121218;
+        --elevated: #1b1c25;
+        --subtle: #252735;
+        --border: #2c2e3b;
+        --border-strong: #46435e;
+        --text: #f4f4f5;
+        --secondary: #d4d4d8;
+        --muted: #9ca3af;
+        --ink: #f4f4f5;
+        --ink-hover: #e4e4e7;
+        --ink-fg: #111827;
+        --accent: #2563eb;
+        --accent-hover: #3b82f6;
+        --accent-surface: #172554;
+        --accent-border: #1e40af;
+        --accent-text: #93c5fd;
+        --beta-bg: #2a2440;
+        --beta-border: #4c4175;
+        --beta-text: #c4b5fd;
+        --positive: #14b8a6;
+        --positive-surface: #042f2e;
+        --positive-border: #115e59;
+        --shadow-sm: 0 3px 8px rgba(0, 0, 0, 0.36);
+        --shadow-md: 0 10px 26px rgba(0, 0, 0, 0.48);
+        --shadow-lg: 0 22px 54px rgba(0, 0, 0, 0.68), 0 4px 16px rgba(0, 0, 0, 0.42);
+        --ease: cubic-bezier(0.22, 1, 0.36, 1);
+        position: fixed;
+        bottom: 16px;
+        left: 0;
+        right: 0;
+        margin: 0 auto;
+        width: fit-content;
+        max-width: calc(100vw - 20px);
+        z-index: 2147483647;
+        pointer-events: none;
+        font-family: "Instrument Sans", system-ui, -apple-system, sans-serif;
+        font-size: 13px;
+        line-height: 1.4;
+        color: var(--text);
+      }
+      .ps-anchor[data-theme="light"] {
         --bg: #ffffff;
         --elevated: #f5f6f8;
         --subtle: #eef0f4;
@@ -394,50 +534,15 @@ export class OnPageOverlayDashboard {
         --accent-surface: #eff6ff;
         --accent-border: #bfdbfe;
         --accent-text: #1d4ed8;
+        --beta-bg: #eef2ff;
+        --beta-border: #c7d2fe;
+        --beta-text: #4338ca;
         --positive: #0f766e;
         --positive-surface: #f0fdfa;
         --positive-border: #99f6e4;
         --shadow-sm: 0 2px 6px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-        --shadow-md: 0 8px 22px rgba(15, 23, 42, 0.09), 0 2px 6px rgba(15, 23, 42, 0.04);
-        --shadow-lg: 0 18px 42px rgba(15, 23, 42, 0.14), 0 4px 12px rgba(15, 23, 42, 0.06);
-        --ease: cubic-bezier(0.22, 1, 0.36, 1);
-        position: fixed;
-        bottom: 18px;
-        left: 0;
-        right: 0;
-        margin: 0 auto;
-        width: fit-content;
-        max-width: calc(100vw - 24px);
-        z-index: 2147483647;
-        pointer-events: none;
-        font-family: "Instrument Sans", system-ui, -apple-system, sans-serif;
-        font-size: 13px;
-        line-height: 1.45;
-        color: var(--text);
-      }
-      .ps-anchor[data-theme="dark"] {
-        --bg: #15171d;
-        --elevated: #1c1f27;
-        --subtle: #242834;
-        --border: #282c38;
-        --border-strong: #373d4e;
-        --text: #f4f4f5;
-        --secondary: #d4d4d8;
-        --muted: #9ca3af;
-        --ink: #f4f4f5;
-        --ink-hover: #e4e4e7;
-        --ink-fg: #111827;
-        --accent: #2563eb;
-        --accent-hover: #3b82f6;
-        --accent-surface: #172554;
-        --accent-border: #1e40af;
-        --accent-text: #93c5fd;
-        --positive: #14b8a6;
-        --positive-surface: #042f2e;
-        --positive-border: #115e59;
-        --shadow-sm: 0 3px 8px rgba(0, 0, 0, 0.36);
-        --shadow-md: 0 10px 26px rgba(0, 0, 0, 0.45);
-        --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.62);
+        --shadow-md: 0 8px 22px rgba(15, 23, 42, 0.1), 0 2px 6px rgba(15, 23, 42, 0.05);
+        --shadow-lg: 0 18px 42px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.07);
       }
       .ps-anchor[data-pos="bottom-right"] {
         left: auto;
@@ -445,11 +550,12 @@ export class OnPageOverlayDashboard {
         margin: 0;
       }
       .ps-anchor[data-pos="top-center"] {
-        top: 18px;
+        top: 16px;
         bottom: auto;
       }
       .ps-anchor * { box-sizing: border-box; }
       .ps-stage {
+        position: relative;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -465,15 +571,220 @@ export class OnPageOverlayDashboard {
       .ps-dock {
         display: flex;
         align-items: center;
-        flex-wrap: wrap;
-        gap: 6px;
-        padding: 6px 8px;
+        justify-content: center;
+        flex-wrap: nowrap;
+        gap: 4px;
+        padding: 5px 8px;
         background: var(--bg);
-        border: 1px solid var(--border);
+        border: 1px solid var(--border-strong);
         border-radius: 10px;
         box-shadow: var(--shadow-lg);
         pointer-events: auto;
         max-width: 100%;
+      }
+      .ps-tools-strip {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: nowrap;
+        gap: 2px;
+      }
+      .ps-dock-divider {
+        width: 1px;
+        height: 26px;
+        background: var(--border);
+        margin: 0 5px;
+        flex: 0 0 auto;
+      }
+      .ps-actions-strip {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        flex: 0 0 auto;
+      }
+      .ps-dock-tool {
+        position: relative;
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        min-width: 48px;
+        padding: 5px 6px;
+        border-radius: 6px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--secondary);
+        font-family: inherit;
+        font-size: 10.5px;
+        font-weight: 500;
+        line-height: 1.15;
+        cursor: pointer;
+        white-space: nowrap;
+        transition:
+          background-color 120ms var(--ease),
+          border-color 120ms var(--ease),
+          color 120ms var(--ease),
+          transform 120ms var(--ease),
+          box-shadow 120ms var(--ease);
+      }
+      .ps-dock-tool svg {
+        width: 16px;
+        height: 16px;
+        flex: 0 0 auto;
+      }
+      @media (max-width: 1120px) {
+        .ps-dock,
+        .ps-tools-strip {
+          flex-wrap: wrap;
+        }
+      }
+      .ps-dock-tool:hover {
+        background: var(--elevated);
+        border-color: var(--border);
+        color: var(--text);
+        transform: translateY(-1px);
+        box-shadow: var(--shadow-sm);
+      }
+      .ps-dock-tool:active {
+        transform: translateY(1px) scale(0.97);
+      }
+      .ps-dock-tool.active {
+        background: var(--accent-surface);
+        border-color: var(--accent-border);
+        color: var(--accent-text);
+        font-weight: 600;
+      }
+      .ps-dock-tool.tap-confirm,
+      .ps-icon-btn.tap-confirm,
+      .ps-btn.tap-confirm {
+        animation: ps-tap 210ms var(--ease);
+      }
+      .ps-beta-badge {
+        position: absolute;
+        top: 1px;
+        right: 2px;
+        padding: 1px 4px;
+        border-radius: 4px;
+        border: 1px solid var(--beta-border);
+        background: var(--beta-bg);
+        color: var(--beta-text);
+        font-size: 9px;
+        font-weight: 600;
+        line-height: 1.1;
+        letter-spacing: 0.01em;
+      }
+      .ps-icon-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 36px;
+        border-radius: 7px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--secondary);
+        cursor: pointer;
+        transition:
+          background-color 120ms var(--ease),
+          border-color 120ms var(--ease),
+          color 120ms var(--ease),
+          transform 120ms var(--ease);
+      }
+      .ps-icon-btn svg {
+        width: 16px;
+        height: 16px;
+      }
+      .ps-icon-btn:hover {
+        background: var(--elevated);
+        border-color: var(--border);
+        color: var(--text);
+        transform: translateY(-1px);
+      }
+      .ps-icon-btn:active {
+        transform: translateY(1px) scale(0.96);
+      }
+      .ps-icon-btn.active {
+        background: var(--accent-surface);
+        border-color: var(--accent-border);
+        color: var(--accent-text);
+      }
+      .ps-pip-menu {
+        display: none;
+        position: absolute;
+        bottom: calc(100% + 10px);
+        right: 0;
+        width: 268px;
+        padding: 10px;
+        background: var(--bg);
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        box-shadow: var(--shadow-lg);
+        pointer-events: auto;
+        z-index: 4;
+      }
+      .ps-anchor[data-pos="top-center"] .ps-pip-menu {
+        bottom: auto;
+        top: calc(100% + 10px);
+      }
+      .ps-pip-menu.open {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        animation: ps-rise 160ms var(--ease);
+      }
+      .ps-pip-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 4px 4px 8px;
+        border-bottom: 1px solid var(--border);
+      }
+      .ps-pip-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-weight: 600;
+        font-size: 12.5px;
+      }
+      .ps-pip-brand img {
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+      }
+      .ps-pip-item {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 9px;
+        width: 100%;
+        min-height: 34px;
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--text);
+        font-family: inherit;
+        font-size: 12.5px;
+        font-weight: 500;
+        cursor: pointer;
+        text-align: left;
+        transition:
+          background-color 120ms var(--ease),
+          border-color 120ms var(--ease),
+          transform 120ms var(--ease);
+      }
+      .ps-pip-item svg {
+        width: 15px;
+        height: 15px;
+        color: var(--muted);
+        flex: 0 0 auto;
+      }
+      .ps-pip-item:hover {
+        background: var(--elevated);
+        border-color: var(--border);
+        transform: translateX(1px);
       }
       .ps-minbar {
         display: none;
@@ -481,7 +792,7 @@ export class OnPageOverlayDashboard {
         gap: 8px;
         padding: 6px 10px;
         background: var(--bg);
-        border: 1px solid var(--border);
+        border: 1px solid var(--border-strong);
         border-radius: 8px;
         box-shadow: var(--shadow-lg);
         pointer-events: auto;
@@ -489,15 +800,19 @@ export class OnPageOverlayDashboard {
       }
       .ps-drawer {
         display: none;
-        width: min(720px, calc(100vw - 24px));
-        max-height: min(62vh, 520px);
+        width: min(760px, calc(100vw - 24px));
+        max-height: min(64vh, 540px);
         overflow-y: auto;
         background: var(--bg);
-        border: 1px solid var(--border);
+        border: 1px solid var(--border-strong);
         border-radius: 10px;
         box-shadow: var(--shadow-lg);
         pointer-events: auto;
         padding: 14px;
+      }
+      .ps-drawer.ps-drawer-wide {
+        width: min(1060px, calc(100vw - 24px));
+        max-height: min(76vh, 720px);
       }
       .ps-drawer.open {
         display: block;
@@ -511,23 +826,9 @@ export class OnPageOverlayDashboard {
         to { opacity: 1; transform: none; }
       }
       @keyframes ps-tap {
-        0% { transform: scale(0.965); }
-        60% { transform: scale(1.01); }
+        0% { transform: scale(0.96); }
+        60% { transform: scale(1.02); }
         100% { transform: scale(1); }
-      }
-      .ps-brand {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        padding: 3px 6px 3px 4px;
-        border-right: 1px solid var(--border);
-        min-width: 0;
-      }
-      .ps-brand img {
-        width: 20px;
-        height: 20px;
-        border-radius: 4px;
-        flex: 0 0 auto;
       }
       .ps-sq-dot {
         width: 7px;
@@ -535,29 +836,6 @@ export class OnPageOverlayDashboard {
         border-radius: 2px;
         background: var(--positive);
         flex: 0 0 auto;
-      }
-      .ps-host {
-        font-family: "IBM Plex Mono", ui-monospace, monospace;
-        font-size: 12px;
-        font-weight: 500;
-        color: var(--secondary);
-        max-width: 130px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .ps-pinned-strip {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 5px;
-      }
-      .ps-actions-strip {
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        padding-left: 4px;
-        border-left: 1px solid var(--border);
       }
       .ps-btn {
         display: inline-flex;
@@ -568,7 +846,7 @@ export class OnPageOverlayDashboard {
         padding: 4px 10px;
         border-radius: 6px;
         border: 1px solid var(--border);
-        background: var(--bg);
+        background: var(--elevated);
         color: var(--text);
         font-family: inherit;
         font-size: 12.5px;
@@ -582,8 +860,13 @@ export class OnPageOverlayDashboard {
           box-shadow 120ms var(--ease),
           transform 120ms var(--ease);
       }
+      .ps-btn svg {
+        width: 14px;
+        height: 14px;
+        flex: 0 0 auto;
+      }
       .ps-btn:hover {
-        background: var(--elevated);
+        background: var(--subtle);
         border-color: var(--border-strong);
         box-shadow: var(--shadow-md);
         transform: translateY(-1px);
@@ -591,9 +874,6 @@ export class OnPageOverlayDashboard {
       .ps-btn:active {
         transform: translateY(1px) scale(0.975);
         box-shadow: var(--shadow-sm);
-      }
-      .ps-btn.tap-confirm {
-        animation: ps-tap 210ms var(--ease);
       }
       .ps-btn.active {
         background: var(--accent-surface);
@@ -634,22 +914,6 @@ export class OnPageOverlayDashboard {
         box-shadow: none;
         transform: none;
       }
-      .ps-tile-icon {
-        width: 18px;
-        height: 18px;
-        border-radius: 4px;
-        background: var(--accent-surface);
-        border: 1px solid var(--accent-border);
-        color: var(--accent-text);
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        flex: 0 0 auto;
-      }
-      .ps-tile-icon svg {
-        width: 12px;
-        height: 12px;
-      }
       .ps-search {
         width: 100%;
         min-height: 34px;
@@ -676,8 +940,24 @@ export class OnPageOverlayDashboard {
       }
       .ps-tool-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
         gap: 6px;
+      }
+      .ps-tile-icon {
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        background: var(--accent-surface);
+        border: 1px solid var(--accent-border);
+        color: var(--accent-text);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+      }
+      .ps-tile-icon svg {
+        width: 12px;
+        height: 12px;
       }
       .ps-tag {
         display: inline-flex;
@@ -705,6 +985,7 @@ export class OnPageOverlayDashboard {
         align-items: center;
         justify-content: space-between;
         gap: 8px;
+        flex-wrap: wrap;
         padding-bottom: 10px;
         margin-bottom: 10px;
         border-bottom: 1px solid var(--border);
@@ -716,7 +997,7 @@ export class OnPageOverlayDashboard {
       }
       .ps-stack-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(225px, 1fr));
         gap: 8px;
         margin: 10px 0;
       }
@@ -728,14 +1009,53 @@ export class OnPageOverlayDashboard {
         box-shadow: var(--shadow-sm);
         display: flex;
         flex-direction: column;
+        gap: 7px;
+      }
+      .ps-stack-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding-bottom: 5px;
+        border-bottom: 1px solid var(--border);
+      }
+      .tech-cat-heading {
+        display: inline-flex;
+        align-items: center;
         gap: 6px;
+        font-size: 12.5px;
+        font-weight: 600;
+      }
+      .tech-cat-icon {
+        width: 14px;
+        height: 14px;
+        color: var(--accent-text);
+        flex: 0 0 auto;
       }
       .ps-stack-item {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 6px;
+        gap: 8px;
         font-size: 12.5px;
+      }
+      .tech-row-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .tech-badge-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 5px;
+        border: 1px solid var(--border-strong);
+        background: var(--bg);
+        color: var(--text);
+        flex: 0 0 auto;
       }
       .ps-site-list {
         display: flex;
@@ -769,10 +1089,82 @@ export class OnPageOverlayDashboard {
         padding: 6px 10px;
         border-radius: 6px;
         border: 1px solid var(--border-strong);
-        background: var(--bg);
+        background: var(--elevated);
         color: var(--text);
         font-family: inherit;
         font-size: 13px;
+      }
+      .ps-resp-toolbar {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+      .ps-num {
+        width: 72px;
+        min-height: 31px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid var(--border-strong);
+        background: var(--elevated);
+        color: var(--text);
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        font-size: 12px;
+      }
+      .ps-resp-stage {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: center;
+        gap: 14px;
+        padding: 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--elevated);
+        overflow: auto;
+        max-height: 52vh;
+      }
+      .ps-device-shell {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        background: var(--bg);
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        padding: 8px;
+        box-shadow: var(--shadow-md);
+      }
+      .ps-device-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 11.5px;
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        color: var(--muted);
+      }
+      .ps-device-viewport {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: #ffffff;
+        position: relative;
+      }
+      .ps-resp-iframe {
+        display: block;
+        border: 0;
+        background: #ffffff;
+        transform-origin: top left;
+      }
+      .ps-capture-preview {
+        display: block;
+        max-width: 100%;
+        max-height: 280px;
+        margin-top: 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border-strong);
+        box-shadow: var(--shadow-md);
       }
       @media (prefers-reduced-motion: reduce) {
         * { transition: none !important; animation: none !important; }
@@ -782,7 +1174,7 @@ export class OnPageOverlayDashboard {
     const anchor = this.doc.createElement('div');
     anchor.className = 'ps-anchor';
     anchor.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
-    anchor.setAttribute('data-theme', this.resolvedTheme);
+    anchor.setAttribute('data-theme', this.getEffectiveTheme());
     anchor.setAttribute('data-pos', this.customization.position);
     anchor.appendChild(styleEl);
 
@@ -808,93 +1200,115 @@ export class OnPageOverlayDashboard {
     drawer.appendChild(drawerContent);
     stage.appendChild(drawer);
 
+    const pipMenu = this.doc.createElement('div');
+    pipMenu.className = 'ps-pip-menu';
+    pipMenu.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+    pipMenu.setAttribute('role', 'dialog');
+    pipMenu.setAttribute('aria-label', 'PageSift Quick Menu');
+    stage.appendChild(pipMenu);
+
     const dockBar = this.doc.createElement('div');
     dockBar.className = 'ps-dock ps-panel';
     dockBar.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
     dockBar.setAttribute('role', 'toolbar');
     dockBar.setAttribute('aria-label', 'PageSift Horizontal Command Bar');
 
-    const brand = this.doc.createElement('div');
-    brand.className = 'ps-brand';
-    if (iconUrl) {
-      const img = this.doc.createElement('img');
-      img.src = iconUrl;
-      img.alt = 'PageSift';
-      brand.appendChild(img);
+    const toolsStrip = this.doc.createElement('div');
+    toolsStrip.className = 'ps-tools-strip';
+    for (const def of OVERLAY_TOOLS) {
+      const btn = this.doc.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ps-dock-tool';
+      btn.setAttribute('data-overlay-bar-tool', def.id);
+      btn.setAttribute('data-overlay-tool', def.id);
+      btn.title = def.label;
+      btn.appendChild(createSvgIcon(def.id, '', this.doc));
+      const lbl = this.doc.createElement('span');
+      lbl.textContent = def.label;
+      btn.appendChild(lbl);
+      if (def.badgeText) {
+        const b = this.doc.createElement('span');
+        b.className = 'ps-beta-badge';
+        b.textContent = def.badgeText;
+        btn.appendChild(b);
+      }
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        void this.handleToolClick(def);
+      });
+      toolsStrip.appendChild(btn);
     }
-    const dot = this.doc.createElement('span');
-    dot.className = 'ps-sq-dot';
-    brand.appendChild(dot);
+    dockBar.appendChild(toolsStrip);
 
-    const pageInfo = this.callbacks.getPageInfo();
-    const hostSpan = this.doc.createElement('span');
-    hostSpan.className = 'ps-host';
-    hostSpan.textContent = pageInfo.hostname || 'PageSift';
-    brand.appendChild(hostSpan);
-    dockBar.appendChild(brand);
-
-    const pinnedStrip = this.doc.createElement('div');
-    pinnedStrip.className = 'ps-pinned-strip';
-    dockBar.appendChild(pinnedStrip);
+    const divider = this.doc.createElement('div');
+    divider.className = 'ps-dock-divider';
+    dockBar.appendChild(divider);
 
     const actionsStrip = this.doc.createElement('div');
     actionsStrip.className = 'ps-actions-strip';
 
+    const pipBtn = this.doc.createElement('button');
+    pipBtn.type = 'button';
+    pipBtn.className = 'ps-icon-btn';
+    pipBtn.setAttribute('data-ps-action', 'pip-menu');
+    pipBtn.setAttribute('aria-label', 'Open quick menu and settings');
+    pipBtn.title = 'Quick Menu & Settings';
+    pipBtn.appendChild(createSvgIcon('user', '', this.doc));
+    pipBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      this.togglePipMenu();
+    });
+
+    const themeBtn = this.doc.createElement('button');
+    themeBtn.type = 'button';
+    themeBtn.className = 'ps-icon-btn';
+    themeBtn.setAttribute('data-ps-action', 'toggle-theme');
+    themeBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      this.toggleQuickTheme();
+    });
+
     const allToolsBtn = this.doc.createElement('button');
     allToolsBtn.type = 'button';
-    allToolsBtn.className = 'ps-btn';
+    allToolsBtn.className = 'ps-icon-btn';
     allToolsBtn.setAttribute('data-ps-action', 'toggle-tools');
-    allToolsBtn.textContent = 'All 15';
+    allToolsBtn.setAttribute('aria-label', 'Search tools and site activity');
+    allToolsBtn.title = 'Tools & Site Activity';
+    allToolsBtn.appendChild(createSvgIcon('grid', '', this.doc));
     allToolsBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
+      this.pipMenuOpen = false;
+      this.syncPipVisibility();
       this.drawerTab = this.drawerTab === 'tools' ? 'none' : 'tools';
       this.renderDrawer();
     });
 
-    const customizeBtn = this.doc.createElement('button');
-    customizeBtn.type = 'button';
-    customizeBtn.className = 'ps-btn ghost';
-    customizeBtn.setAttribute('data-ps-action', 'customize');
-    customizeBtn.textContent = 'Customize';
-    customizeBtn.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      this.drawerTab = this.drawerTab === 'customize' ? 'none' : 'customize';
-      this.renderDrawer();
-    });
-
-    const openDashBtn = this.doc.createElement('button');
-    openDashBtn.type = 'button';
-    openDashBtn.className = 'ps-btn ink';
-    openDashBtn.setAttribute('data-ps-action', 'open-dashboard');
-    openDashBtn.textContent = 'Dashboard';
-    openDashBtn.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      void this.callbacks.onOpenFullDashboard();
-    });
-
     const minBtn = this.doc.createElement('button');
     minBtn.type = 'button';
-    minBtn.className = 'ps-btn ghost';
+    minBtn.className = 'ps-icon-btn';
     minBtn.setAttribute('data-ps-action', 'minimize');
     minBtn.setAttribute('aria-label', 'Minimize overlay');
-    minBtn.textContent = '-';
+    minBtn.title = 'Minimize';
+    minBtn.appendChild(createSvgIcon('minus', '', this.doc));
     minBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
+      const pageInfo = this.callbacks.getPageInfo();
       this.minimize(pageInfo.hostname || 'PageSift');
     });
 
     const closeBtn = this.doc.createElement('button');
     closeBtn.type = 'button';
-    closeBtn.className = 'ps-btn ghost';
+    closeBtn.className = 'ps-icon-btn';
     closeBtn.setAttribute('data-ps-action', 'close');
     closeBtn.setAttribute('aria-label', 'Close overlay');
-    closeBtn.textContent = 'x';
+    closeBtn.title = 'Close';
+    closeBtn.appendChild(createSvgIcon('close', '', this.doc));
     closeBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
       this.callbacks.onCloseOverlay();
     });
 
-    actionsStrip.append(allToolsBtn, customizeBtn, openDashBtn, minBtn, closeBtn);
+    actionsStrip.append(pipBtn, themeBtn, allToolsBtn, minBtn, closeBtn);
     dockBar.appendChild(actionsStrip);
     stage.appendChild(dockBar);
 
@@ -908,7 +1322,7 @@ export class OnPageOverlayDashboard {
     mDot.className = 'ps-sq-dot';
     const minText = this.doc.createElement('span');
     minText.className = 'ps-min-text';
-    minText.textContent = pageInfo.hostname || 'PageSift';
+    minText.textContent = this.callbacks.getPageInfo().hostname || 'PageSift';
 
     const expandBtn = this.doc.createElement('button');
     expandBtn.type = 'button';
@@ -923,6 +1337,7 @@ export class OnPageOverlayDashboard {
     const minDashBtn = this.doc.createElement('button');
     minDashBtn.type = 'button';
     minDashBtn.className = 'ps-btn';
+    minDashBtn.setAttribute('data-ps-action', 'open-dashboard-min');
     minDashBtn.textContent = 'Dashboard';
     minDashBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -948,48 +1363,347 @@ export class OnPageOverlayDashboard {
     this.anchor = anchor;
     this.stage = stage;
     this.dockBar = dockBar;
-    this.pinnedStrip = pinnedStrip;
+    this.toolsStrip = toolsStrip;
+    this.themeToggleBtn = themeBtn;
+    this.pipMenuEl = pipMenu;
+    this.pipBtn = pipBtn;
     this.minBar = minBar;
     this.drawer = drawer;
     this.drawerContent = drawerContent;
     this.allToolsBtn = allToolsBtn;
-    this.customizeBtn = customizeBtn;
     this.minStatusText = minText;
 
-    this.renderPinnedBarTools();
+    this.syncThemeButtonIcon();
   }
 
-  private renderPinnedBarTools(): void {
-    if (!this.pinnedStrip) {
-      return;
+  private renderPipMenu(): void {
+    if (!this.pipMenuEl) return;
+    this.pipMenuEl.textContent = '';
+
+    const info = this.callbacks.getPageInfo();
+    const head = this.doc.createElement('div');
+    head.className = 'ps-pip-head';
+
+    const brand = this.doc.createElement('div');
+    brand.className = 'ps-pip-brand';
+    const iconUrl = this.callbacks.getResourceUrl('icons/icon-32.png');
+    if (iconUrl) {
+      const img = this.doc.createElement('img');
+      img.src = iconUrl;
+      img.alt = 'PageSift';
+      brand.appendChild(img);
     }
-    this.pinnedStrip.textContent = '';
-    for (const id of this.customization.pinnedTools) {
-      const def = OVERLAY_TOOLS.find((t) => t.id === id);
-      if (!def) continue;
+    const hostSpan = this.doc.createElement('span');
+    hostSpan.textContent = info.hostname || 'PageSift';
+    brand.appendChild(hostSpan);
+
+    const themeTag = this.doc.createElement('span');
+    themeTag.className = 'ps-tag accent';
+    themeTag.textContent = this.getEffectiveTheme() === 'dark' ? 'Dark' : 'Light';
+    head.append(brand, themeTag);
+    this.pipMenuEl.appendChild(head);
+
+    const addAction = (
+      label: string,
+      iconName: string,
+      actionAttr: string,
+      onClick: () => void,
+    ): void => {
       const btn = this.doc.createElement('button');
       btn.type = 'button';
-      btn.className = 'ps-btn';
-      btn.setAttribute('data-overlay-bar-tool', def.id);
-      const sq = this.doc.createElement('span');
-      sq.className = 'ps-tile-icon';
-      sq.appendChild(createSvgIcon(def.id, '', this.doc));
-      const lbl = this.doc.createElement('span');
-      lbl.textContent = def.label;
-      btn.append(sq, lbl);
+      btn.className = 'ps-pip-item';
+      btn.setAttribute('data-ps-action', actionAttr);
+      btn.appendChild(createSvgIcon(iconName, '', this.doc));
+      btn.appendChild(this.doc.createTextNode(label));
       btn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        void this.handleToolClick(def);
+        onClick();
       });
-      this.pinnedStrip.appendChild(btn);
-    }
+      this.pipMenuEl?.appendChild(btn);
+    };
+
+    addAction('Settings & API Keys', 'settings', 'open-settings', () => {
+      this.pipMenuOpen = false;
+      this.syncPipVisibility();
+      if (this.callbacks.onOpenSettings) {
+        void this.callbacks.onOpenSettings();
+      } else {
+        void this.callbacks.onOpenFullDashboard({ section: 'settings' });
+      }
+    });
+
+    addAction('Open Full Dashboard', 'external', 'open-dashboard', () => {
+      this.pipMenuOpen = false;
+      this.syncPipVisibility();
+      void this.callbacks.onOpenFullDashboard();
+    });
+
+    addAction('Responsive Interactive View', 'responsive', 'open-responsive-stage', () => {
+      this.showResponsivePreview();
+    });
+
+    addAction('Customize Dock', 'sliders', 'customize', () => {
+      this.pipMenuOpen = false;
+      this.syncPipVisibility();
+      this.drawerTab = 'customize';
+      this.renderDrawer();
+    });
+
+    const isDark = this.getEffectiveTheme() === 'dark';
+    addAction(
+      isDark ? 'Switch to Light Theme' : 'Switch to Dark Theme',
+      isDark ? 'sun' : 'moon',
+      'pip-toggle-theme',
+      () => {
+        this.toggleQuickTheme();
+      },
+    );
+
+    addAction('Close Overlay', 'close', 'pip-close-overlay', () => {
+      this.callbacks.onCloseOverlay();
+    });
   }
 
   private syncDrawerVisibility(): void {
     const isOpen = this.mode === 'expanded' && this.drawerTab !== 'none';
     this.drawer?.classList.toggle('open', isOpen);
+    this.drawer?.classList.toggle('ps-drawer-wide', this.drawerTab === 'responsive');
     this.allToolsBtn?.classList.toggle('active', this.drawerTab === 'tools');
-    this.customizeBtn?.classList.toggle('active', this.drawerTab === 'customize');
+    if (this.toolsStrip) {
+      const buttons = this.toolsStrip.querySelectorAll<HTMLButtonElement>(
+        'button[data-overlay-bar-tool]',
+      );
+      buttons.forEach((b) => {
+        const id = b.getAttribute('data-overlay-bar-tool');
+        const active =
+          (this.drawerTab === 'responsive' && id === 'responsive') ||
+          (this.drawerTab === 'result' && this.lastSummary?.tool === id) ||
+          (this.drawerTab === 'editor' && this.editorState?.tool === id);
+        b.classList.toggle('active', active);
+      });
+    }
+  }
+
+  private triggerDownloadFromSummary(s: OverlayToolSummary): void {
+    const blob = s.downloadBase64
+      ? new Blob([base64ToBytes(s.downloadBase64) as BlobPart], {
+          type: s.downloadMime ?? 'application/zip',
+        })
+      : new Blob([s.downloadText ?? ''], {
+          type: s.downloadMime ?? 'text/plain;charset=utf-8',
+        });
+    const url = URL.createObjectURL(blob);
+    const a = this.doc.createElement('a');
+    a.href = url;
+    a.download = s.downloadFilename ?? 'pagesift-output.txt';
+    a.style.display = 'none';
+    this.doc.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 15000);
+  }
+
+  private renderResponsiveStageDrawer(): void {
+    if (!this.drawerContent) return;
+    const head = this.doc.createElement('div');
+    head.className = 'ps-drawer-head';
+    head.appendChild(
+      this.createEl('span', 'ps-drawer-title', 'Direct Responsive & Interactive Preview'),
+    );
+    const headActs = this.doc.createElement('div');
+    headActs.style.display = 'flex';
+    headActs.style.gap = '6px';
+    headActs.style.flexWrap = 'wrap';
+    if (this.callbacks.onOpenSiteResponsiveWindows) {
+      const openWinFn = this.callbacks.onOpenSiteResponsiveWindows;
+      headActs.appendChild(
+        this.createButton('Synced OS Windows', 'ps-btn', () => {
+          this.respStatusMsg = 'Launching synced multi-viewport windows...';
+          this.renderDrawer();
+          void openWinFn().then((r) => {
+            this.respStatusMsg = r.message;
+            this.renderDrawer();
+          });
+        }),
+      );
+    }
+    headActs.appendChild(
+      this.createButton('Dashboard', 'ps-btn primary', () => {
+        void this.callbacks.onOpenFullDashboard({ tool: 'responsive', autorun: false });
+      }),
+    );
+    headActs.appendChild(
+      this.createButton('Done', 'ps-btn ghost', () => {
+        this.drawerTab = 'none';
+        this.syncDrawerVisibility();
+      }),
+    );
+    head.appendChild(headActs);
+    this.drawerContent.appendChild(head);
+
+    const toolbar = this.doc.createElement('div');
+    toolbar.className = 'ps-resp-toolbar';
+
+    for (const preset of RESPONSIVE_STAGE_PRESETS) {
+      const active =
+        this.respLayout === 'single' &&
+        this.respWidth === preset.width &&
+        this.respHeight === preset.height;
+      const b = this.createButton(
+        `${preset.label} ${preset.width}x${preset.height}`,
+        active ? 'ps-btn active' : 'ps-btn',
+        () => {
+          this.respLayout = 'single';
+          this.respWidth = preset.width;
+          this.respHeight = preset.height;
+          this.respScale = preset.width >= 1000 ? 0.56 : 0.72;
+          this.renderDrawer();
+        },
+      );
+      b.setAttribute('data-ps-resp-preset', preset.id);
+      toolbar.appendChild(b);
+    }
+
+    const gridBtn = this.createButton(
+      'Side-by-Side',
+      this.respLayout === 'grid' ? 'ps-btn active' : 'ps-btn',
+      () => {
+        this.respLayout = this.respLayout === 'grid' ? 'single' : 'grid';
+        this.renderDrawer();
+      },
+    );
+    gridBtn.setAttribute('data-ps-resp-mode', 'grid');
+    toolbar.appendChild(gridBtn);
+
+    const rotateBtn = this.doc.createElement('button');
+    rotateBtn.type = 'button';
+    rotateBtn.className = 'ps-btn';
+    rotateBtn.setAttribute('data-ps-resp-rotate', 'true');
+    rotateBtn.appendChild(createSvgIcon('rotate', '', this.doc));
+    rotateBtn.appendChild(this.doc.createTextNode('Rotate'));
+    rotateBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      this.respLayout = 'single';
+      const w = this.respWidth;
+      this.respWidth = this.respHeight;
+      this.respHeight = w;
+      this.renderDrawer();
+    });
+    toolbar.appendChild(rotateBtn);
+
+    const wInput = this.doc.createElement('input');
+    wInput.type = 'number';
+    wInput.min = '240';
+    wInput.max = '2560';
+    wInput.value = String(this.respWidth);
+    wInput.className = 'ps-num';
+    wInput.setAttribute('aria-label', 'Responsive width');
+    wInput.setAttribute('data-ps-resp-width', 'true');
+
+    const hInput = this.doc.createElement('input');
+    hInput.type = 'number';
+    hInput.min = '320';
+    hInput.max = '2560';
+    hInput.value = String(this.respHeight);
+    hInput.className = 'ps-num';
+    hInput.setAttribute('aria-label', 'Responsive height');
+    hInput.setAttribute('data-ps-resp-height', 'true');
+
+    const applyCustom = (): void => {
+      const nextW = Math.max(240, Math.min(2560, Number.parseInt(wInput.value, 10) || 375));
+      const nextH = Math.max(320, Math.min(2560, Number.parseInt(hInput.value, 10) || 812));
+      this.respLayout = 'single';
+      this.respWidth = nextW;
+      this.respHeight = nextH;
+      this.respScale = nextW >= 1000 ? 0.54 : 0.72;
+      this.renderDrawer();
+    };
+    const applyBtn = this.createButton('Apply', 'ps-btn', applyCustom);
+    applyBtn.setAttribute('data-ps-resp-apply', 'true');
+    toolbar.append(wInput, this.createEl('span', undefined, 'x'), hInput, applyBtn);
+
+    const sourceBtn = this.createButton(
+      this.respSourceMode === 'live' ? 'Mode: Live Page' : 'Mode: Safe DOM Snapshot',
+      'ps-btn',
+      () => {
+        this.respSourceMode = this.respSourceMode === 'live' ? 'snapshot' : 'live';
+        this.respStatusMsg =
+          this.respSourceMode === 'live'
+            ? 'Live interactive URL mode (switch to Safe DOM Snapshot if a site blocks iframes).'
+            : 'Interactive DOM snapshot mode rendered safely in srcdoc.';
+        this.renderDrawer();
+      },
+    );
+    sourceBtn.setAttribute('data-ps-resp-source', 'true');
+    toolbar.appendChild(sourceBtn);
+
+    this.drawerContent.appendChild(toolbar);
+
+    const statusLine = this.createEl('div', undefined, this.respStatusMsg);
+    statusLine.style.fontSize = '12px';
+    statusLine.style.color = 'var(--muted)';
+    statusLine.style.marginBottom = '8px';
+    this.drawerContent.appendChild(statusLine);
+
+    const stageBox = this.doc.createElement('div');
+    stageBox.className = 'ps-resp-stage';
+
+    const pageUrl = this.callbacks.getPageInfo().url;
+    const frames =
+      this.respLayout === 'grid'
+        ? [
+            { label: 'Mobile', width: 375, height: 812, scale: 0.52 },
+            { label: 'Tablet', width: 768, height: 1024, scale: 0.44 },
+          ]
+        : [
+            {
+              label: `${this.respWidth}x${this.respHeight}`,
+              width: this.respWidth,
+              height: this.respHeight,
+              scale: this.respScale,
+            },
+          ];
+
+    for (const f of frames) {
+      const shell = this.doc.createElement('div');
+      shell.className = 'ps-device-shell';
+
+      const dHead = this.doc.createElement('div');
+      dHead.className = 'ps-device-head';
+      dHead.appendChild(this.createEl('span', undefined, `${f.label} (${f.width}x${f.height}px)`));
+      dHead.appendChild(this.createEl('span', undefined, `${Math.round(f.scale * 100)}% zoom`));
+      shell.appendChild(dHead);
+
+      const scaledW = Math.round(f.width * f.scale);
+      const scaledH = Math.min(420, Math.round(f.height * f.scale));
+      const viewport = this.doc.createElement('div');
+      viewport.className = 'ps-device-viewport';
+      viewport.style.width = `${scaledW}px`;
+      viewport.style.height = `${scaledH}px`;
+
+      const iframe = this.doc.createElement('iframe');
+      iframe.className = 'ps-resp-iframe';
+      iframe.name = 'pagesift-responsive-frame';
+      iframe.title = `Responsive preview ${f.width} by ${f.height}`;
+      iframe.style.width = `${f.width}px`;
+      iframe.style.height = `${Math.round(scaledH / f.scale)}px`;
+      iframe.style.transform = `scale(${f.scale})`;
+
+      if (this.respSourceMode === 'snapshot' && this.callbacks.getInteractiveSnapshotHtml) {
+        iframe.setAttribute('sandbox', 'allow-same-origin allow-forms');
+        iframe.srcdoc = this.callbacks.getInteractiveSnapshotHtml();
+      } else {
+        iframe.src = pageUrl;
+      }
+
+      viewport.appendChild(iframe);
+      shell.appendChild(viewport);
+      stageBox.appendChild(shell);
+    }
+
+    this.drawerContent.appendChild(stageBox);
   }
 
   private renderDrawer(): void {
@@ -999,6 +1713,11 @@ export class OnPageOverlayDashboard {
     }
     this.drawerContent.textContent = '';
 
+    if (this.drawerTab === 'responsive') {
+      this.renderResponsiveStageDrawer();
+      return;
+    }
+
     if (this.drawerTab === 'tools') {
       const head = this.doc.createElement('div');
       head.className = 'ps-drawer-head';
@@ -1006,14 +1725,21 @@ export class OnPageOverlayDashboard {
       const headBtns = this.doc.createElement('div');
       headBtns.style.display = 'flex';
       headBtns.style.gap = '6px';
+      const customBtn = this.createButton('Customize', 'ps-btn', () => {
+        this.drawerTab = 'customize';
+        this.renderDrawer();
+      });
       const histBtn = this.createButton('History', 'ps-btn', () => {
         void this.callbacks.onOpenFullDashboard({ section: 'history' });
+      });
+      const dashBtn = this.createButton('Dashboard', 'ps-btn primary', () => {
+        void this.callbacks.onOpenFullDashboard();
       });
       const closePanel = this.createButton('Done', 'ps-btn ghost', () => {
         this.drawerTab = 'none';
         this.syncDrawerVisibility();
       });
-      headBtns.append(histBtn, closePanel);
+      headBtns.append(customBtn, histBtn, dashBtn, closePanel);
       head.appendChild(headBtns);
       this.drawerContent.appendChild(head);
 
@@ -1091,23 +1817,10 @@ export class OnPageOverlayDashboard {
         });
         acts.appendChild(copyBtn);
       }
-      if (s.downloadText && s.downloadFilename) {
+      if ((s.downloadText || s.downloadBase64) && s.downloadFilename) {
         acts.appendChild(
           this.createButton('Download', 'ps-btn', () => {
-            const blob = new Blob([s.downloadText ?? ''], {
-              type: s.downloadMime ?? 'text/plain;charset=utf-8',
-            });
-            const url = URL.createObjectURL(blob);
-            const a = this.doc.createElement('a');
-            a.href = url;
-            a.download = s.downloadFilename ?? 'pagesift-output.txt';
-            a.style.display = 'none';
-            this.doc.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(() => {
-              URL.revokeObjectURL(url);
-            }, 15000);
+            this.triggerDownloadFromSummary(s);
           }),
         );
       }
@@ -1127,21 +1840,50 @@ export class OnPageOverlayDashboard {
 
       this.drawerContent.appendChild(this.createEl('div', undefined, s.summary));
 
+      if (s.imageDataUrl) {
+        const img = this.doc.createElement('img');
+        img.src = s.imageDataUrl;
+        img.alt = 'Captured page screenshot preview';
+        img.className = 'ps-capture-preview';
+        this.drawerContent.appendChild(img);
+      }
+
       if (s.techStackSummary && s.techStackSummary.groups.length > 0) {
         const stackGrid = this.doc.createElement('div');
         stackGrid.className = 'ps-stack-grid';
         for (const grp of s.techStackSummary.groups) {
           const card = this.doc.createElement('div');
           card.className = 'ps-stack-card';
-          const title = this.doc.createElement('strong');
-          title.style.fontSize = '12.5px';
-          title.textContent = grp.label;
-          card.appendChild(title);
+
+          const cardHead = this.doc.createElement('div');
+          cardHead.className = 'ps-stack-card-head';
+          const catTitle = this.doc.createElement('span');
+          catTitle.className = 'tech-cat-heading';
+          catTitle.appendChild(createTechCategoryIcon(grp.category, this.doc));
+          catTitle.appendChild(this.doc.createTextNode(grp.label));
+          const countTag = this.createEl('span', 'ps-tag', String(grp.items.length));
+          cardHead.append(catTitle, countTag);
+          card.appendChild(cardHead);
+
           for (const item of grp.items) {
             const line = this.doc.createElement('div');
             line.className = 'ps-stack-item';
-            const left = this.doc.createElement('span');
-            left.textContent = item.technology;
+            const left = this.doc.createElement('div');
+            left.className = 'tech-row-left';
+            left.appendChild(createTechIconElement(item.technology, this.doc));
+            const meta = this.doc.createElement('div');
+            meta.style.display = 'flex';
+            meta.style.flexDirection = 'column';
+            meta.style.minWidth = '0';
+            const nameEl = this.doc.createElement('strong');
+            nameEl.textContent = item.technology;
+            const reasonEl = this.doc.createElement('span');
+            reasonEl.textContent = item.shortReason;
+            reasonEl.style.fontSize = '11px';
+            reasonEl.style.color = 'var(--muted)';
+            meta.append(nameEl, reasonEl);
+            left.appendChild(meta);
+
             const right = this.doc.createElement('span');
             right.className = item.confidence === 'high' ? 'ps-tag positive' : 'ps-tag accent';
             right.textContent = item.confidence;
@@ -1210,7 +1952,7 @@ export class OnPageOverlayDashboard {
         inp.type = 'text';
         inp.className = 'ps-field';
         inp.value = ed.initialValue;
-        inp.placeholder = 'Font family (e.g. Georgia, serif)';
+        inp.placeholder = 'e.g. Georgia, serif';
         inp.addEventListener('keydown', (ev) => {
           ev.stopPropagation();
         });
@@ -1322,8 +2064,8 @@ export class OnPageOverlayDashboard {
       themeSel.className = 'ps-field';
       for (const [v, l] of [
         ['follow', 'Match Dashboard'],
-        ['light', 'Light Paper'],
-        ['dark', 'Charcoal Dark'],
+        ['dark', 'Charcoal Dark Surface'],
+        ['light', 'Light Surface'],
       ] as const) {
         const opt = this.doc.createElement('option');
         opt.value = v;
@@ -1340,50 +2082,6 @@ export class OnPageOverlayDashboard {
 
       grid.append(posWrap, themeWrap);
       this.drawerContent.appendChild(grid);
-
-      this.drawerContent.appendChild(
-        this.createEl('div', 'ps-group-title', 'Pinned Quick Bar Tools (select 3 to 6)'),
-      );
-      const pinGrid = this.doc.createElement('div');
-      pinGrid.className = 'ps-tool-grid';
-      for (const def of OVERLAY_TOOLS) {
-        const lbl = this.doc.createElement('label');
-        lbl.style.display = 'flex';
-        lbl.style.alignItems = 'center';
-        lbl.style.gap = '6px';
-        lbl.style.fontSize = '12.5px';
-        lbl.style.padding = '5px 8px';
-        lbl.style.border = '1px solid var(--border)';
-        lbl.style.borderRadius = '6px';
-        lbl.style.background = 'var(--elevated)';
-        lbl.style.cursor = 'pointer';
-
-        const cb = this.doc.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = this.customization.pinnedTools.includes(def.id);
-        cb.addEventListener('change', () => {
-          const current = new Set(this.customization.pinnedTools);
-          if (cb.checked) {
-            if (current.size >= 6) {
-              cb.checked = false;
-              return;
-            }
-            current.add(def.id);
-          } else {
-            if (current.size <= 3) {
-              cb.checked = true;
-              return;
-            }
-            current.delete(def.id);
-          }
-          const ordered = OVERLAY_TOOLS.map((t) => t.id).filter((id) => current.has(id));
-          this.applyCustomization({ pinnedTools: ordered });
-          void this.callbacks.onSaveCustomization?.({ pinnedTools: ordered });
-        });
-        lbl.append(cb, this.doc.createTextNode(def.label));
-        pinGrid.appendChild(lbl);
-      }
-      this.drawerContent.appendChild(pinGrid);
     }
   }
 
@@ -1410,7 +2108,7 @@ export class OnPageOverlayDashboard {
         btn.type = 'button';
         btn.className = 'ps-btn';
         btn.style.justifyContent = 'flex-start';
-        btn.setAttribute('data-overlay-tool', toolDef.id);
+        btn.setAttribute('data-overlay-tool-drawer', toolDef.id);
         const sq = this.doc.createElement('span');
         sq.className = 'ps-tile-icon';
         sq.appendChild(createSvgIcon(toolDef.id, '', this.doc));
@@ -1429,11 +2127,8 @@ export class OnPageOverlayDashboard {
     if (this.busy) {
       return;
     }
-    if (toolDef.isDashboardTool) {
-      await this.callbacks.onOpenFullDashboard({
-        tool: toolDef.id,
-        autorun: toolDef.id !== 'responsive',
-      });
+    if (toolDef.isResponsiveStage) {
+      this.showResponsivePreview();
       return;
     }
     if (toolDef.isPicker) {

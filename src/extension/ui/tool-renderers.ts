@@ -10,6 +10,7 @@ import type { MeasureReport } from '../engines/measure-engine.js';
 import type { ResponsiveSessionState } from '../engines/responsive-engine.js';
 import type { TechStackReport } from '../engines/tech-stack-engine.js';
 import type { ToolId } from '../protocol/messages.js';
+import { createTechCategoryIcon, createTechIconElement } from './theme.js';
 
 export interface StructuredRenderCallbacks {
   onCopyText: (text: string, label: string) => void;
@@ -990,12 +991,17 @@ function renderTechStackView(data: Record<string, unknown>): HTMLElement {
     for (const grp of groups) {
       const box = el('div', 'kv-section');
       const hdr = el('div', 'block-heading');
-      hdr.appendChild(el('h3', 'block-title', grp.label));
+      const catHead = el('div', 'tech-cat-heading');
+      catHead.appendChild(createTechCategoryIcon(grp.category));
+      catHead.appendChild(el('h3', 'block-title', grp.label));
+      hdr.appendChild(catHead);
       hdr.appendChild(el('span', 'tag', String(grp.items.length)));
       box.appendChild(hdr);
 
       for (const item of grp.items) {
         const row = el('div', 'tech-short-row');
+        const rowLeft = el('div', 'tech-row-left');
+        rowLeft.appendChild(createTechIconElement(item.technology));
         const left = el('div');
         left.style.display = 'flex';
         left.style.flexDirection = 'column';
@@ -1003,7 +1009,8 @@ function renderTechStackView(data: Record<string, unknown>): HTMLElement {
         left.style.minWidth = '0';
         left.appendChild(el('strong', undefined, item.technology));
         left.appendChild(el('span', 'muted mono break-all', item.shortReason));
-        row.appendChild(left);
+        rowLeft.appendChild(left);
+        row.appendChild(rowLeft);
         row.appendChild(
           el('span', item.confidence === 'high' ? 'tag positive' : 'tag accent', item.confidence),
         );
@@ -1023,7 +1030,10 @@ function renderTechStackView(data: Record<string, unknown>): HTMLElement {
   for (const det of report.detections) {
     const box = el('div', 'kv-section');
     const hdr = el('div', 'block-heading');
-    hdr.appendChild(el('strong', undefined, det.technology));
+    const techHead = el('div', 'tech-row-left');
+    techHead.appendChild(createTechIconElement(det.technology));
+    techHead.appendChild(el('strong', undefined, det.technology));
+    hdr.appendChild(techHead);
     hdr.appendChild(el('span', 'tag', `${det.confidence} confidence`));
     box.appendChild(hdr);
     const list = el('ul');
