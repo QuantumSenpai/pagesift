@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 220" width="1200" height="220" role="img" aria-label="PageSift Controls Flow">
+  <style>
+    .bg { fill: #0f1214; }
+    .card { fill: #161b1f; stroke: #273239; stroke-width: 1.5; }
+    .card-teal { fill: #132224; stroke: #0d9488; stroke-width: 1.6; }
+    .badge { fill: #103230; stroke: #2dd4bf; stroke-width: 1; }
+    .h { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 16px; font-weight: 700; fill: #f1f5f9; }
+    .p { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: #94a3b8; }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; font-weight: 700; fill: #2dd4bf; }
+    .flow-line { stroke: #0d9488; stroke-width: 2; stroke-dasharray: 8 6; animation: flowDash 1.4s linear infinite; }
+    .glow-1 { animation: stepGlow 4.5s ease-in-out infinite; }
+    .glow-2 { animation: stepGlow 4.5s ease-in-out 1.5s infinite; }
+    .glow-3 { animation: stepGlow 4.5s ease-in-out 3s infinite; }
+    @keyframes flowDash {
+      to { stroke-dashoffset: -28; }
+    }
+    @keyframes stepGlow {
+      0%, 66%, 100% { stroke: #273239; }
+      20%, 40% { stroke: #2dd4bf; }
+    }
+  </style>
+
+  <rect class="bg" width="1200" height="220" rx="12" />
+
+  <rect class="card glow-1" x="28" y="28" width="340" height="164" rx="10" />
+  <rect class="badge" x="48" y="48" width="116" height="26" rx="5" />
+  <text class="code" x="60" y="65">1 CLICK ICON</text>
+  <text class="h" x="48" y="102">Opens On-Page Overlay</text>
+  <text class="p" x="48" y="128">Auto-injects even on open tabs.</text>
+  <text class="p" x="48" y="150">Bottom Obsidian Teal dock with all</text>
+  <text class="p" x="48" y="170">15+ tools, search, &amp; live preview.</text>
+
+  <line class="flow-line" x1="368" y1="110" x2="430" y2="110" />
+  <polygon points="424,104 434,110 424,116" fill="#2dd4bf" />
+
+  <rect class="card glow-2" x="430" y="28" width="340" height="164" rx="10" />
+  <rect class="badge" x="450" y="48" width="128" height="26" rx="5" />
+  <text class="code" x="462" y="65">2ND CLICK ICON</text>
+  <text class="h" x="450" y="102">PiP Quick Menu &amp; Window</text>
+  <text class="p" x="450" y="128">Toggles compact PiP controls right on</text>
+  <text class="p" x="450" y="150">the page. Launch 480x760 floating</text>
+  <text class="p" x="450" y="170">PiP Dashboard or open Settings.</text>
+
+  <line class="flow-line" x1="770" y1="110" x2="832" y2="110" />
+  <polygon points="826,104 836,110 826,116" fill="#2dd4bf" />
+
+  <rect class="card-teal glow-3" x="832" y="28" width="340" height="164" rx="10" />
+  <rect class="badge" x="852" y="48" width="188" height="26" rx="5" />
+  <text class="code" x="864" y="65">DOUBLE CLICK (&lt;=420ms)</text>
+  <text class="h" x="852" y="102">Full Dashboard &amp; History</text>
+  <text class="p" x="852" y="128">Jumps directly to workspace.html.</text>
+  <text class="p" x="852" y="150">Export ZIPs, compare DESIGN.md,</text>
+  <text class="p" x="852" y="170">inspect saved history &amp; captures.</text>
+</svg>

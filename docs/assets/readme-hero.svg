@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340" role="img" aria-label="PageSift Animated Hero Banner">
+  <style>
+    .bg { fill: #0f1214; }
+    .grid-line { stroke: #1a2126; stroke-width: 1; }
+    .panel { fill: #161b1f; stroke: #263138; stroke-width: 1.5; }
+    .dock { fill: #111619; stroke: #0d9488; stroke-width: 1.5; }
+    .chip { fill: #1b2429; stroke: #2a3942; stroke-width: 1; }
+    .chip-active { fill: #103230; stroke: #2dd4bf; stroke-width: 1.2; }
+    .toast { fill: #161d21; stroke: #0d9488; stroke-width: 1.4; }
+    .title { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-weight: 800; font-size: 46px; fill: #f1f5f9; letter-spacing: -1px; }
+    .sub { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-weight: 500; font-size: 15.5px; fill: #94a3b8; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; fill: #2dd4bf; font-weight: 600; }
+    .label { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 12px; font-weight: 600; fill: #cbd5e1; }
+    .label-muted { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 11px; fill: #64748b; }
+    .scan-beam { fill: #0d9488; opacity: 0.14; }
+    .pulse-dot { animation: pulseDot 2.2s ease-in-out infinite; }
+    .float-toast { animation: floatToast 4.5s ease-in-out infinite; }
+    .scan-move { animation: scanMove 4s linear infinite; }
+    .prism-ring { transform-origin: 96px 104px; animation: spinSlow 18s linear infinite; }
+    @keyframes pulseDot {
+      0%, 100% { opacity: 0.35; }
+      50% { opacity: 1; }
+    }
+    @keyframes floatToast {
+      0%, 100% { transform: translateY(0px); opacity: 0.92; }
+      50% { transform: translateY(-6px); opacity: 1; }
+    }
+    @keyframes scanMove {
+      0% { transform: translateX(0px); }
+      100% { transform: translateX(460px); }
+    }
+    @keyframes spinSlow {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+
+  <rect class="bg" width="1200" height="340" rx="12" />
+
+  <g>
+    <line class="grid-line" x1="0" y1="68" x2="1200" y2="68" />
+    <line class="grid-line" x1="0" y1="136" x2="1200" y2="136" />
+    <line class="grid-line" x1="0" y1="204" x2="1200" y2="204" />
+    <line class="grid-line" x1="0" y1="272" x2="1200" y2="272" />
+    <line class="grid-line" x1="200" y1="0" x2="200" y2="340" />
+    <line class="grid-line" x1="400" y1="0" x2="400" y2="340" />
+    <line class="grid-line" x1="600" y1="0" x2="600" y2="340" />
+    <line class="grid-line" x1="800" y1="0" x2="800" y2="340" />
+    <line class="grid-line" x1="1000" y1="0" x2="1000" y2="340" />
+  </g>
+
+  <rect x="44" y="52" width="104" height="104" rx="14" fill="#13191c" stroke="#0d9488" stroke-width="1.8" />
+  <g class="prism-ring">
+    <polygon points="96,66 130,85 130,123 96,142 62,123 62,85" fill="none" stroke="#1f3a3d" stroke-width="2" stroke-dasharray="10 6" />
+  </g>
+  <polygon points="96,74 122,89 122,119 96,134 70,119 70,89" fill="#0d9488" opacity="0.22" stroke="#2dd4bf" stroke-width="2" />
+  <rect x="88" y="96" width="16" height="16" rx="3" fill="#2dd4bf" />
+
+  <text class="title" x="172" y="102">PageSift</text>
+  <rect x="378" y="72" width="114" height="26" rx="5" fill="#102a29" stroke="#0d9488" stroke-width="1" />
+  <circle class="pulse-dot" cx="394" cy="85" r="4" fill="#2dd4bf" />
+  <text class="mono" x="406" y="89">MV3 LOCAL</text>
+
+  <text class="sub" x="172" y="136">Inspect DOM, export DESIGN.md + REA styles &amp; detect stack.</text>
+
+  <g transform="translate(172, 162)">
+    <rect class="chip" x="0" y="0" width="116" height="30" rx="6" />
+    <text class="label" x="14" y="19">15+ Local Tools</text>
+
+    <rect class="chip" x="124" y="0" width="122" height="30" rx="6" />
+    <text class="label" x="138" y="19">Zero Login Gate</text>
+
+    <rect class="chip" x="254" y="0" width="132" height="30" rx="6" />
+    <text class="label" x="266" y="19">100% Offline Core</text>
+
+    <rect class="chip-active" x="394" y="0" width="122" height="30" rx="6" />
+    <text class="mono" x="406" y="19">BYOK NVIDIA AI</text>
+  </g>
+
+  <rect class="panel" x="720" y="42" width="436" height="256" rx="10" />
+  <rect x="720" y="42" width="436" height="32" rx="10" fill="#1b2226" />
+  <circle cx="740" cy="58" r="5" fill="#334155" />
+  <circle cx="758" cy="58" r="5" fill="#334155" />
+  <circle cx="776" cy="58" r="5" fill="#0d9488" />
+  <text class="mono" x="800" y="62">DESIGN.md + Style Adaptation · 34ms</text>
+
+  <rect x="740" y="90" width="180" height="84" rx="6" fill="#101518" stroke="#263138" stroke-width="1" />
+  <text class="mono" x="752" y="110">:root Tokens</text>
+  <rect x="752" y="122" width="16" height="16" rx="3" fill="#2dd4bf" />
+  <rect x="774" y="122" width="16" height="16" rx="3" fill="#0d9488" />
+  <rect x="796" y="122" width="16" height="16" rx="3" fill="#f1f5f9" />
+  <rect x="818" y="122" width="16" height="16" rx="3" fill="#64748b" />
+  <text class="label-muted" x="752" y="158">AA/AAA · Tailwind v4 @theme</text>
+
+  <g class="float-toast">
+    <rect class="toast" x="934" y="90" width="204" height="84" rx="8" />
+    <circle class="pulse-dot" cx="950" cy="110" r="4" fill="#2dd4bf" />
+    <text class="label" x="962" y="114">Overlay Ready</text>
+    <text class="label-muted" x="950" y="136">Copied DESIGN.md (34.9 KB)</text>
+    <rect x="950" y="148" width="96" height="20" rx="4" fill="#0d9488" />
+    <text class="label" x="963" y="162">Open in PiP</text>
+  </g>
+
+  <clipPath id="scanClip">
+    <rect x="734" y="186" width="408" height="92" rx="6" />
+  </clipPath>
+  <g clip-path="url(#scanClip)">
+    <rect class="dock" x="734" y="218" width="408" height="46" rx="8" />
+    <rect class="scan-beam scan-move" x="700" y="186" width="44" height="92" />
+    <rect x="746" y="228" width="64" height="26" rx="5" fill="#103230" stroke="#2dd4bf" stroke-width="1" />
+    <text class="mono" x="755" y="245">Inspect</text>
+    <rect x="814" y="228" width="76" height="26" rx="5" fill="#1b2429" />
+    <text class="label" x="823" y="245">Design MD</text>
+    <rect x="898" y="228" width="66" height="26" rx="5" fill="#1b2429" />
+    <text class="label" x="909" y="245">Assets</text>
+    <rect x="972" y="228" width="76" height="26" rx="5" fill="#1b2429" />
+    <text class="label" x="981" y="245">TechStack</text>
+    <rect x="1056" y="228" width="74" height="26" rx="5" fill="#1b2429" />
+    <text class="label" x="1065" y="245">Capture</text>
+  </g>
+
+  <rect class="dock" x="44" y="224" width="636" height="58" rx="8" />
+  <text class="mono" x="64" y="250">$ git clone &amp;&amp; npm ci &amp;&amp; npm run build:extension</text>
+  <text class="label-muted" x="64" y="269">Load unpacked dist/extension -> Click toolbar icon on any page</text>
+  <rect x="580" y="238" width="84" height="30" rx="5" fill="#0d9488" />
+  <text class="label" x="598" y="257">Ready</text>
+</svg>
