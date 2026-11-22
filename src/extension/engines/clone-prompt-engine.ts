@@ -59,13 +59,46 @@ export function generateLocalClonePrompt(
     `Discovered media assets: ${assetsReport.summary.totalDiscovered} (${assetsReport.summary.inlineAvailableCount} inline SVGs, ${assetsReport.summary.httpReferenceCount} HTTP references)`,
     ...snapshot.layoutPatterns.map((p) => `Layout observation: ${p}`),
     ...snapshot.componentObservations.map((c) => `Component observation: ${c}`),
+    ...(snapshot.styleAdaptation?.pseudoStateRules
+      .slice(0, 6)
+      .map((r) => `Interactive state (${r.state} on ${r.selector}): ${r.declarations}`) ?? []),
+    ...(snapshot.styleAdaptation?.wcagContrastPairs
+      .slice(0, 4)
+      .map((c) => `Contrast (${c.pairLabel}): ${c.contrastRatio}:1 (${c.grade})`) ?? []),
+    ...(snapshot.styleAdaptation
+      ? [
+          `Extraction completeness: ${snapshot.styleAdaptation.completeness.coverageStatus} (${snapshot.styleAdaptation.completeness.accessibleStylesheetsCount} accessible CSS sheet(s), ${snapshot.styleAdaptation.completeness.inaccessibleStylesheets.length} CORS-omitted)`,
+        ]
+      : []),
   ];
 
   const assumptions: string[] = [
     'Computed styles were captured at a single viewport state; responsive breakpoints at 640px, 768px, 1024px, and 1280px are inferred to collapse multi-column grids into single-column stacks on mobile.',
-    'Interactive states (:hover, :focus-visible, :active) not currently triggered are assumed to use subtle luminance shifts and accessible focus rings.',
+    'Interactive states (:hover, :focus-visible, :active) not explicitly observed in accessible stylesheets are inferred to use subtle luminance shifts and accessible focus rings.',
+    ...(snapshot.styleAdaptation?.completeness.omissionReasons ?? []),
     'Dynamic data, authenticated API responses, and server-side form handlers are out of scope and should be represented with clean static props or mock fixtures.',
   ];
+
+  const adaptedTargetSnippet = snapshot.styleAdaptation
+    ? targetFramework === 'react_tailwind'
+      ? [
+          '',
+          '## Adapted Tailwind CSS v4 Theme & Utility Mapping',
+          '```css',
+          snapshot.styleAdaptation.adaptedTailwindThemeBlock,
+          '```',
+          ...snapshot.styleAdaptation.adaptedTailwindUtilities.map(
+            (u) => `- **${u.role}**: \`${u.classes}\``,
+          ),
+        ]
+      : [
+          '',
+          '## Adapted Semantic CSS Theme & Component Classes',
+          '```css',
+          snapshot.styleAdaptation.adaptedCssThemeBlock,
+          '```',
+        ]
+    : [];
 
   const promptLines: string[] = [
     `# Rebuild Prompt: ${snapshot.pageTitle}`,
@@ -78,12 +111,16 @@ export function generateLocalClonePrompt(
     '',
     '## Structural & Responsive Assumptions (Inferred, Not Directly Observed)',
     ...assumptions.map((asm) => `- ${asm}`),
+    ...adaptedTargetSnippet,
     '',
-    '## Implementation Checklist',
+    '## Implementation & Verification Checklist',
     '1. Define CSS custom properties / theme tokens for the observed colors, font families, spacing steps, and border radii.',
-    '2. Build the outer landmark structure (header/navigation, main content sections, footer) matching the observed Flexbox and CSS Grid layouts.',
-    '3. Implement each observed component with accessible ARIA roles, keyboard focus indicators, and responsive collapse below 768px.',
+    '2. Build the outer landmark structure (header/navigation, main content sections, footer) matching the observed Flexbox, CSS Grid, and z-index stacking layers.',
+    '3. Implement each observed component with accessible ARIA roles, extracted :hover/:focus-visible states, and responsive collapse across observed breakpoints.',
     '4. Replace external media assets with semantic placeholders or inline SVGs matching the discovered dimensions.',
+    ...(snapshot.styleAdaptation?.reconstructionAssertions.map(
+      (a, i) => `${i + 5}. Verify: ${a}`,
+    ) ?? []),
   ];
 
   return {

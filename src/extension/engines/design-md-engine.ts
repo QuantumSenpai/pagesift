@@ -12,6 +12,10 @@ import {
   parsePixelValue,
 } from './dom-utils.js';
 import { extractPageFonts, type FontExtractionReport } from './fonts-engine.js';
+import {
+  extractStyleAdaptationReport,
+  type StyleAdaptationReport,
+} from './style-adaptation-engine.js';
 import { detectPageTechStack } from './tech-stack-engine.js';
 
 export interface DesignSiteOverview {
@@ -208,6 +212,7 @@ export interface PageDesignSnapshotInput {
     };
   };
   assetsAndMotion?: DesignAssetsAndMotionSpec;
+  styleAdaptation?: StyleAdaptationReport;
 }
 
 export interface DesignTokenConflict {
@@ -1247,6 +1252,39 @@ export function extractPageDesignSnapshot(doc: Document, win: Window): PageDesig
   const typographyScale = extractTypographyRoles(doc, win, entries);
   const globalChrome = extractGlobalChromeSpec(doc, win, entries, baseOrigin);
   const pageSections = extractSectionsBlueprint(doc, win, pageUrl);
+  const buttons = Array.from(buttonVariantMap.values());
+  const cards = Array.from(cardVariantMap.values());
+  const h1Role = typographyScale.find((t) => t.role === 'Display H1');
+  const primaryBtn = buttons.find((b) => b.background !== 'transparent') ?? buttons[0];
+  const topFont = fontsReport.families[0];
+  const breakpoints = stylesMeta.mediaQueries.slice(0, 20);
+
+  const styleAdaptation = extractStyleAdaptationReport(
+    doc,
+    win,
+    {
+      canvasHex,
+      ...(surfaceHex ? { surfaceHex } : {}),
+      primaryTextHex,
+      ...(mutedTextHex ? { mutedTextHex } : {}),
+      ...(primaryAccentHex ? { accentHex: primaryAccentHex } : {}),
+      ...(primaryBorderHex ? { borderHex: primaryBorderHex } : {}),
+      rootFontSizePx: htmlCs?.fontSize || '16px',
+      primaryFontStack: topFont?.declaredStack || bodyCs?.fontFamily || 'system-ui, sans-serif',
+      primaryFontName: topFont?.primaryFamily || 'system-ui',
+      ...(primaryBtn?.borderRadius ? { buttonRadius: primaryBtn.borderRadius } : {}),
+      ...(cards[0]?.borderRadius ? { cardRadius: cards[0].borderRadius } : {}),
+      ...(primaryBtn?.background ? { buttonBg: primaryBtn.background } : {}),
+      ...(primaryBtn?.color ? { buttonText: primaryBtn.color } : {}),
+      ...(primaryBtn?.padding ? { buttonPadding: primaryBtn.padding } : {}),
+      ...(globalChrome.header?.heightPx ? { headerHeightPx: globalChrome.header.heightPx } : {}),
+      ...(h1Role?.fontSize ? { h1FontSize: h1Role.fontSize } : {}),
+      ...(h1Role?.colorHex ? { h1ColorHex: h1Role.colorHex } : {}),
+      breakpoints,
+    },
+    colorsReport,
+    fontsReport,
+  );
 
   return {
     pageUrl,
@@ -1260,7 +1298,7 @@ export function extractPageDesignSnapshot(doc: Document, win: Window): PageDesig
     componentObservations: Array.from(componentSet).slice(0, 24),
     borderSignatures: Array.from(borderSigSet).slice(0, 16),
     containerWidthsPx: Array.from(containerWidthSet).sort((a, b) => a - b),
-    mediaQueries: stylesMeta.mediaQueries.slice(0, 20),
+    mediaQueries: breakpoints,
     allCssVariables: stylesMeta.cssVariables,
     siteOverview: {
       ...(metaDesc ? { metaDescription: metaDesc } : {}),
@@ -1289,9 +1327,9 @@ export function extractPageDesignSnapshot(doc: Document, win: Window): PageDesig
     globalChrome,
     pageSections,
     componentSpecs: {
-      buttons: Array.from(buttonVariantMap.values()),
+      buttons,
       inputs: inputSpecs,
-      cards: Array.from(cardVariantMap.values()),
+      cards,
       ...(navLinkStyleSummary ? { navLinksSummary: navLinkStyleSummary } : {}),
     },
     assetsAndMotion: {
@@ -1310,6 +1348,7 @@ export function extractPageDesignSnapshot(doc: Document, win: Window): PageDesig
       animationsInUse: Array.from(animationSet),
       interactionClues,
     },
+    styleAdaptation,
   };
 }
 
@@ -1647,6 +1686,41 @@ function appendComponentsMediaMotionSection(
       lines.push('- No non-default CSS transitions or keyframes extracted in initial state.');
     }
     lines.push('');
+  }
+
+  const styleAdapt = primary?.styleAdaptation;
+  if (styleAdapt) {
+    if (styleAdapt.pseudoStateRules.length > 0) {
+      lines.push('### Interactive Pseudo-States (`:hover`, `:focus-visible`, ARIA)');
+      for (const r of styleAdapt.pseudoStateRules.slice(0, 16)) {
+        lines.push(`- **${r.state}** on \`${r.selector}\` -> \`${r.declarations}\``);
+      }
+      lines.push('');
+    }
+    if (styleAdapt.pseudoElementStyles.length > 0) {
+      lines.push('### Decorative Pseudo-Elements (`::before` / `::after`)');
+      for (const pe of styleAdapt.pseudoElementStyles.slice(0, 12)) {
+        lines.push(`- \`${pe.selector}\` (${pe.source}): \`${pe.summary}\``);
+      }
+      lines.push('');
+    }
+    if (styleAdapt.stackingLayers.length > 0) {
+      lines.push('### Z-Index Layering & Stacking Contexts');
+      for (const layer of styleAdapt.stackingLayers.slice(0, 10)) {
+        lines.push(
+          `- \`${layer.selector}\` (\`position: ${layer.position}\`, \`z-index: ${layer.zIndex}\`) - ${layer.roleHint}`,
+        );
+      }
+      lines.push('');
+    }
+    if (styleAdapt.accessibilityContract.length > 0) {
+      lines.push('### Accessibility Landmarks & Interactive State Contract');
+      for (const a of styleAdapt.accessibilityContract.slice(0, 14)) {
+        const stateText = a.states.length > 0 ? ` [${a.states.join(', ')}]` : '';
+        lines.push(`- **${a.role}** (\`${a.selector}\`): "${a.label}"${stateText}`);
+      }
+      lines.push('');
+    }
   }
 
   lines.push('### Additional Semantic Component Observations');
@@ -2029,6 +2103,75 @@ export function generateDesignMdFromPages(
   lines.push('');
 
   appendTokensAndGuidelinesSection(lines, pages, allCssVariables, sortedRadii, sortedShadows);
+
+  const adapt = pages[0]?.styleAdaptation;
+  if (adapt) {
+    lines.push('## 10. REA Style Adaptation & Evidence Completeness');
+    lines.push('');
+    lines.push('### Extraction Completeness & Evidence Boundaries');
+    lines.push(
+      `- **Coverage Status**: \`${adapt.completeness.coverageStatus}\` (${adapt.completeness.scannedElementsCount} DOM elements scanned, ${adapt.completeness.accessibleStylesheetsCount} accessible stylesheet(s), ${adapt.completeness.openShadowRootsCount} open shadow root(s), DOM budget truncated: \`${adapt.completeness.domTruncated}\`)`,
+    );
+    if (adapt.completeness.omissionReasons.length > 0) {
+      lines.push('- **Explicit Omissions / Unknown Scopes (Never Treated as Absence)**:');
+      for (const reason of adapt.completeness.omissionReasons) {
+        lines.push(`  - ${reason}`);
+      }
+    }
+    if (adapt.completeness.inaccessibleStylesheets.length > 0) {
+      lines.push(
+        `- **CORS-Protected Stylesheets**: ${adapt.completeness.inaccessibleStylesheets
+          .slice(0, 6)
+          .map((u) => `\`${u}\``)
+          .join(', ')}`,
+      );
+    }
+    lines.push('');
+
+    if (adapt.wcagContrastPairs.length > 0) {
+      lines.push('### WCAG 2.1 Measured Contrast Verification');
+      lines.push('| Pair | Foreground | Background | Ratio | Grade |');
+      lines.push('| --- | --- | --- | --- | --- |');
+      for (const cp of adapt.wcagContrastPairs) {
+        lines.push(
+          `| ${cp.pairLabel} | \`${cp.foregroundHex}\` | \`${cp.backgroundHex}\` | **${cp.contrastRatio}:1** | ${cp.grade} |`,
+        );
+      }
+      lines.push('');
+    }
+
+    if (adapt.fluidExpressions.length > 0 || adapt.themeVariantRules.length > 0) {
+      lines.push('### Fluid CSS Scaling & Theme Variant Rules');
+      for (const fl of adapt.fluidExpressions.slice(0, 12)) {
+        lines.push(`- \`${fl.selectorOrRule}\` \`${fl.property}\`: \`${fl.expression}\``);
+      }
+      for (const tv of adapt.themeVariantRules.slice(0, 8)) {
+        lines.push(`- Theme rule: ${tv}`);
+      }
+      lines.push('');
+    }
+
+    lines.push('### Adapted Semantic CSS Component Theme');
+    lines.push('```css');
+    lines.push(adapt.adaptedCssThemeBlock);
+    lines.push('```');
+    lines.push('');
+
+    lines.push('### Adapted Tailwind CSS v4 `@theme` & Utility Equivalents');
+    lines.push('```css');
+    lines.push(adapt.adaptedTailwindThemeBlock);
+    lines.push('```');
+    for (const util of adapt.adaptedTailwindUtilities) {
+      lines.push(`- **${util.role}**: \`${util.classes}\``);
+    }
+    lines.push('');
+
+    lines.push('### Post-Rebuild Fidelity Verification Targets');
+    for (const assertion of adapt.reconstructionAssertions) {
+      lines.push(`- ${assertion}`);
+    }
+    lines.push('');
+  }
 
   return {
     markdown: lines.join('\n') + '\n',
