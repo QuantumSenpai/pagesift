@@ -18,12 +18,14 @@ flowchart TD
 
     subgraph ExtensionOrigin["Extension Origin (chrome-extension://<id>)"]
         SW["MV3 Background Service Worker (service-worker.ts)"]
-        WS["Workspace UI (workspace.html / workspace.ts)"]
+        POP["Toolbar Popup (popup.html / popup.ts)"]
+        WS["Persistent Workspace UI (workspace.html / workspace.ts / tool-renderers.ts)"]
         OPT["Options UI (options.html / options.ts)"]
         IDB[("IndexedDB (pagesift_local_db v2)")]
-        LocalStore[("chrome.storage.local (Preferences)")]
-        SessionStore[("chrome.storage.session (Optional NVIDIA Key)")]
+        LocalStore[("chrome.storage.local (Preferences & Theme)")]
+        SessionStore[("chrome.storage.session (Optional NVIDIA Key & Responsive Session)")]
 
+        POP <-->|"Quick Launch & Status"| SW
         WS <-->|"Typed Validated Messages"| SW
         OPT <-->|"Privileged Messages"| SW
         SW <--> IDB
@@ -54,13 +56,15 @@ flowchart TD
 
 ### B. Background Service Worker (`src/extension/background/service-worker.ts`)
 - Registers top-level `chrome.runtime.onInstalled`, `chrome.runtime.onStartup`, `chrome.runtime.onMessage`, `chrome.tabs.onRemoved`, `chrome.tabs.onUpdated`, and `chrome.windows.onRemoved` listeners synchronously at worker startup.
+- Gates every message and lifecycle event behind a single-flight `ensureInitialized()` promise (with clean failure reset and structured `STORAGE_ERROR` reporting, no duplicate initialization, and no artificial keepalive loops) so ordinary MV3 worker wake-up recovers any previously `running` jobs to `interrupted` and restores active responsive sessions before serving status queries.
 - Validates every incoming message envelope and operation-specific payload against Zod schemas (`schemaVersion: 1`) and verifies sender authorization via `validateSenderAuthorization`.
-- Persists real `LocalJobRecord` entries in IndexedDB for long-running capture, clone, and asset archive operations, routes active `CANCEL_JOB` signals to `AbortController` instances, and runs `recoverInterruptedJobs()` on worker wake-up.
+- Persists real `LocalJobRecord` entries in IndexedDB for long-running capture, clone, and asset archive operations, routes active `CANCEL_JOB` signals to `AbortController` instances, and enforces cross-request `captureVisibleTab` rate limiting.
 - Runs real screenshot capture (`chrome.tabs.captureVisibleTab` + target tab verification + `OffscreenCanvas` stitching/cropping/annotation/encoding + binary PDF JPEG XObject assembly), privileged HTTP(S) asset fetching (`asset-fetcher.ts` with streaming byte limits and `credentials: 'omit'`), responsive preview window lifecycle & session persistence, IndexedDB storage/backup operations, and optional NVIDIA NIM requests with mandatory egress preview digest confirmation.
 
-### C. Extension-Owned UI Pages (`workspace.html`, `options.html`)
-- **`workspace.html` / `workspace.ts`**: Action popup and full-tab workspace (**Open Full Tab** button so popup dismissal never interrupts long-running work) providing controls for all 15 tools, real screenshot preview + crop/annotation controls, responsive preset/custom window launcher + sync toggle + cleanup button, real file download and clipboard copy controls across outputs, project/artifact/capture persistence in IndexedDB, reversible edit controls (`Undo`/`Redo`/`Reset`), and optional NVIDIA egress preview & confirmed invocation.
-- **`options.html` / `options.ts`**: Manages default export preferences (`chrome.storage.local`), session-only NVIDIA API key configuration (`chrome.storage.session`), IndexedDB byte-usage reporting, downloadable JSON backup export, and validated atomic backup import/reset.
+### C. Extension-Owned UI Surfaces (`popup.html`, `workspace.html`, `options.html`)
+- **`popup.html` / `popup.ts`**: Fast `380px` toolbar launch surface displaying current page inspectability, honest restricted-page notices, one-click launch into the persistent workspace (including quick-launch presets that keep running even after the popup closes), on-page inspector dock toggle, theme switch, and recent local IndexedDB artifacts/jobs.
+- **`workspace.html` / `workspace.ts` / `tool-renderers.ts`**: Persistent responsive workbench (`360px` through `1440px` + `200%` zoom) using a shared Light/Dark/System design system (`design-system.css`) and monochrome SVG icons, rendering safe DOM-constructed structured views for all 15 tools (Inspect box model & copy buttons, Assets thumbnail/filter browser with individual downloads, Colors swatches & 5-format exporter, Fonts specimens, Capture preview/crop/callout editor, Responsive requested-vs-measured table, Design Review severity cards, Tech Stack evidence cards), accessible NVIDIA egress preview modal, saved work drawer, and collapsible raw JSON disclosure.
+- **`options.html` / `options.ts`**: Manages theme and default export preferences (`chrome.storage.local`), session-only NVIDIA API key configuration (`chrome.storage.session`), IndexedDB usage metric cards, downloadable JSON backup export, file/text backup import, and confirmation-gated local data reset.
 
 ### D. Optional Self-Hosted Backend (`src/app.ts`, `src/server.ts`)
 - Preserved as an optional Fastify + PostgreSQL 17 modular monolith for users who wish to self-host cloud project/artifact storage later. The Chrome extension does not depend on this server to run any of its 15 tools.

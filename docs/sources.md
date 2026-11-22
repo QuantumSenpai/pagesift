@@ -6,8 +6,8 @@ The following libraries were resolved and queried through the Context7 MCP serve
 
 1. **Playwright (`playwright@1.65.1`)**
    - **Context7 Library ID**: `/microsoft/playwright`
-   - **Topics Consulted**: Loading unpacked Chromium Manifest V3 extensions with `chromium.launchPersistentContext`, `--disable-extensions-except`, `--load-extension`, retrieving MV3 background `serviceWorkers()`, and `waitForEvent('serviceworker')`.
-   - **Reference**: https://github.com/microsoft/playwright/blob/main/docs/src/chrome-extensions-js-python.md
+   - **Topics Consulted**: Loading unpacked Chromium Manifest V3 extensions with `chromium.launchPersistentContext`, `--disable-extensions-except`, `--load-extension`, retrieving MV3 background `serviceWorkers()`, `waitForEvent('serviceworker')`, and stopping/restarting MV3 service workers via CDP `ServiceWorker.enable` + `ServiceWorker.stopWorker`.
+   - **Reference**: https://github.com/microsoft/playwright/blob/main/docs/src/chrome-extensions-js-python.md & https://github.com/microsoft/playwright/blob/main/tests/library/chromium/extensions.spec.ts
 2. **fflate (`fflate@0.8.3`)**
    - **Context7 Library ID**: `/101arrowz/fflate`
    - **Topics Consulted**: Creating and reading ZIP archives in browser/extension and Node environments (`zipSync`, `unzipSync`, `strToU8`, `strFromU8`, compression levels).

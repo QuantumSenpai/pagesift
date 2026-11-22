@@ -31,7 +31,7 @@ Running `npm run build` produces:
 3. Enable **Developer mode** (top-right toggle).
 4. Click **Load unpacked** and select:
    `/Users/kyzenn/Projects/pagesift/dist/extension`
-5. Pin **PageSift** in the browser toolbar and click the extension icon on any `http://` or `https://` web page to open the 15-tool Workspace, or right-click the extension icon and choose **Options** to manage preferences, IndexedDB backups, and an optional NVIDIA session API key.
+5. Pin **PageSift** in the browser toolbar and click the extension icon on any `http://` or `https://` web page to open the quick-launch Popup, launch the persistent 15-tool Workspace, toggle the compact on-page inspector dock, or open **Options** to manage theme/export preferences, IndexedDB backups, and an optional NVIDIA session API key.
 
 ---
 
@@ -93,6 +93,7 @@ npm audit --audit-level=low
 
 ## 4. Documentation Index
 
+- [Design System, Surface Architecture & Icon Provenance](docs/design-system-and-icon.md)
 - [Extension Specification & 15-Tool Feature Matrix](docs/extension-spec-and-matrix.md)
 - [Architecture and Data Flow](docs/architecture-and-data-flow.md)
 - [Permissions and Local-Data Privacy Guide](docs/permissions-and-privacy.md)
