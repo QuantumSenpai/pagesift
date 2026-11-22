@@ -1317,7 +1317,7 @@ export class ContentScriptRuntime {
           tool,
           title: 'DESIGN.md Ready',
           summary: summaryText,
-          markdownPreview: res.markdown.slice(0, 1400),
+          markdownPreview: res.markdown.slice(0, 4000),
           copyableText: res.markdown,
           downloadFilename: 'DESIGN.md',
           downloadMime: 'text/markdown;charset=utf-8',

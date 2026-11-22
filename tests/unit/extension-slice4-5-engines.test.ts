@@ -126,6 +126,67 @@ describe('Slice 4 & 5 Engines: Assets, Design MD, Clone Prompt, and Static Clone
     expect(combined.conflicts.some((c) => c.tokenOrKey === '--brand-accent')).toBe(true);
     expect(combined.conflicts.some((c) => c.category === 'primary_font')).toBe(true);
     expect(combined.markdown).toContain('## 8. Cross-Page Token Conflicts');
+    expect(combined.markdown).toContain('### Semantic Color Roles');
+    expect(combined.markdown).toContain('### Computed Type Scale & Hierarchy');
+    expect(combined.markdown).toContain(
+      '## 9. Copy-Pasteable :root Tokens & AI Implementation Guide',
+    );
+
+    const richDom = new JSDOM(
+      `<!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <title>Editorial AI Product</title>
+          <meta name="description" content="Precision design agent running inside your CAD workflow." />
+          <style>
+            :root { --brand-accent: #fa3600; --size-pad: 24px; }
+            @media screen and (max-width: 767px) { body { font-size: 14px; } }
+            @keyframes fadeSlide { from { opacity: 0; } to { opacity: 1; } }
+            body { font-family: "BT Grotesk", sans-serif; color: #282828; background-color: #e0e0da; font-size: 16px; }
+            header { position: fixed; height: 56px; border-bottom: 1px solid #b3b3af; }
+            .btn-cta { background-color: #fa3600; color: #ffffff; border-radius: 4px; padding: 10px 16px; transition: color 0.3s ease; }
+            .card { background-color: #ffffff; border: 1px solid #b3b3af; border-radius: 6px; padding: 20px; }
+          </style>
+        </head>
+        <body>
+          <header><nav><a href="/product">Product</a><a href="/pricing">Pricing</a></nav></header>
+          <main>
+            <section class="hero">
+              <h1>An AI agent for your design tools</h1>
+              <p>Automate repetitive geometry cleanup directly inside your model.</p>
+              <a class="btn-cta" href="/start">Discover more</a>
+            </section>
+            <section class="features">
+              <h2>Built for teams</h2>
+              <div class="card"><input type="email" placeholder="Work email" /></div>
+            </section>
+          </main>
+          <footer><p>©2026 Heron AI Studio</p></footer>
+        </body>
+      </html>`,
+      { url: 'https://heron.example.com/' },
+    );
+    const richSnap = extractPageDesignSnapshot(
+      richDom.window.document,
+      richDom.window as unknown as Window,
+    );
+    const richResult = generateDesignMdFromPages([richSnap]);
+    expect(richResult.markdown).toContain('Editorial AI Product');
+    expect(richResult.markdown).toContain('### Global Header & Top Navigation');
+    expect(richResult.markdown).toContain('**Product**');
+    expect(richResult.markdown).toContain('### Section-by-Section DOM Blueprint');
+    expect(richResult.markdown).toContain('An AI agent for your design tools');
+    expect(richResult.markdown).toContain('Built for teams');
+    expect(richResult.markdown).toContain('### Global Footer');
+    expect(richResult.markdown).toContain('©2026 Heron AI Studio');
+    expect(richResult.markdown).toContain('--size-pad');
+    expect(richResult.markdown).toContain('@media screen and (max-width: 767px)');
+    expect(richResult.markdown).toContain('`fadeSlide`');
+    expect(richResult.markdown).toContain('### Button & CTA Variants');
+    expect(richResult.markdown).toContain('### Form Controls & Inputs');
+    expect(richResult.markdown).toContain('### Cards & Surface Containers');
+    expect(richResult.markdown).toContain('--site-canvas-bg: #e0e0da;');
+    expect(richResult.markdown).toContain('### Visual Anti-Patterns (Do Not Violate)');
   });
 
   it('generates a local rebuild prompt separating verified observations from structural assumptions without any AI key', () => {
