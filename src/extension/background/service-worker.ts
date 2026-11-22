@@ -40,6 +40,7 @@ import {
   type SenderContextInfo,
   type ToolId,
 } from '../protocol/messages.js';
+import { isLoopbackOriginUrl } from '../protocol/url-security.js';
 import {
   buildResearchSessionId,
   sanitizeActivityErrorCategory,
@@ -109,6 +110,7 @@ interface CachedNvidiaPreview {
   payloadDigest: string;
   taskType: NvidiaTaskType;
   modelId: string;
+  endpoint: string;
   sanitizedContext: Record<string, unknown>;
   createdAtMs: number;
 }
@@ -746,6 +748,7 @@ export class BackgroundCoordinator {
               payloadDigest: egressPreview.payloadDigest,
               taskType,
               modelId,
+              endpoint: settings.nvidiaEndpoint,
               sanitizedContext: rebuiltContext,
               createdAtMs: Date.now(),
             });
@@ -775,14 +778,22 @@ export class BackgroundCoordinator {
           }
 
           const cached = this.previewCache.get(confirmedDigest);
-          if (!cached || cached.taskType !== taskType || cached.modelId !== modelId) {
+          const previewExpired = !cached || Date.now() - cached.createdAtMs > 5 * 60 * 1000;
+          if (
+            previewExpired ||
+            cached.taskType !== taskType ||
+            cached.modelId !== modelId ||
+            cached.endpoint !== settings.nvidiaEndpoint
+          ) {
+            this.previewCache.delete(confirmedDigest);
             return createErrorResponse(
               msg.requestId,
               'AI_CONFIGURATION_ERROR',
-              'Preview confirmation expired or does not match the current task/model. Click Preview NVIDIA Data Egress again.',
+              'Preview confirmation expired or does not match the current task/model/endpoint. Click Preview Data Egress again.',
               msg.operation,
             );
           }
+          this.previewCache.delete(confirmedDigest);
 
           const apiKey = await this.env.settingsStore.getSessionNvidiaApiKey();
           if (!apiKey) {
@@ -1146,6 +1157,7 @@ export class BackgroundCoordinator {
           const prefetched = await prefetchAssetsBatch(uniqueUrls, {
             maxTotalBytes: 20 * 1024 * 1024,
             maxSingleAssetBytes: 4 * 1024 * 1024,
+            allowLoopback: isLoopbackOriginUrl(senderUrl),
             ...(this.env.fetchImpl ? { fetchImpl: this.env.fetchImpl } : {}),
           });
 
@@ -1426,6 +1438,7 @@ export class BackgroundCoordinator {
             });
 
             const prefetched = await prefetchAssetsBatch(httpUrls, {
+              allowLoopback: isLoopbackOriginUrl(tabMeta?.url),
               signal: abortCtrl.signal,
               ...(this.env.fetchImpl ? { fetchImpl: this.env.fetchImpl } : {}),
             });
@@ -1563,6 +1576,7 @@ export class BackgroundCoordinator {
             });
 
             const prefetched = await prefetchAssetsBatch(urls, {
+              allowLoopback: isLoopbackOriginUrl(tabMeta?.url),
               signal: abortCtrl.signal,
               ...(this.env.fetchImpl ? { fetchImpl: this.env.fetchImpl } : {}),
             });
@@ -1915,7 +1929,7 @@ export class BackgroundCoordinator {
               scrollX: tileSpec.scrollX,
               scrollY: tileSpec.scrollY,
               hideFixed: tileSpec.tileIndex > 0,
-              lazyWaitMs: 60,
+              lazyWaitMs: 25,
             },
           });
           if (!scrollRes.ok) {

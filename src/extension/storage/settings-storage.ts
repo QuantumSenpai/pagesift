@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isLoopbackHostname, isRestrictedNetworkHostname } from '../protocol/url-security.js';
 
 export const ALLOWED_NVIDIA_ENDPOINTS = [
   'https://integrate.api.nvidia.com/v1/chat/completions',
@@ -45,16 +46,9 @@ export function validateSafeAiEndpointUrl(rawUrl: string): string {
   if (parsed.username || parsed.password) {
     throw new Error('AI endpoint URL must not embed credentials');
   }
-  const hostname = parsed.hostname.toLowerCase();
-  const isLoopback = hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]';
+  const isLoopback = isLoopbackHostname(parsed.hostname);
   if (parsed.protocol === 'https:') {
-    if (
-      hostname.endsWith('.local') ||
-      hostname === '169.254.169.254' ||
-      hostname.startsWith('10.') ||
-      hostname.startsWith('192.168.') ||
-      /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
-    ) {
+    if (isRestrictedNetworkHostname(parsed.hostname, false)) {
       throw new Error('Private or link-local HTTPS AI endpoints are blocked for security');
     }
     return parsed.toString();

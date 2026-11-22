@@ -1,3 +1,4 @@
+import { validateExternalHttpAssetUrl } from '../protocol/url-security.js';
 import type { AssetBinaryFetcher, AssetBinaryFetchResult } from './assets-engine.js';
 
 export interface PrivilegedAssetFetchOptions {
@@ -5,6 +6,7 @@ export interface PrivilegedAssetFetchOptions {
   timeoutMs?: number;
   maxSingleAssetBytes?: number;
   maxTotalBytes?: number;
+  allowLoopback?: boolean;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
   onProgress?: (update: {
@@ -15,18 +17,13 @@ export interface PrivilegedAssetFetchOptions {
   }) => void;
 }
 
-export const DEFAULT_MAX_CONCURRENCY = 4;
-export const DEFAULT_ASSET_TIMEOUT_MS = 10000;
+export const DEFAULT_MAX_CONCURRENCY = 8;
+export const DEFAULT_ASSET_TIMEOUT_MS = 6000;
 export const DEFAULT_MAX_SINGLE_ASSET_BYTES = 5 * 1024 * 1024;
 export const DEFAULT_MAX_TOTAL_ASSETS_BYTES = 25 * 1024 * 1024;
 
-export function isAllowedHttpAssetUrl(rawUrl: string): boolean {
-  try {
-    const parsed = new URL(rawUrl);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
+export function isAllowedHttpAssetUrl(rawUrl: string, allowLoopback = true): boolean {
+  return validateExternalHttpAssetUrl(rawUrl, allowLoopback).ok;
 }
 
 async function readResponseWithByteLimit(
@@ -97,14 +94,17 @@ export async function fetchSingleAssetBinary(
   options: {
     timeoutMs?: number;
     maxBytes?: number;
+    allowLoopback?: boolean;
     signal?: AbortSignal;
     fetchImpl?: typeof fetch;
   } = {},
 ): Promise<AssetBinaryFetchResult> {
-  if (!isAllowedHttpAssetUrl(url)) {
+  const allowLoopback = options.allowLoopback ?? false;
+  const initialValidation = validateExternalHttpAssetUrl(url, allowLoopback);
+  if (!initialValidation.ok) {
     return {
       ok: false,
-      reason: 'Only http:// and https:// asset URLs are allowed',
+      reason: initialValidation.reason,
     };
   }
 
@@ -127,19 +127,52 @@ export async function fetchSingleAssetBinary(
   }, timeoutMs);
 
   try {
-    const response = await fetchFn(url, {
-      method: 'GET',
-      credentials: 'omit',
-      redirect: 'follow',
-      signal: controller.signal,
-    });
+    let currentUrl = initialValidation.url;
+    let response: Response | null = null;
+    for (let hop = 0; hop <= 3; hop += 1) {
+      response = await fetchFn(currentUrl, {
+        method: 'GET',
+        credentials: 'omit',
+        redirect: 'manual',
+        signal: controller.signal,
+      });
 
-    if (response.url && !isAllowedHttpAssetUrl(response.url)) {
-      controller.abort();
-      return {
-        ok: false,
-        reason: `Redirect destination protocol rejected for ${url}`,
-      };
+      if (response.url) {
+        const finalCheck = validateExternalHttpAssetUrl(response.url, allowLoopback);
+        if (!finalCheck.ok) {
+          controller.abort();
+          return {
+            ok: false,
+            reason: `Redirect destination rejected for ${url}: ${finalCheck.reason}`,
+          };
+        }
+      }
+
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (!location) {
+          return { ok: false, reason: `HTTP ${response.status} redirect without location` };
+        }
+        const resolvedRedirect = new URL(location, currentUrl).toString();
+        const redirectValidation = validateExternalHttpAssetUrl(resolvedRedirect, allowLoopback);
+        if (!redirectValidation.ok) {
+          return {
+            ok: false,
+            reason: `Redirect blocked for security: ${redirectValidation.reason}`,
+          };
+        }
+        currentUrl = redirectValidation.url;
+        continue;
+      }
+      break;
+    }
+
+    if (!response) {
+      return { ok: false, reason: 'No network response received' };
+    }
+
+    if (response.status >= 300 && response.status < 400) {
+      return { ok: false, reason: 'Too many redirects while fetching asset' };
     }
 
     if (!response.ok) {
@@ -224,6 +257,7 @@ export async function prefetchAssetsBatch(
       const res = await fetchSingleAssetBinary(targetUrl, {
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
         maxBytes: perRequestCap,
+        ...(options.allowLoopback !== undefined ? { allowLoopback: options.allowLoopback } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
       });

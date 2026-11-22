@@ -80,7 +80,10 @@ export function collectDocumentElements(
   return { entries, openShadowRootsCount, truncated };
 }
 
-export function inspectFramesAndStylesheets(doc: Document): FrameAndStylesheetReport {
+export function inspectFramesAndStylesheets(
+  doc: Document,
+  knownOpenShadowRootsCount?: number,
+): FrameAndStylesheetReport {
   let sameOriginFramesCount = 0;
   const inaccessibleCrossOriginFrames: string[] = [];
 
@@ -116,7 +119,10 @@ export function inspectFramesAndStylesheets(doc: Document): FrameAndStylesheetRe
     }
   }
 
-  const { openShadowRootsCount } = collectDocumentElements(doc, 500);
+  const openShadowRootsCount =
+    knownOpenShadowRootsCount !== undefined
+      ? knownOpenShadowRootsCount
+      : collectDocumentElements(doc, 500).openShadowRootsCount;
 
   return {
     sameOriginFramesCount,

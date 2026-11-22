@@ -91,7 +91,20 @@ export interface OverlayInspectSummaryData {
   marginSummary: string;
   paddingSummary: string;
   borderRadius: string;
+  contrastInfo?: string;
   accessibleName: string | null;
+}
+
+export interface OverlayMeasureSummaryData {
+  primarySelector: string;
+  primaryDimensions: string;
+  paddingSummary: string;
+  marginSummary: string;
+  secondarySelector?: string;
+  horizontalGap?: number;
+  verticalGap?: number;
+  centerDistance?: number;
+  isOverlapping?: boolean;
 }
 
 export interface OverlayToolSummary {
@@ -105,7 +118,9 @@ export interface OverlayToolSummary {
   fontsPreviewData?: OverlayFontsSummaryData;
   reviewPreviewData?: OverlayDesignReviewSummaryData;
   inspectPreviewData?: OverlayInspectSummaryData;
+  measurePreviewData?: OverlayMeasureSummaryData;
   featuresPreviewData?: PageFeatureExtractionReport;
+  markdownPreview?: string;
   imageDataUrl?: string;
   captureMode?: 'visible' | 'full_page';
   captureResolution?: string;
@@ -1673,6 +1688,21 @@ export class OnPageOverlayDashboard {
         gap: 6px;
         margin-top: 3px;
       }
+      .ps-md-preview {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 7px;
+        border: 1px solid var(--border);
+        background: var(--elevated);
+        color: var(--text);
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        font-size: 11.5px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 240px;
+        overflow: auto;
+      }
       @media (prefers-reduced-motion: reduce) {
         * { transition: none !important; animation: none !important; }
       }
@@ -2459,8 +2489,37 @@ export class OnPageOverlayDashboard {
       ['Margin', data.marginSummary],
       ['Padding', data.paddingSummary],
     ];
+    if (data.contrastInfo) {
+      items.push(['WCAG Contrast', data.contrastInfo]);
+    }
     if (data.accessibleName) {
       items.push(['Accessible Name', data.accessibleName]);
+    }
+    for (const [k, v] of items) {
+      const card = this.doc.createElement('div');
+      card.className = 'ps-kv-card';
+      card.append(this.createEl('div', 'ps-kv-label', k), this.createEl('div', 'ps-kv-value', v));
+      grid.appendChild(card);
+    }
+    this.drawerContent.appendChild(grid);
+  }
+
+  private renderMeasureDrawerBody(data: OverlayMeasureSummaryData): void {
+    if (!this.drawerContent) return;
+    const grid = this.doc.createElement('div');
+    grid.className = 'ps-kv-grid';
+    const items: Array<[string, string]> = [
+      ['Primary Element', `${data.primarySelector} (${data.primaryDimensions})`],
+      ['Padding', data.paddingSummary],
+      ['Margin', data.marginSummary],
+    ];
+    if (data.secondarySelector) {
+      items.push(['Secondary Element', data.secondarySelector]);
+      items.push(['Edge Gaps', `${data.horizontalGap ?? 0}px H | ${data.verticalGap ?? 0}px V`]);
+      items.push([
+        'Center Distance',
+        `${data.centerDistance ?? 0}px${data.isOverlapping ? ' (Overlapping)' : ''}`,
+      ]);
     }
     for (const [k, v] of items) {
       const card = this.doc.createElement('div');
@@ -2942,6 +3001,17 @@ export class OnPageOverlayDashboard {
 
       if (s.inspectPreviewData) {
         this.renderInspectDrawerBody(s.inspectPreviewData);
+      }
+
+      if (s.measurePreviewData) {
+        this.renderMeasureDrawerBody(s.measurePreviewData);
+      }
+
+      if (s.markdownPreview) {
+        const pre = this.doc.createElement('pre');
+        pre.className = 'ps-md-preview';
+        pre.textContent = s.markdownPreview;
+        this.drawerContent.appendChild(pre);
       }
 
       if (s.techStackSummary && s.techStackSummary.groups.length > 0) {

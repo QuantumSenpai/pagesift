@@ -60,8 +60,8 @@ function extractUrlsFromCssSrc(srcValue: string, baseHref: string): string[] {
 }
 
 export function extractPageFonts(doc: Document, win: Window): FontExtractionReport {
-  const { entries } = collectDocumentElements(doc, 1500);
-  const frameAndSheetReport = inspectFramesAndStylesheets(doc);
+  const { entries, openShadowRootsCount } = collectDocumentElements(doc, 1500);
+  const frameAndSheetReport = inspectFramesAndStylesheets(doc, openShadowRootsCount);
 
   const familyMap = new Map<
     string,

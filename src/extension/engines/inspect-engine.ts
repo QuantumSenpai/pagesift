@@ -1,3 +1,5 @@
+import { parseCssColorToRgba } from './colors-engine.js';
+import { computeWcagContrastRatio } from './design-review-engine.js';
 import {
   buildShortSelector,
   inspectFramesAndStylesheets,
@@ -65,6 +67,8 @@ export interface InspectElementReport {
     backgroundColor: string;
     borderColor: string;
     outlineColor: string;
+    contrastRatio?: number;
+    contrastGrade?: 'AAA' | 'AA' | 'AA Large' | 'Fail';
   };
   spacing: {
     margin: BoxSides;
@@ -185,6 +189,31 @@ export function inspectElement(target: Element, win: Window): InspectElementRepo
 
   const frameAndSheetReport = inspectFramesAndStylesheets(doc);
 
+  let contrastRatio: number | undefined;
+  let contrastGrade: 'AAA' | 'AA' | 'AA Large' | 'Fail' | undefined;
+  const fgRgba = parseCssColorToRgba(computed.color);
+  if (fgRgba && fgRgba.a > 0) {
+    let bgCursor: Element | null = target;
+    let resolvedBg = { r: 255, g: 255, b: 255, a: 1 };
+    while (bgCursor) {
+      const parsedBg = parseCssColorToRgba(win.getComputedStyle(bgCursor).backgroundColor);
+      if (parsedBg && parsedBg.a >= 0.85) {
+        resolvedBg = parsedBg;
+        break;
+      }
+      bgCursor = bgCursor.parentElement;
+    }
+    contrastRatio = computeWcagContrastRatio(fgRgba, resolvedBg);
+    contrastGrade =
+      contrastRatio >= 7
+        ? 'AAA'
+        : contrastRatio >= 4.5
+          ? 'AA'
+          : contrastRatio >= 3
+            ? 'AA Large'
+            : 'Fail';
+  }
+
   return {
     connected: target.isConnected,
     tagName: target.tagName.toLowerCase(),
@@ -236,6 +265,8 @@ export function inspectElement(target: Element, win: Window): InspectElementRepo
       backgroundColor: computed.backgroundColor,
       borderColor: computed.borderTopColor,
       outlineColor: computed.outlineColor,
+      ...(contrastRatio !== undefined ? { contrastRatio } : {}),
+      ...(contrastGrade !== undefined ? { contrastGrade } : {}),
     },
     spacing: {
       margin: {

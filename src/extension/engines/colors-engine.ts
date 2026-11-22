@@ -205,8 +205,8 @@ export function formatRgbaToHex(rgba: { r: number; g: number; b: number; a: numb
 }
 
 export function extractPageColors(doc: Document, win: Window): ColorExtractionReport {
-  const { entries } = collectDocumentElements(doc, 1500);
-  const frameAndSheetReport = inspectFramesAndStylesheets(doc);
+  const { entries, openShadowRootsCount } = collectDocumentElements(doc, 1500);
+  const frameAndSheetReport = inspectFramesAndStylesheets(doc, openShadowRootsCount);
 
   const colorMap = new Map<
     string,

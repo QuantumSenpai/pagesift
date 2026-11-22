@@ -45,7 +45,7 @@ export const MAX_CAPTURE_HEIGHT_CSS_PX = 16384;
 export const MAX_CAPTURE_CANVAS_DIM_PX = 32768;
 export const MAX_WEBP_DIMENSION_PX = 16383;
 export const MAX_CAPTURE_TILES = 20;
-export const MIN_CAPTURE_INTERVAL_MS = 550;
+export const MIN_CAPTURE_INTERVAL_MS = 515;
 
 export function buildCapturePlan(params: {
   mode: CaptureMode;

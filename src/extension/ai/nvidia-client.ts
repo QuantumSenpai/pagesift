@@ -90,6 +90,15 @@ const SENSITIVE_KEY_TOKENS = [
   'cardnumber',
   'cvv',
   'ssn',
+  'proto',
+  'constructor',
+  'prototype',
+  'setcookie',
+  'xapikey',
+  'accesstoken',
+  'refreshtoken',
+  'idtoken',
+  'clientsecret',
 ];
 
 const ALLOWLIST_BY_TASK: Record<NvidiaTaskType, Set<string>> = {
@@ -384,11 +393,11 @@ export async function invokeNvidiaChatCompletion(
       { role: 'user', content: userPrompt },
     ],
     temperature: 0.2,
-    max_tokens: 2048,
+    max_tokens: 1400,
     stream: false,
   });
 
-  const timeoutMs = Math.max(500, Math.min(60000, options.timeoutMs ?? 20000));
+  const timeoutMs = Math.max(500, Math.min(60000, options.timeoutMs ?? 15000));
   const maxRetries = Math.max(0, Math.min(2, options.maxRetries ?? 1));
   const fetchFn = options.fetchImpl ?? fetch;
 

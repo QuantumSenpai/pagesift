@@ -350,8 +350,8 @@ function defaultExtForKind(kind: AssetKind, url: string): string {
 
 export function extractPageAssets(doc: Document, win: Window): AssetExtractionReport {
   const baseHref = doc.location.href || 'https://localhost/';
-  const { entries } = collectDocumentElements(doc, 1500);
-  const frameAndSheetReport = inspectFramesAndStylesheets(doc);
+  const { entries, openShadowRootsCount } = collectDocumentElements(doc, 1500);
+  const frameAndSheetReport = inspectFramesAndStylesheets(doc, openShadowRootsCount);
   const usedFilenames = new Set<string>();
   const seenKeys = new Set<string>();
   const assets: DiscoveredAssetEntry[] = [];

@@ -1010,8 +1010,12 @@ export class ContentScriptRuntime {
       if (tool === 'inspect') {
         const target = this.resolveTargetElement();
         const report = inspectElement(target, this.win);
-        const summaryText = `${report.selector} · ${Math.round(report.boundingBox.width)}x${Math.round(report.boundingBox.height)}px · ${report.typography.fontSize} ${report.typography.fontFamily.split(',')[0] ?? ''}`;
-        await this.recordOverlayActivity({
+        const contrastSuffix =
+          report.colors.contrastRatio !== undefined
+            ? ` · Contrast ${report.colors.contrastRatio}:1 (${report.colors.contrastGrade ?? ''})`
+            : '';
+        const summaryText = `${report.selector} · ${Math.round(report.boundingBox.width)}x${Math.round(report.boundingBox.height)}px · ${report.typography.fontSize} ${report.typography.fontFamily.split(',')[0] ?? ''}${contrastSuffix}`;
+        void this.recordOverlayActivity({
           activityId,
           tool,
           actionLabel: 'Inspect Element',
@@ -1019,7 +1023,7 @@ export class ContentScriptRuntime {
           durationMs: performance.now() - startMono,
           optionsSummary: { selector: report.selector },
           resultSummary: summaryText,
-        });
+        }).catch(() => undefined);
         return {
           tool,
           title: `Inspected ${report.selector}`,
@@ -1036,6 +1040,11 @@ export class ContentScriptRuntime {
             fontWeight: report.typography.fontWeight,
             textColor: report.colors.textColor,
             backgroundColor: report.colors.backgroundColor,
+            ...(report.colors.contrastRatio !== undefined
+              ? {
+                  contrastInfo: `${report.colors.contrastRatio}:1 (${report.colors.contrastGrade ?? 'Measured'})`,
+                }
+              : {}),
             marginSummary: `${report.spacing.margin.top}px ${report.spacing.margin.right}px ${report.spacing.margin.bottom}px ${report.spacing.margin.left}px`,
             paddingSummary: `${report.spacing.padding.top}px ${report.spacing.padding.right}px ${report.spacing.padding.bottom}px ${report.spacing.padding.left}px`,
             borderRadius: report.bordersAndEffects.borderRadius,
@@ -1048,9 +1057,9 @@ export class ContentScriptRuntime {
         const primary = this.resolveTargetElement();
         const report = measureElements(primary, this.secondaryElement, this.win);
         const summaryText = report.distance
-          ? `${report.primary.selector} → ${report.secondary?.selector ?? ''}: ${report.distance.horizontalGap}px H, ${report.distance.verticalGap}px V`
-          : `${report.primary.selector}: ${report.primary.width}×${report.primary.height}px`;
-        await this.recordOverlayActivity({
+          ? `${report.primary.selector} -> ${report.secondary?.selector ?? ''}: ${report.distance.horizontalGap}px H, ${report.distance.verticalGap}px V`
+          : `${report.primary.selector}: ${report.primary.width}x${report.primary.height}px`;
+        void this.recordOverlayActivity({
           activityId,
           tool,
           actionLabel: 'Measure Elements',
@@ -1058,11 +1067,26 @@ export class ContentScriptRuntime {
           durationMs: performance.now() - startMono,
           optionsSummary: { primarySelector: report.primary.selector },
           resultSummary: summaryText,
-        });
+        }).catch(() => undefined);
         return {
           tool,
           title: 'Measurement',
           summary: summaryText,
+          measurePreviewData: {
+            primarySelector: report.primary.selector,
+            primaryDimensions: `${report.primary.width}x${report.primary.height}px`,
+            paddingSummary: `${report.primary.padding.top}px ${report.primary.padding.right}px ${report.primary.padding.bottom}px ${report.primary.padding.left}px`,
+            marginSummary: `${report.primary.margin.top}px ${report.primary.margin.right}px ${report.primary.margin.bottom}px ${report.primary.margin.left}px`,
+            ...(report.secondary && report.distance
+              ? {
+                  secondarySelector: report.secondary.selector,
+                  horizontalGap: report.distance.horizontalGap,
+                  verticalGap: report.distance.verticalGap,
+                  centerDistance: report.distance.centerDistance,
+                  isOverlapping: report.distance.isOverlapping,
+                }
+              : {}),
+          },
           copyableText: JSON.stringify(report, null, 2),
         };
       }
@@ -1281,18 +1305,19 @@ export class ContentScriptRuntime {
         const snap = extractPageDesignSnapshot(this.doc, this.win);
         const res = generateDesignMdFromPages([snap]);
         const summaryText = `Generated DESIGN.md (${res.markdown.length.toLocaleString()} chars)`;
-        await this.recordOverlayActivity({
+        void this.recordOverlayActivity({
           activityId,
           tool,
           actionLabel: 'Generate DESIGN.md',
           status: 'completed',
           durationMs: performance.now() - startMono,
           resultSummary: summaryText,
-        });
+        }).catch(() => undefined);
         return {
           tool,
           title: 'DESIGN.md Ready',
           summary: summaryText,
+          markdownPreview: res.markdown.slice(0, 1400),
           copyableText: res.markdown,
           downloadFilename: 'DESIGN.md',
           downloadMime: 'text/markdown;charset=utf-8',
@@ -1302,7 +1327,7 @@ export class ContentScriptRuntime {
       if (tool === 'clone_prompt') {
         const report = generateLocalClonePrompt(this.doc, this.win, 'react_tailwind');
         const summaryText = `Generated React + Tailwind brief (${report.prompt.length.toLocaleString()} chars)`;
-        await this.recordOverlayActivity({
+        void this.recordOverlayActivity({
           activityId,
           tool,
           actionLabel: 'Generate Clone Prompt',
@@ -1310,11 +1335,12 @@ export class ContentScriptRuntime {
           durationMs: performance.now() - startMono,
           optionsSummary: { targetFramework: 'react_tailwind' },
           resultSummary: summaryText,
-        });
+        }).catch(() => undefined);
         return {
           tool,
           title: 'Clone Prompt Ready',
           summary: summaryText,
+          markdownPreview: report.prompt.slice(0, 1400),
           copyableText: report.prompt,
           downloadFilename: 'pagesift-clone-prompt.md',
           downloadMime: 'text/markdown;charset=utf-8',
