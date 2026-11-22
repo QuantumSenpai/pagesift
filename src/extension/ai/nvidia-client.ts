@@ -366,7 +366,7 @@ export async function invokeNvidiaChatCompletion(
       { role: 'user', content: userPrompt },
     ],
     temperature: 0.2,
-    max_tokens: 1024,
+    max_tokens: 2048,
     stream: false,
   });
 
@@ -427,20 +427,43 @@ export async function invokeNvidiaChatCompletion(
       }
 
       if (!response.ok) {
-        throw new Error(`AI API request failed with HTTP ${response.status}`);
+        let errorDetail = '';
+        try {
+          const errJson = (await response.json()) as {
+            detail?: unknown;
+            message?: unknown;
+            error?: { message?: unknown };
+          };
+          const rawDetail = errJson.detail ?? errJson.error?.message ?? errJson.message;
+          if (typeof rawDetail === 'string' && rawDetail.trim().length > 0) {
+            errorDetail = `: ${rawDetail.trim().slice(0, 240)}`;
+          }
+        } catch {
+          errorDetail = '';
+        }
+        throw new Error(`AI API request failed with HTTP ${response.status}${errorDetail}`);
       }
 
-      let json: { choices?: Array<{ message?: { content?: unknown } }> };
+      let json: {
+        choices?: Array<{ message?: { content?: unknown; reasoning_content?: unknown } }>;
+      };
       try {
         json = (await response.json()) as {
-          choices?: Array<{ message?: { content?: unknown } }>;
+          choices?: Array<{ message?: { content?: unknown; reasoning_content?: unknown } }>;
         };
       } catch {
         throw new Error('AI API returned malformed JSON response');
       }
 
-      const rawContent = json.choices?.[0]?.message?.content;
-      if (typeof rawContent !== 'string' || rawContent.trim().length === 0) {
+      const rawMessage = json.choices?.[0]?.message;
+      const rawContent =
+        typeof rawMessage?.content === 'string' && rawMessage.content.trim().length > 0
+          ? rawMessage.content
+          : typeof rawMessage?.reasoning_content === 'string' &&
+              rawMessage.reasoning_content.trim().length > 0
+            ? rawMessage.reasoning_content
+            : '';
+      if (rawContent.trim().length === 0) {
         throw new Error('AI API returned an empty completion response');
       }
 

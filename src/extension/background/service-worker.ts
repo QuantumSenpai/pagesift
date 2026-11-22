@@ -559,7 +559,7 @@ export class BackgroundCoordinator {
           const modelId =
             typeof msg.payload['modelId'] === 'string' && msg.payload['modelId'].trim().length > 0
               ? msg.payload['modelId'].trim()
-              : settings.nvidiaModelId || 'meta/llama-3.1-70b-instruct';
+              : settings.nvidiaModelId || 'nvidia/nemotron-3.5-bolt-e4b';
           const taskType = msg.payload['taskType'] as NvidiaTaskType;
           const sourceTool = msg.payload['sourceTool'] as NvidiaSupportedSourceTool;
           const allowCustomEndpoint = settings.aiProviderPreset !== 'nvidia';

@@ -306,7 +306,7 @@ function initOptionsPage(): void {
         defaultPromptTarget: promptSel?.value ?? 'react_tailwind',
         aiProviderPreset: aiProviderSel?.value ?? 'nvidia',
         nvidiaEndpoint: aiEndpointInput?.value.trim() || AI_PROVIDER_PRESETS.nvidia.endpoint,
-        nvidiaModelId: modelInput?.value.trim() || 'meta/llama-3.1-70b-instruct',
+        nvidiaModelId: modelInput?.value.trim() || 'nvidia/nemotron-3.5-bolt-e4b',
         recordActivityHistory: recordCheck?.checked ?? true,
         activityRetentionDays: Number.parseInt(retentionSel?.value ?? '90', 10) || 90,
       },

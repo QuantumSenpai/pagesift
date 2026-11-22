@@ -12,7 +12,7 @@ All 15 PageSift tools work locally without any AI credentials. For users who exp
   - `custom`: User-supplied endpoint validated by `validateSafeAiEndpointUrl()` (HTTPS required for public hosts; HTTP permitted only for `127.0.0.1` / `localhost` / `[::1]`; private/link-local/metadata IP ranges rejected).
 - **User-Owned Key & Model ID**:
   - No developer-owned key is bundled into `dist/extension/`, and PageSift never invents a fallback model ID.
-  - The user supplies their own API key (`nvapi-...`, `sk-...`, or custom Bearer token) and chosen model ID (for example `meta/llama-3.1-70b-instruct` or `gpt-4o-mini`).
+  - The user supplies their own API key (`nvapi-...`, `sk-...`, or custom Bearer token) and chosen model ID (defaulting to active NVIDIA NIM `nvidia/nemotron-3.5-bolt-e4b`, or e.g. `gpt-4o-mini` on OpenAI).
   - Provider access is governed by the user's own account terms and credits.
 
 ---
@@ -60,4 +60,4 @@ PageSift does **not** forward arbitrary tool outputs or trust a caller-supplied 
 ## 5. Verification Status
 
 - Automated boundary tests (`tests/unit/extension-regressions.test.ts` and `tests/unit/extension-slice6-10-engines.test.ts`) verify recursive array/object secret removal, credential-URL stripping, depth/byte caps, preview/execution digest consistency, malformed JSON, timeout, cancellation, `401`/`404`/`429`/`503` handling, and zero AI traffic during local-only tools.
-- Live calls against `https://integrate.api.nvidia.com` remain pending manual verification with a user-supplied live key.
+- Live Chromium end-to-end execution against `https://integrate.api.nvidia.com/v1/chat/completions` (`nvidia/nemotron-3.5-bolt-e4b`) has also been verified across `explain_tech_stack`, `interpret_design_review`, and `enhance_clone_prompt` using a user-supplied session API key (with zero key leakage into `chrome.storage.local` or backups).

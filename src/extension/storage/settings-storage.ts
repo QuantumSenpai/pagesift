@@ -8,7 +8,7 @@ export const AI_PROVIDER_PRESETS = {
   nvidia: {
     label: 'NVIDIA NIM',
     endpoint: 'https://integrate.api.nvidia.com/v1/chat/completions',
-    defaultModel: 'meta/llama-3.1-70b-instruct',
+    defaultModel: 'nvidia/nemotron-3.5-bolt-e4b',
   },
   openai: {
     label: 'OpenAI',
@@ -120,7 +120,7 @@ export const extensionSettingsSchema = z.strictObject({
         return false;
       }
     }, 'AI endpoint must be a safe https:// URL or localhost endpoint'),
-  nvidiaModelId: z.string().trim().max(160).default('meta/llama-3.1-70b-instruct'),
+  nvidiaModelId: z.string().trim().max(160).default('nvidia/nemotron-3.5-bolt-e4b'),
 });
 
 export type ExtensionSettings = z.infer<typeof extensionSettingsSchema>;
