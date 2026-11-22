@@ -12,8 +12,6 @@ const REQUIRED_FILES = [
   'service-worker.js',
   'content-script.js',
   'design-system.css',
-  'popup.html',
-  'popup.js',
   'workspace.html',
   'workspace.js',
   'options.html',
@@ -22,6 +20,13 @@ const REQUIRED_FILES = [
   'icons/icon-32.png',
   'icons/icon-48.png',
   'icons/icon-128.png',
+  'fonts/instrument-sans-400.woff2',
+  'fonts/instrument-sans-500.woff2',
+  'fonts/instrument-sans-600.woff2',
+  'fonts/instrument-sans-700.woff2',
+  'fonts/ibm-plex-mono-400.woff2',
+  'fonts/ibm-plex-mono-500.woff2',
+  'fonts/ibm-plex-mono-600.woff2',
 ];
 
 const FORBIDDEN_SECRET_PATTERNS = [
@@ -65,11 +70,19 @@ function main(): void {
   if (manifest.background?.service_worker !== 'service-worker.js') {
     throw new Error('Manifest must configure background.service_worker = service-worker.js');
   }
-  if (manifest.action?.default_popup !== 'popup.html') {
-    throw new Error('Manifest must configure action.default_popup = popup.html');
+  if (manifest.action?.default_popup !== undefined) {
+    throw new Error(
+      'Manifest action.default_popup must be omitted so chrome.action.onClicked toggles the on-page overlay cleanly',
+    );
   }
 
-  const forbiddenPermissions = ['debugger', 'webRequest', 'webRequestBlocking', '<all_urls>'];
+  const forbiddenPermissions = [
+    'debugger',
+    'webRequest',
+    'webRequestBlocking',
+    'history',
+    '<all_urls>',
+  ];
   for (const perm of manifest.permissions) {
     if (forbiddenPermissions.includes(perm)) {
       throw new Error(`Manifest contains prohibited default permission: ${perm}`);
@@ -86,7 +99,7 @@ function main(): void {
     if (manifest.icons?.[String(size)] !== expectedPath) {
       throw new Error(`Manifest icons.${size} must point to ${expectedPath}`);
     }
-    if (manifest.action.default_icon?.[String(size)] !== expectedPath) {
+    if (manifest.action?.default_icon?.[String(size)] !== expectedPath) {
       throw new Error(`Manifest action.default_icon.${size} must point to ${expectedPath}`);
     }
     const iconBytes = fs.readFileSync(path.join(EXT_DIR, expectedPath));
@@ -104,7 +117,9 @@ function main(): void {
     }
   }
 
-  for (const textFile of REQUIRED_FILES.filter((f) => !f.endsWith('.png'))) {
+  for (const textFile of REQUIRED_FILES.filter(
+    (f) => !f.endsWith('.png') && !f.endsWith('.woff2'),
+  )) {
     const content = fs.readFileSync(path.join(EXT_DIR, textFile), 'utf8');
     for (const pattern of FORBIDDEN_SECRET_PATTERNS) {
       if (pattern.test(content)) {
@@ -131,6 +146,7 @@ function main(): void {
       permissions: manifest.permissions,
       verifiedFiles: REQUIRED_FILES.length,
       iconSizes: [16, 32, 48, 128],
+      bundledFontsCount: 7,
       zipSizeBytes: zipBytes.byteLength,
     }) + '\n',
   );

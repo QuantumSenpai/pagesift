@@ -9,6 +9,37 @@ const ZIP_PATH = path.join(ROOT_DIR, 'dist', 'pagesift-extension.zip');
 const ICONS_SRC_DIR = path.join(ROOT_DIR, 'assets', 'icons');
 const REQUIRED_ICON_SIZES = [16, 32, 48, 128] as const;
 
+const BUNDLED_FONTS: Array<{ src: string; dest: string }> = [
+  {
+    src: 'node_modules/@fontsource/instrument-sans/files/instrument-sans-latin-400-normal.woff2',
+    dest: 'instrument-sans-400.woff2',
+  },
+  {
+    src: 'node_modules/@fontsource/instrument-sans/files/instrument-sans-latin-500-normal.woff2',
+    dest: 'instrument-sans-500.woff2',
+  },
+  {
+    src: 'node_modules/@fontsource/instrument-sans/files/instrument-sans-latin-600-normal.woff2',
+    dest: 'instrument-sans-600.woff2',
+  },
+  {
+    src: 'node_modules/@fontsource/instrument-sans/files/instrument-sans-latin-700-normal.woff2',
+    dest: 'instrument-sans-700.woff2',
+  },
+  {
+    src: 'node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2',
+    dest: 'ibm-plex-mono-400.woff2',
+  },
+  {
+    src: 'node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-500-normal.woff2',
+    dest: 'ibm-plex-mono-500.woff2',
+  },
+  {
+    src: 'node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-600-normal.woff2',
+    dest: 'ibm-plex-mono-600.woff2',
+  },
+];
+
 function collectDirectoryFilesForZip(
   baseDir: string,
   currentDir: string = baseDir,
@@ -31,12 +62,12 @@ async function buildExtension(): Promise<void> {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.mkdirSync(path.join(OUT_DIR, 'icons'), { recursive: true });
+  fs.mkdirSync(path.join(OUT_DIR, 'fonts'), { recursive: true });
 
   await esbuild.build({
     entryPoints: {
       'service-worker': path.join(ROOT_DIR, 'src/extension/background/service-worker.ts'),
       'content-script': path.join(ROOT_DIR, 'src/extension/content/content-script.ts'),
-      popup: path.join(ROOT_DIR, 'src/extension/ui/popup.ts'),
       workspace: path.join(ROOT_DIR, 'src/extension/ui/workspace.ts'),
       options: path.join(ROOT_DIR, 'src/extension/ui/options.ts'),
     },
@@ -50,7 +81,7 @@ async function buildExtension(): Promise<void> {
     legalComments: 'none',
   });
 
-  for (const staticFile of ['design-system.css', 'popup.html', 'workspace.html', 'options.html']) {
+  for (const staticFile of ['design-system.css', 'workspace.html', 'options.html']) {
     fs.copyFileSync(
       path.join(ROOT_DIR, 'src/extension/ui', staticFile),
       path.join(OUT_DIR, staticFile),
@@ -65,6 +96,14 @@ async function buildExtension(): Promise<void> {
     fs.copyFileSync(srcIcon, path.join(OUT_DIR, 'icons', `icon-${size}.png`));
   }
 
+  for (const font of BUNDLED_FONTS) {
+    const srcPath = path.join(ROOT_DIR, font.src);
+    if (!fs.existsSync(srcPath)) {
+      throw new Error(`Missing required bundled font file: ${srcPath}`);
+    }
+    fs.copyFileSync(srcPath, path.join(OUT_DIR, 'fonts', font.dest));
+  }
+
   const iconMap = {
     '16': 'icons/icon-16.png',
     '32': 'icons/icon-32.png',
@@ -77,15 +116,14 @@ async function buildExtension(): Promise<void> {
     name: 'PageSift',
     version: '1.0.0',
     description:
-      'Free, open-source local web inspection, design token extraction, static page snapshot, and DESIGN.md toolkit.',
+      'Free, open-source local-first web research, inspection, design token extraction, static snapshot, and activity history toolkit.',
     permissions: ['activeTab', 'tabs', 'storage', 'downloads', 'unlimitedStorage'],
     host_permissions: ['<all_urls>'],
     background: {
       service_worker: 'service-worker.js',
     },
     action: {
-      default_title: 'PageSift — Inspect, Sift & Extract',
-      default_popup: 'popup.html',
+      default_title: 'Toggle PageSift Overlay Dashboard',
       default_icon: iconMap,
     },
     options_ui: {
@@ -98,6 +136,12 @@ async function buildExtension(): Promise<void> {
         matches: ['http://*/*', 'https://*/*'],
         js: ['content-script.js'],
         run_at: 'document_idle',
+      },
+    ],
+    web_accessible_resources: [
+      {
+        resources: ['fonts/*.woff2', 'icons/icon-32.png'],
+        matches: ['http://*/*', 'https://*/*'],
       },
     ],
     content_security_policy: {
