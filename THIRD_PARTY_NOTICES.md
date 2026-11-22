@@ -6,22 +6,26 @@ It incorporates or depends on the following open-source runtime packages:
 
 ## Extension & Shared Runtime Dependencies
 
-1. **fflate (`0.8.3`)**
+1. **dompurify (`3.4.18`)**
+   - License: MPL-2.0 OR Apache-2.0
+   - Repository: https://github.com/cure53/DOMPurify
+   - Copyright (c) Mario Heiderich, Cure53
+2. **fflate (`0.8.3`)**
    - License: MIT
    - Repository: https://github.com/101arrowz/fflate
    - Copyright (c) 2020 Arjun Barrett
-2. **idb (`8.0.4`)**
+3. **idb (`8.0.4`)**
    - License: ISC
    - Repository: https://github.com/jakearchibald/idb
    - Copyright (c) Jake Archibald
-3. **zod (`4.6.7`)**
+4. **zod (`4.6.7`)**
    - License: MIT
    - Repository: https://github.com/colinhacks/zod
    - Copyright (c) Colin McDonnell
 
 ## Optional Backend Runtime Dependencies
 
-4. **fastify (`5.12.8`)**, **`@fastify/cors (`11.4.3`)**, **`@fastify/helmet (`13.2.0`)**, **`@fastify/rate-limit (`11.3.0`)**, **`@fastify/swagger (`9.9.5`)**
+5. **fastify (`5.12.8`)**, **`@fastify/cors (`11.4.3`)**, **`@fastify/helmet (`13.2.0`)**, **`@fastify/rate-limit (`11.3.0`)**, **`@fastify/swagger (`9.9.5`)**
    - License: MIT
    - Repository: https://github.com/fastify/fastify
    - Copyright (c) Fastify Contributors

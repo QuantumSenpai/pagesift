@@ -9,12 +9,13 @@ Before running measurements in Chromium, the following per-tool latency budgets 
 | Operation | Provisional Max Budget |
 | :--- | :--- |
 | 1. Inspect single element (`RUN_INSPECT_ELEMENT`) | `<= 50 ms` |
-| 2. Clone Page static HTML/CSS snapshot ZIP (`RUN_CLONE_PAGE`) | `<= 600 ms` |
+| 2. Clone Page static HTML/CSS snapshot ZIP with DOMPurify & background asset fetch (`RUN_CLONE_PAGE`) | `<= 1200 ms` |
 | 3. Clone Prompt local generation (`RUN_CLONE_PROMPT`) | `<= 400 ms` |
 | 4. Design MD extraction & generation (`RUN_DESIGN_MD`) | `<= 400 ms` |
-| 5. Assets discovery & ZIP packaging (`RUN_ASSETS_EXTRACT`) | `<= 300 ms` |
+| 5. Assets discovery & background-fetched ZIP packaging (`RUN_ASSETS_EXTRACT`) | `<= 500 ms` |
 | 6. Colors extraction & 5-format export (`RUN_COLORS_EXTRACT`) | `<= 250 ms` |
 | 7. Fonts & `@font-face` extraction (`RUN_FONTS_EXTRACT`) | `<= 250 ms` |
+| 10. Real Screenshot Capture visible PNG (`RUN_CAPTURE`) | `<= 1500 ms` |
 | 14. Local Design & WCAG Contrast Review (`RUN_DESIGN_REVIEW`) | `<= 350 ms` |
 | 15. Public Tech Stack Detection (`RUN_TECH_STACK`) | `<= 150 ms` |
 
@@ -26,24 +27,29 @@ Before running measurements in Chromium, the following per-tool latency budgets 
   ```
 - **Script**: `scripts/extension-benchmark.ts`
 - **Hardware & OS**: Apple M5 (10 cores, 16 GiB RAM), macOS `darwin arm64 (27.2.0)`
-- **Browser Runtime**: Real Chromium (`Google Chrome for Testing 159.0.8154.6` / `HeadlessChrome/159.0.0.0`) with unpacked Manifest V3 extension loaded from `dist/extension`
+- **Browser Runtime**: Real Chromium (`HeadlessChrome/159.0.0.0`) with unpacked Manifest V3 extension loaded from `dist/extension`
 - **Fixture Size**: `500` structured card components (`2,009` total DOM elements) with CSS Grid, Flexbox, sticky header, and custom properties.
 
 ### 3. Measured Extension Timings & Memory
 
 | Operation | Provisional Budget | Measured Latency | Status |
 | :--- | :--- | :--- | :--- |
-| 1. Inspect single element | `<= 50 ms` | `4.06 ms` | Pass |
-| 2. Clone Page static HTML/CSS snapshot ZIP | `<= 600 ms` | `7.34 ms` | Pass |
-| 3. Clone Prompt local generation | `<= 400 ms` | `13.55 ms` | Pass |
-| 4. Design MD extraction & generation | `<= 400 ms` | `17.46 ms` | Pass |
-| 5. Assets discovery & ZIP packaging | `<= 300 ms` | `2.67 ms` | Pass |
-| 6. Colors extraction & 5-format export | `<= 250 ms` | `10.33 ms` | Pass |
-| 7. Fonts & `@font-face` extraction | `<= 250 ms` | `4.90 ms` | Pass |
-| 14. Local Design & WCAG Contrast Review | `<= 350 ms` | `6.15 ms` | Pass |
-| 15. Public Tech Stack Detection | `<= 150 ms` | `1.36 ms` | Pass |
+| 1. Inspect single element | `<= 50 ms` | `4.30 ms` | Pass |
+| 2. Clone Page static HTML/CSS snapshot ZIP (DOMPurify + background fetch) | `<= 1200 ms` | `16.38 ms` | Pass |
+| 3. Clone Prompt local generation | `<= 400 ms` | `13.83 ms` | Pass |
+| 4. Design MD extraction & generation | `<= 400 ms` | `16.65 ms` | Pass |
+| 5. Assets discovery & background-fetched ZIP packaging | `<= 500 ms` | `3.81 ms` | Pass |
+| 6. Colors extraction & 5-format export | `<= 250 ms` | `10.45 ms` | Pass |
+| 7. Fonts & `@font-face` extraction | `<= 250 ms` | `4.72 ms` | Pass |
+| 10. Real Screenshot Capture (`visible` PNG via `captureVisibleTab`) | `<= 1500 ms` | `204.74 ms` | Pass |
+| 14. Local Design & WCAG Contrast Review | `<= 350 ms` | `7.54 ms` | Pass |
+| 15. Public Tech Stack Detection | `<= 150 ms` | `1.55 ms` | Pass |
 
-- **Measured Process Memory**: `151.4 MiB` RSS / `37.7 MiB` Heap Used.
+- **Measured Process Memory**: `151.8 MiB` RSS / `30.3 MiB` Heap Used.
+- **Enforced Safety & Resource Limits**:
+  - Full-page screenshot stitching: `MAX_CAPTURE_CANVAS_DIM_PX = 32768` physical pixels, `MAX_WEBP_DIMENSION_PX = 16383` for WebP encoding, `MAX_FULL_PAGE_TILES = 40`, minimum `550 ms` inter-tile interval (`MIN_CAPTURE_INTERVAL_MS`).
+  - Privileged background asset fetching: concurrency `4`, per-request timeout `10s`, streaming byte limits `5 MiB` per asset and `25 MiB` total archive.
+  - NVIDIA AI sanitized context limits: max depth `5`, max array length `40`, max object keys `40`, max string length `1,000` chars, max total payload `24 KiB`.
 
 ---
 

@@ -46,20 +46,21 @@ flowchart TD
 ## 2. Component Separation and Responsibilities
 
 ### A. Content Script (`src/extension/content/content-script.ts`)
-- Generates a per-document `documentId` token at injection time. Any runtime message carrying a stale `documentId` from before a navigation event is rejected with `STALE_DOCUMENT`.
+- Generates a per-document `documentId` token at injection time. All document-bound operations require a matching `documentId` and reject missing or stale bindings with `STALE_DOCUMENT`.
 - Renders interactive hover/selection/measurement overlays inside an isolated Shadow DOM host (`#pagesift-root-host` with `data-pagesift-root="true"`). All extraction and capture engines filter out `[data-pagesift-root]` so PageSift never inspects or screenshots its own UI.
-- Throttles pointer hover updates with `requestAnimationFrame` and separates DOM reads from overlay style writes.
+- Coordinates DOM preparation, tile scrolling, and guaranteed `finally` restoration (`CAPTURE_PREPARE`, `CAPTURE_SCROLL_TO`, `CAPTURE_RESTORE`) for background-driven screenshot capture without accepting test fallback data in production paths.
+- Emits throttled, echo-suppressed `SYNC_SCROLL` events when registered in an active responsive preview session (`SET_RESPONSIVE_SYNC`), and reports actual inner/outer viewport metrics (`GET_VIEWPORT_METRICS`).
 - Maintains a per-document `PageEditController` stack for reversible `Edit Text`, `Swap Font`, and `Arrange` previews with full `Undo`, `Redo`, and `Reset All`, automatically cleaning up listeners and mutations on `Escape` or `pagehide`.
 
 ### B. Background Service Worker (`src/extension/background/service-worker.ts`)
-- Registers top-level `chrome.runtime.onInstalled`, `chrome.runtime.onStartup`, and `chrome.runtime.onMessage` listeners synchronously at worker startup.
-- Validates every incoming message envelope against `runtimeMessageEnvelopeSchema` (`schemaVersion: 1`) and verifies sender identity via `validateSenderAuthorization`.
-- Persists job states in the IndexedDB `jobs` store (`v2` schema) and executes `recoverInterruptedJobs()` on service worker wake-up so MV3 worker termination never leaves dangling in-flight state.
-- Coordinates privileged operations (`chrome.tabs.captureVisibleTab`, `chrome.windows.create` for responsive viewports, scroll synchronization broadcast with echo suppression, IndexedDB backup/restore, and optional NVIDIA NIM requests).
+- Registers top-level `chrome.runtime.onInstalled`, `chrome.runtime.onStartup`, `chrome.runtime.onMessage`, `chrome.tabs.onRemoved`, `chrome.tabs.onUpdated`, and `chrome.windows.onRemoved` listeners synchronously at worker startup.
+- Validates every incoming message envelope and operation-specific payload against Zod schemas (`schemaVersion: 1`) and verifies sender authorization via `validateSenderAuthorization`.
+- Persists real `LocalJobRecord` entries in IndexedDB for long-running capture, clone, and asset archive operations, routes active `CANCEL_JOB` signals to `AbortController` instances, and runs `recoverInterruptedJobs()` on worker wake-up.
+- Runs real screenshot capture (`chrome.tabs.captureVisibleTab` + target tab verification + `OffscreenCanvas` stitching/cropping/annotation/encoding + binary PDF JPEG XObject assembly), privileged HTTP(S) asset fetching (`asset-fetcher.ts` with streaming byte limits and `credentials: 'omit'`), responsive preview window lifecycle & session persistence, IndexedDB storage/backup operations, and optional NVIDIA NIM requests with mandatory egress preview digest confirmation.
 
 ### C. Extension-Owned UI Pages (`workspace.html`, `options.html`)
-- **`workspace.html` / `workspace.ts`**: Action popup and full-tab workspace providing controls for all 15 tools, project/artifact persistence in IndexedDB, reversible edit controls (`Undo`/`Redo`/`Reset`), and optional NVIDIA egress preview & invocation.
-- **`options.html` / `options.ts`**: Manages default export preferences (`chrome.storage.local`), session-only NVIDIA API key configuration (`chrome.storage.session`), IndexedDB byte-usage reporting, and validated JSON backup export/import.
+- **`workspace.html` / `workspace.ts`**: Action popup and full-tab workspace (**Open Full Tab** button so popup dismissal never interrupts long-running work) providing controls for all 15 tools, real screenshot preview + crop/annotation controls, responsive preset/custom window launcher + sync toggle + cleanup button, real file download and clipboard copy controls across outputs, project/artifact/capture persistence in IndexedDB, reversible edit controls (`Undo`/`Redo`/`Reset`), and optional NVIDIA egress preview & confirmed invocation.
+- **`options.html` / `options.ts`**: Manages default export preferences (`chrome.storage.local`), session-only NVIDIA API key configuration (`chrome.storage.session`), IndexedDB byte-usage reporting, downloadable JSON backup export, and validated atomic backup import/reset.
 
 ### D. Optional Self-Hosted Backend (`src/app.ts`, `src/server.ts`)
 - Preserved as an optional Fastify + PostgreSQL 17 modular monolith for users who wish to self-host cloud project/artifact storage later. The Chrome extension does not depend on this server to run any of its 15 tools.

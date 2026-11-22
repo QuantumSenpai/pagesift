@@ -28,6 +28,10 @@ The following libraries were resolved and queried through the Context7 MCP serve
 7. **Zod (`zod@4.6.7`) & Vitest (`vitest@5.1.1`)**
    - **Context7 Library IDs**: `/colinhacks/zod`, `/vitest-dev/vitest`
    - **Topics Consulted**: Strict vs. passthrough object validation (`z.strictObject`, `z.object`), discriminated unions for runtime messaging, and test lifecycle hooks.
+8. **DOMPurify (`dompurify@3.4.18`)**
+   - **Context7 Library ID**: `/cure53/dompurify`
+   - **Topics Consulted**: `WHOLE_DOCUMENT` sanitization, `FORBID_TAGS` (`iframe`, `object`, `embed`, `base`, `meta`, `link`, `template`, `selectedcontent`), `FORBID_ATTR` (`srcdoc`, `action`, `formaction`), `ALLOWED_URI_REGEXP`, SVG sanitization profiles, and JSDOM/browser initialization (`createDOMPurify(window)`).
+   - **Reference**: https://github.com/cure53/DOMPurify/blob/main/README.md & https://github.com/cure53/DOMPurify/wiki/Security-Goals-&-Threat-Model
 
 ---
 
@@ -36,8 +40,8 @@ The following libraries were resolved and queried through the Context7 MCP serve
 Where Context7 did not index platform-specific Chrome Extension MV3 APIs or NVIDIA NIM specifications, official documentation was consulted:
 
 1. **Chrome Extensions Manifest V3 (Chrome for Developers)**
-   - Service worker lifecycle, `chrome.runtime.onMessage` sender verification, `chrome.storage.local` and `chrome.storage.session`, `chrome.tabs.captureVisibleTab`, `chrome.downloads.download`, `chrome.windows.create`, and `chrome.permissions.request`.
-   - Reference: https://developer.chrome.com/docs/extensions/reference/api
+   - Service worker lifecycle, `chrome.runtime.onMessage` sender verification, `chrome.storage.local` and `chrome.storage.session`, `chrome.tabs.captureVisibleTab` (including Chromium's `<all_urls>` or `activeTab` requirement for non-popup capture contexts), `chrome.downloads.download`, `chrome.windows.create`, and `chrome.permissions.request`.
+   - Reference: https://developer.chrome.com/docs/extensions/reference/api & https://developer.chrome.com/docs/extensions/reference/api/tabs#method-captureVisibleTab
 2. **NVIDIA NIM Chat Completions API**
    - OpenAI-compatible endpoint `https://integrate.api.nvidia.com/v1/chat/completions` (`POST` with `Authorization: Bearer <NVIDIA_API_KEY>`, `model`, `messages`, `temperature`, `max_tokens`, `stream: false`) and `GET https://integrate.api.nvidia.com/v1/models`.
    - Reference: https://docs.api.nvidia.com/nim/reference/llm-apis

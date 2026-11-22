@@ -2,61 +2,57 @@
 
 ## 1. Overview
 
-All 15 PageSift tools work 100% locally without any AI credentials. For users who want optional LLM enhancement of local `Clone Prompt` blueprints or `Design Review` findings, PageSift includes a small, strict adapter (`src/extension/ai/nvidia-client.ts`) targeting NVIDIA's OpenAI-compatible NIM API.
+All 15 PageSift tools work locally without any AI credentials. For users who explicitly choose optional LLM enhancement of local `Clone Prompt` blueprints or `Design Review` findings, PageSift includes a strict adapter (`src/extension/ai/nvidia-client.ts`) targeting NVIDIA's OpenAI-compatible NIM API.
 
 - **Verified Endpoint Allowlist**:
   - `https://integrate.api.nvidia.com/v1/chat/completions`
 - **User-Owned Key & Model ID**:
   - No developer-owned key is bundled, and PageSift never invents a fallback model ID.
-  - The user supplies their own NVIDIA API key (`nvapi-...`) and their chosen catalog model ID (for example `meta/llama-3.1-70b-instruct` from https://build.nvidia.com).
-  - Provider access is governed by the user's own NVIDIA account terms and credits; PageSift does not assume provider access is free.
+  - The user supplies their own NVIDIA API key (`nvapi-...`) and chosen catalog model ID (for example `meta/llama-3.1-70b-instruct` from https://build.nvidia.com).
+  - Provider access is governed by the user's own NVIDIA account terms and credits.
 
 ---
 
-## 2. Key Storage and Security Boundaries
+## 2. Key Storage and Privileged Boundary
 
 1. **Session-Only Storage by Default (`chrome.storage.session`)**:
-   - The user's NVIDIA API key is stored in `chrome.storage.session`, which resides in memory for the current browser session only and is cleared automatically when the browser exits.
-   - **Important Disclosure**: Browser extension storage is not a hardware security vault; only enter an API key on a trusted device and browser profile.
-2. **Restricted to Privileged Extension Contexts**:
-   - `SET_NVIDIA_API_KEY`, `CLEAR_NVIDIA_API_KEY`, `GET_NVIDIA_KEY_STATUS`, and `RUN_NVIDIA_ENHANCEMENT` are enforced by `validateSenderAuthorization` in `src/extension/protocol/messages.ts` as privileged extension-page-only operations (`chrome-extension://<id>/workspace.html` or `options.html`).
-   - Content scripts and inspected web pages cannot read the API key, check key status, or trigger AI requests.
+   - The user's NVIDIA API key is stored in `chrome.storage.session` (in memory for the current browser session only) and is cleared automatically when the browser exits.
+   - Browser extension storage is not a hardware security vault; only enter an API key on a trusted device and browser profile.
+2. **Privileged Extension-Page Enforcement**:
+   - `SET_NVIDIA_API_KEY`, `CLEAR_NVIDIA_API_KEY`, `GET_NVIDIA_KEY_STATUS`, and `RUN_NVIDIA_ENHANCEMENT` require a trusted extension UI page sender (`chrome-extension://<id>/workspace.html` or `options.html`). Content scripts and inspected pages are rejected with `UNAUTHORIZED_SENDER`.
    - The API key is never written to `chrome.storage.local`, IndexedDB, exported JSON backups, snapshot ZIP archives, or console logs.
 
 ---
 
-## 3. Data Egress Transparency
+## 3. Data Minimization, Allowlist, and Preview/Confirmation Consistency
 
-Before sending any request to `https://integrate.api.nvidia.com/v1/chat/completions`, users can click **"Preview NVIDIA Data Egress"** in the Workspace UI (`buildNvidiaEgressPreview`), which displays the exact sanitized JSON payload that will leave the device:
+PageSift does **not** forward arbitrary tool outputs or trust a caller-supplied `sanitizedContext` field at the background boundary. Instead, `BackgroundCoordinator` rebuilds a compact allowlisted payload via `buildAllowlistedNvidiaContext()` for supported tasks (`enhance_clone_prompt` and `interpret_design_review`) and runs recursive sanitization across both objects and arrays:
 
-- **What Leaves the Device**:
-  - Compact extracted structural summary (`pageTitle`, `targetFramework`, top normalized hex colors, primary font families, spacing scale numbers, layout/component observations, or design review finding summaries).
-- **What Is Explicitly Excluded**:
-  - Form input values, `<textarea>` contents, and passwords.
-  - Cookies, `Authorization` headers, and session tokens.
-  - Sensitive URL query parameters and fragments (`?token=...#...` are stripped from any URL in the context).
-  - Full raw page HTML dumps.
+- **Allowlisted Fields Only**:
+  - `enhance_clone_prompt`: `sourceTool`, `pageTitle`, `sourceUrl`, `targetFramework`, `observations`, `assumptions`, `prompt`, `colors`/`topColors`/`palette`, `typography`/`fonts`, `spacing`/`spacingScale`, `layout`, `components`, `sections`, `markdown`.
+  - `interpret_design_review`: `sourceTool`, `pageTitle`, `sourceUrl`, `findings`, `findingsCount`, `summary`, `counts`, `remediationPrompt`, `colors`, `typography`, `spacing`, `layout`.
+- **Recursive Structural Removal (Objects & Arrays)**:
+  - Recursively strips case-insensitive sensitive structural field names matching or containing `password`, `passwd`, `pwd`, `secret`, `token`, `apikey`, `authorization`, `authheader`, `cookie`, `session`, `credential`, `privatekey`, `formvalues`, `rawhtml`, `htmlcontent`, `htmlpreview`, `zipbase64`, `dataurl`, `backup`, `bearer`, `csrf`, `creditcard`, `cardnumber`, `cvv`, `ssn` at every supported nesting depth inside objects and arrays.
+  - Strips `username`, `password`, query strings (`?...`), and fragments (`#...`) from HTTP(S) URLs (including URLs embedded in strings), and replaces `data:` URIs with `[omitted-data-uri]`.
+  - Enforces hard structural limits: max depth `6`, max array length `30`, max object keys `40`, max string length `1,000` chars, and max serialized payload size `16,384` bytes.
+- **Honest Limitation on Prose**:
+  - Structural key and URL sanitization cannot guarantee detection of arbitrary secrets typed into unstructured page text or headings. Users must inspect the **Preview NVIDIA Data Egress** output before confirming transmission.
+- **Mandatory Preview-to-Execution Digest Lock**:
+  - Clicking **Preview NVIDIA Data Egress** (`previewOnly: true`) computes and caches a deterministic `payloadDigest` over the exact outgoing JSON.
+  - Clicking **Confirm & Enhance with Optional NVIDIA AI** (`previewOnly: false`) requires `confirmedPayloadDigest` matching the exact rebuilt payload. Changing tool output or switching tools invalidates the confirmation and requires a fresh preview.
 
 ---
 
 ## 4. Reliability and Output Safety
 
-- **Timeout & Cancellation**: Requests enforce a bounded timeout (`20,000 ms` default) and support immediate user cancellation via `AbortController`.
-- **Bounded Output**: Requests set `max_tokens: 1024` and `stream: false`, and responses are capped at `16,384` characters.
-- **Error & Rate-Limit Handling**:
-  - `HTTP 401 / 403`: Reports authentication failure and prompts the user to check their NVIDIA API key.
-  - `HTTP 404`: Reports that the specified model ID was not found in the NVIDIA catalog.
-  - `HTTP 429`: Reports rate limiting and surfaces `Retry-After` when present.
-  - `HTTP 5xx`: Performs at most `1` bounded retry before returning a structured error.
-- **Inert Output Handling**: Model completions are rendered strictly as plain text (`textContent`) inside `<pre id="tool-output">` and are never passed to `innerHTML`, `eval`, or privileged extension actions.
+- **Timeout & Cancellation**: Requests enforce a bounded timeout (`20,000 ms` default) and support immediate user cancellation via `AbortController` / `CANCEL_JOB`.
+- **Bounded Output**: Requests set `max_tokens: 1024` and `stream: false`; responses are capped at `16,384` characters.
+- **Error & Rate-Limit Handling**: Handles `HTTP 401/403`, `HTTP 404`, `HTTP 429` (surfacing `Retry-After`), malformed JSON responses, timeouts, cancellations, and at most `1` bounded retry on `HTTP 5xx`.
+- **Inert Output Handling**: Completions are displayed strictly as plain text (`textContent`) and are never passed to `innerHTML`, `eval`, or privileged actions.
 
 ---
 
-## 5. Setup and Manual Verification Steps
+## 5. Verification Status
 
-1. Open PageSift Options (`chrome-extension://<id>/options.html`).
-2. Enter your chosen NVIDIA catalog model ID (e.g., `meta/llama-3.1-70b-instruct`) under **Optional NVIDIA Catalog Model ID** and click **Save Preferences**.
-3. Enter your NVIDIA API key (`nvapi-...`) under **Optional NVIDIA NIM Session API Key** and click **Set Session Key**.
-4. Open PageSift Workspace on any inspected page, run **3. Clone Prompt** or **14. Design Review** locally, click **Preview NVIDIA Data Egress** to inspect the outgoing payload, and click **Enhance with Optional NVIDIA AI**.
-
-> **Verification Status Note**: The NVIDIA client boundary, endpoint allowlist, payload sanitization, retry/timeout/abort handling, and HTTP 200/401/404/429/503 responses are verified via controlled boundary tests in `tests/unit/extension-slice6-10-engines.test.ts`. Live external calls against `https://integrate.api.nvidia.com` require user-supplied credentials and are marked pending manual verification with a live key.
+- Automated boundary tests (`tests/unit/extension-regressions.test.ts` and `tests/unit/extension-slice6-10-engines.test.ts`) verify recursive array/object secret removal, credential-URL stripping, depth/byte caps, preview/execution digest consistency, malformed JSON, timeout, cancellation, `401`/`404`/`429`/`503` handling, and zero AI traffic during local-only tools.
+- Live calls against `https://integrate.api.nvidia.com` remain pending manual verification with a user-supplied live key.
