@@ -12,6 +12,11 @@ export const extensionSettingsSchema = z.strictObject({
   tailwindVersion: z.enum(['v3', 'v4']).default('v4'),
   includeResponsiveBreakpoints: z.boolean().default(true),
   redactSensitiveQueryParams: z.boolean().default(true),
+  recordActivityHistory: z.boolean().default(true),
+  activityRetentionDays: z.number().int().min(7).max(365).default(90),
+  activityMaxEntries: z.number().int().min(50).max(2000).default(500),
+  activityFirstUseNoticeDismissed: z.boolean().default(false),
+  sidebarCollapsed: z.boolean().default(false),
   defaultPromptTarget: z
     .enum(['generic', 'react_tailwind', 'html_css', 'vue_css'])
     .default('react_tailwind'),

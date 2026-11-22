@@ -1,9 +1,18 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { z } from 'zod';
 import type { ToolId } from '../protocol/messages.js';
+import {
+  DEFAULT_ACTIVITY_MAX_ENTRIES,
+  DEFAULT_ACTIVITY_RETENTION_DAYS,
+  localActivitySchema,
+  type ActivityQueryFilter,
+  type ActivityQueryItem,
+  type ActivityQueryResult,
+  type LocalActivityRecord,
+} from './activity-history.js';
 
 export const LOCAL_DB_NAME = 'pagesift_local_db';
-export const LOCAL_DB_VERSION = 2;
+export const LOCAL_DB_VERSION = 3;
 export const DEFAULT_SOFT_QUOTA_BYTES = 50 * 1024 * 1024;
 
 export const localProjectSchema = z.strictObject({
@@ -90,11 +99,12 @@ export const localJobSchema = z.strictObject({
 export type LocalJobRecord = z.infer<typeof localJobSchema>;
 
 export const localBackupBundleSchema = z.strictObject({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.union([z.literal(1), z.literal(2)]),
   exportedAt: z.iso.datetime(),
   projects: z.array(localProjectSchema).max(1000),
   artifacts: z.array(localArtifactSchema).max(5000),
   captures: z.array(localCaptureSchema).max(1000),
+  activities: z.array(localActivitySchema).max(2000).default([]),
 });
 
 export type LocalBackupBundle = z.infer<typeof localBackupBundleSchema>;
@@ -130,6 +140,17 @@ export interface PageSiftIndexedDbSchema extends DBSchema {
       'by-status': string;
     };
   };
+  activities: {
+    key: string;
+    value: LocalActivityRecord;
+    indexes: {
+      'by-startedAt': string;
+      'by-origin': string;
+      'by-tool': string;
+      'by-status': string;
+      'by-session': string;
+    };
+  };
 }
 
 export interface StorageUsageReport {
@@ -137,6 +158,7 @@ export interface StorageUsageReport {
   artifactCount: number;
   captureCount: number;
   jobCount: number;
+  activityCount: number;
   usedBytes: number;
   softQuotaBytes: number;
   percentUsed: number;
@@ -192,6 +214,17 @@ export async function openPageSiftDb(
           jobStore.createIndex('by-status', 'status');
         }
       }
+
+      if (oldVersion < 3) {
+        if (!db.objectStoreNames.contains('activities')) {
+          const actStore = db.createObjectStore('activities', { keyPath: 'id' });
+          actStore.createIndex('by-startedAt', 'startedAt');
+          actStore.createIndex('by-origin', 'sourceOrigin');
+          actStore.createIndex('by-tool', 'tool');
+          actStore.createIndex('by-status', 'status');
+          actStore.createIndex('by-session', 'sessionId');
+        }
+      }
     },
   });
 }
@@ -226,12 +259,16 @@ export class LocalExtensionStorage {
 
   public async getStorageUsage(): Promise<StorageUsageReport> {
     const db = await this.getDb();
-    const tx = db.transaction(['projects', 'artifacts', 'captures', 'jobs'], 'readonly');
-    const [projects, artifacts, captures, jobs] = await Promise.all([
+    const tx = db.transaction(
+      ['projects', 'artifacts', 'captures', 'jobs', 'activities'],
+      'readonly',
+    );
+    const [projects, artifacts, captures, jobs, activities] = await Promise.all([
       tx.objectStore('projects').getAll(),
       tx.objectStore('artifacts').getAll(),
       tx.objectStore('captures').getAll(),
       tx.objectStore('jobs').getAll(),
+      tx.objectStore('activities').getAll(),
     ]);
     await tx.done;
 
@@ -248,6 +285,9 @@ export class LocalExtensionStorage {
     for (const j of jobs) {
       usedBytes += measureRecordBytes(j);
     }
+    for (const act of activities) {
+      usedBytes += measureRecordBytes(act);
+    }
 
     const percentUsed =
       this.softQuotaBytes > 0
@@ -259,6 +299,7 @@ export class LocalExtensionStorage {
       artifactCount: artifacts.length,
       captureCount: captures.length,
       jobCount: jobs.length,
+      activityCount: activities.length,
       usedBytes,
       softQuotaBytes: this.softQuotaBytes,
       percentUsed,
@@ -398,8 +439,12 @@ export class LocalExtensionStorage {
 
   public async recoverInterruptedJobs(): Promise<number> {
     const db = await this.getDb();
-    const tx = db.transaction('jobs', 'readwrite');
+    const tx = db.transaction(['jobs', 'activities'], 'readwrite');
     const runningJobs = await tx.objectStore('jobs').index('by-status').getAll('running');
+    const runningActivities = await tx
+      .objectStore('activities')
+      .index('by-status')
+      .getAll('running');
     const nowIso = new Date().toISOString();
 
     for (const job of runningJobs) {
@@ -411,8 +456,172 @@ export class LocalExtensionStorage {
       });
     }
 
+    for (const activity of runningActivities) {
+      const startedMs = Date.parse(activity.startedAt);
+      const elapsedMs = Number.isFinite(startedMs) ? Math.max(0, Date.now() - startedMs) : null;
+      await tx.objectStore('activities').put({
+        ...activity,
+        status: 'interrupted',
+        completedAt: nowIso,
+        durationMs: elapsedMs,
+        errorCategory: 'WORKER_INTERRUPTED',
+        resultSummary: activity.resultSummary || 'Interrupted before completion',
+      });
+    }
+
     await tx.done;
-    return runningJobs.length;
+    return runningJobs.length + runningActivities.length;
+  }
+
+  public async upsertActivity(record: LocalActivityRecord): Promise<LocalActivityRecord> {
+    const validated = localActivitySchema.parse(record);
+    const db = await this.getDb();
+    await db.put('activities', validated);
+    return validated;
+  }
+
+  public async getActivity(activityId: string): Promise<LocalActivityRecord | undefined> {
+    const db = await this.getDb();
+    return db.get('activities', activityId);
+  }
+
+  public async deleteActivity(activityId: string): Promise<void> {
+    const db = await this.getDb();
+    await db.delete('activities', activityId);
+  }
+
+  public async deleteActivitySession(sessionId: string): Promise<number> {
+    const db = await this.getDb();
+    const tx = db.transaction('activities', 'readwrite');
+    const keys = await tx.objectStore('activities').index('by-session').getAllKeys(sessionId);
+    for (const key of keys) {
+      await tx.objectStore('activities').delete(key);
+    }
+    await tx.done;
+    return keys.length;
+  }
+
+  public async clearActivities(): Promise<void> {
+    const db = await this.getDb();
+    await db.clear('activities');
+  }
+
+  public async pruneActivities(options?: {
+    retentionDays?: number;
+    maxEntries?: number;
+    nowMs?: number;
+  }): Promise<number> {
+    const retentionDays = options?.retentionDays ?? DEFAULT_ACTIVITY_RETENTION_DAYS;
+    const maxEntries = options?.maxEntries ?? DEFAULT_ACTIVITY_MAX_ENTRIES;
+    const nowMs = options?.nowMs ?? Date.now();
+    const cutoffIso = new Date(nowMs - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+
+    const db = await this.getDb();
+    const tx = db.transaction('activities', 'readwrite');
+    const store = tx.objectStore('activities');
+    const all = await store.index('by-startedAt').getAll();
+    let deleted = 0;
+
+    const kept: LocalActivityRecord[] = [];
+    for (const row of all) {
+      if (row.startedAt < cutoffIso) {
+        await store.delete(row.id);
+        deleted += 1;
+      } else {
+        kept.push(row);
+      }
+    }
+
+    if (kept.length > maxEntries) {
+      const overflow = kept.length - maxEntries;
+      for (let i = 0; i < overflow; i += 1) {
+        const oldest = kept[i];
+        if (oldest) {
+          await store.delete(oldest.id);
+          deleted += 1;
+        }
+      }
+    }
+
+    await tx.done;
+    return deleted;
+  }
+
+  public async queryActivities(filter: ActivityQueryFilter = {}): Promise<ActivityQueryResult> {
+    const db = await this.getDb();
+    const tx = db.transaction(['activities', 'artifacts', 'captures'], 'readonly');
+    const actStore = tx.objectStore('activities');
+
+    let candidates: LocalActivityRecord[];
+    if (filter.origin) {
+      candidates = await actStore.index('by-origin').getAll(filter.origin);
+    } else if (filter.tool) {
+      candidates = await actStore.index('by-tool').getAll(filter.tool);
+    } else if (filter.status) {
+      candidates = await actStore.index('by-status').getAll(filter.status);
+    } else {
+      candidates = await actStore.index('by-startedAt').getAll();
+    }
+
+    const domainSet = new Set<string>();
+    for (const row of candidates) {
+      if (row.sourceDomain) {
+        domainSet.add(row.sourceDomain);
+      }
+    }
+    if (filter.origin || filter.tool || filter.status) {
+      const allForDomains = await actStore.getAll();
+      for (const row of allForDomains) {
+        if (row.sourceDomain) {
+          domainSet.add(row.sourceDomain);
+        }
+      }
+    }
+
+    const searchLower = filter.search?.trim().toLowerCase() ?? '';
+    const filtered = candidates.filter((row) => {
+      if (filter.origin && row.sourceOrigin !== filter.origin) return false;
+      if (filter.domain && row.sourceDomain !== filter.domain) return false;
+      if (filter.tool && row.tool !== filter.tool) return false;
+      if (filter.status && row.status !== filter.status) return false;
+      if (filter.fromIso && row.startedAt < filter.fromIso) return false;
+      if (filter.toIso && row.startedAt > filter.toIso) return false;
+      if (searchLower) {
+        const hay =
+          `${row.pageTitle} ${row.sourceUrl} ${row.tool} ${row.actionLabel} ${row.resultSummary}`.toLowerCase();
+        if (!hay.includes(searchLower)) return false;
+      }
+      return true;
+    });
+
+    filtered.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+
+    const limit = Math.max(1, Math.min(100, filter.limit ?? 25));
+    const offset = Math.max(0, filter.offset ?? 0);
+    const pageRows = filtered.slice(offset, offset + limit);
+
+    const artStore = tx.objectStore('artifacts');
+    const capStore = tx.objectStore('captures');
+    const items: ActivityQueryItem[] = [];
+    for (const row of pageRows) {
+      let linkedResourceStatus: 'present' | 'removed' | 'none' = 'none';
+      if (row.linkedArtifactId) {
+        const exists = await artStore.getKey(row.linkedArtifactId);
+        linkedResourceStatus = exists ? 'present' : 'removed';
+      } else if (row.linkedCaptureId) {
+        const exists = await capStore.getKey(row.linkedCaptureId);
+        linkedResourceStatus = exists ? 'present' : 'removed';
+      }
+      items.push({ ...row, linkedResourceStatus });
+    }
+
+    await tx.done;
+    return {
+      items,
+      totalMatching: filtered.length,
+      hasMore: offset + pageRows.length < filtered.length,
+      domains: Array.from(domainSet).sort(),
+    };
   }
 
   public async StartToolJob(params: {
@@ -437,20 +646,22 @@ export class LocalExtensionStorage {
 
   public async exportBackup(): Promise<LocalBackupBundle> {
     const db = await this.getDb();
-    const tx = db.transaction(['projects', 'artifacts', 'captures'], 'readonly');
-    const [projects, artifacts, captures] = await Promise.all([
+    const tx = db.transaction(['projects', 'artifacts', 'captures', 'activities'], 'readonly');
+    const [projects, artifacts, captures, activities] = await Promise.all([
       tx.objectStore('projects').getAll(),
       tx.objectStore('artifacts').getAll(),
       tx.objectStore('captures').getAll(),
+      tx.objectStore('activities').getAll(),
     ]);
     await tx.done;
 
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       exportedAt: new Date().toISOString(),
       projects,
       artifacts,
       captures,
+      activities,
     };
   }
 
@@ -458,6 +669,7 @@ export class LocalExtensionStorage {
     importedProjects: number;
     importedArtifacts: number;
     importedCaptures: number;
+    importedActivities: number;
   }> {
     const validated = localBackupBundleSchema.parse(rawBundle);
     const projectIds = new Set(validated.projects.map((p) => p.id));
@@ -481,7 +693,7 @@ export class LocalExtensionStorage {
     await this.ensureQuotaAvailable(totalBundleBytes);
 
     const db = await this.getDb();
-    const tx = db.transaction(['projects', 'artifacts', 'captures'], 'readwrite');
+    const tx = db.transaction(['projects', 'artifacts', 'captures', 'activities'], 'readwrite');
     for (const project of validated.projects) {
       await tx.objectStore('projects').put(project);
     }
@@ -491,23 +703,31 @@ export class LocalExtensionStorage {
     for (const capture of validated.captures) {
       await tx.objectStore('captures').put(capture);
     }
+    for (const activity of validated.activities) {
+      await tx.objectStore('activities').put(activity);
+    }
     await tx.done;
 
     return {
       importedProjects: validated.projects.length,
       importedArtifacts: validated.artifacts.length,
       importedCaptures: validated.captures.length,
+      importedActivities: validated.activities.length,
     };
   }
 
   public async clearAll(): Promise<void> {
     const db = await this.getDb();
-    const tx = db.transaction(['projects', 'artifacts', 'captures', 'jobs'], 'readwrite');
+    const tx = db.transaction(
+      ['projects', 'artifacts', 'captures', 'jobs', 'activities'],
+      'readwrite',
+    );
     await Promise.all([
       tx.objectStore('projects').clear(),
       tx.objectStore('artifacts').clear(),
       tx.objectStore('captures').clear(),
       tx.objectStore('jobs').clear(),
+      tx.objectStore('activities').clear(),
     ]);
     await tx.done;
   }

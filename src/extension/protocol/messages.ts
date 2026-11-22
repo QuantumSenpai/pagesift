@@ -58,6 +58,8 @@ export const messageOperationSchema = z.enum([
   'GET_JOB_STATUS',
   'LIST_JOBS',
   'SAVE_ARTIFACT_TO_IDB',
+  'GET_ARTIFACT_FROM_IDB',
+  'DELETE_ARTIFACT_FROM_IDB',
   'SAVE_CAPTURE_TO_IDB',
   'LIST_PROJECTS_FROM_IDB',
   'GET_STORAGE_USAGE',
@@ -70,6 +72,15 @@ export const messageOperationSchema = z.enum([
   'CLEAR_NVIDIA_API_KEY',
   'GET_NVIDIA_KEY_STATUS',
   'RUN_NVIDIA_ENHANCEMENT',
+  'TOGGLE_OVERLAY_DASHBOARD',
+  'OPEN_FULL_DASHBOARD',
+  'RECORD_LOCAL_ACTIVITY',
+  'QUERY_ACTIVITY_HISTORY',
+  'LIST_SITE_ACTIVITY',
+  'DELETE_ACTIVITY_ENTRY',
+  'DELETE_ACTIVITY_SESSION',
+  'CLEAR_ACTIVITY_HISTORY',
+  'PRUNE_ACTIVITY_HISTORY',
 ]);
 
 export type MessageOperation = z.infer<typeof messageOperationSchema>;
@@ -88,11 +99,18 @@ const PRIVILEGED_EXTENSION_PAGE_OPERATIONS = new Set<MessageOperation>([
   'GET_RESPONSIVE_SESSION',
   'RUN_CAPTURE',
   'SAVE_ARTIFACT_TO_IDB',
+  'GET_ARTIFACT_FROM_IDB',
+  'DELETE_ARTIFACT_FROM_IDB',
   'SAVE_CAPTURE_TO_IDB',
   'LIST_PROJECTS_FROM_IDB',
   'GET_STORAGE_USAGE',
   'GET_JOB_STATUS',
   'LIST_JOBS',
+  'QUERY_ACTIVITY_HISTORY',
+  'DELETE_ACTIVITY_ENTRY',
+  'DELETE_ACTIVITY_SESSION',
+  'CLEAR_ACTIVITY_HISTORY',
+  'PRUNE_ACTIVITY_HISTORY',
 ]);
 
 export const runtimeMessageEnvelopeSchema = z.strictObject({
@@ -243,6 +261,56 @@ const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = 
       .default('clone_prompt'),
     toolOutput: z.record(z.string(), z.unknown()).default({}),
     confirmedPayloadDigest: z.string().trim().min(16).max(128).optional(),
+  }),
+  TOGGLE_OVERLAY_DASHBOARD: z.strictObject({
+    mode: z.enum(['toggle', 'open', 'close', 'minimize']).default('toggle'),
+  }),
+  OPEN_FULL_DASHBOARD: z.strictObject({
+    tool: toolIdSchema.optional(),
+    autorun: z.boolean().optional(),
+    section: z.enum(['tools', 'history', 'saved', 'settings']).optional(),
+  }),
+  RECORD_LOCAL_ACTIVITY: z.strictObject({
+    activityId: z.string().trim().min(4).max(128),
+    tool: toolIdSchema,
+    actionLabel: z.string().trim().min(1).max(120),
+    sourceUrl: z.string().max(2048).optional(),
+    pageTitle: z.string().max(400).optional(),
+    status: z.enum(['running', 'completed', 'failed', 'cancelled', 'interrupted']),
+    durationMs: z.number().int().min(0).max(86_400_000).nullable().optional(),
+    optionsSummary: z.record(z.string(), z.unknown()).optional(),
+    resultSummary: z.string().max(500).optional(),
+    linkedArtifactId: z.string().trim().min(1).max(128).nullable().optional(),
+    linkedCaptureId: z.string().trim().min(1).max(128).nullable().optional(),
+    errorCategory: z.string().max(120).nullable().optional(),
+  }),
+  QUERY_ACTIVITY_HISTORY: z.strictObject({
+    origin: z.string().max(260).optional(),
+    domain: z.string().max(253).optional(),
+    tool: toolIdSchema.optional(),
+    status: z.enum(['running', 'completed', 'failed', 'cancelled', 'interrupted']).optional(),
+    search: z.string().max(200).optional(),
+    fromIso: z.string().max(64).optional(),
+    toIso: z.string().max(64).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+    offset: z.number().int().min(0).max(5000).optional(),
+  }),
+  LIST_SITE_ACTIVITY: z.strictObject({
+    limit: z.number().int().min(1).max(20).default(6),
+  }),
+  DELETE_ACTIVITY_ENTRY: z.strictObject({
+    activityId: z.string().trim().min(1).max(128),
+  }),
+  DELETE_ACTIVITY_SESSION: z.strictObject({
+    sessionId: z.string().trim().min(1).max(128),
+  }),
+  CLEAR_ACTIVITY_HISTORY: z.strictObject({}),
+  PRUNE_ACTIVITY_HISTORY: z.strictObject({}),
+  GET_ARTIFACT_FROM_IDB: z.strictObject({
+    artifactId: z.string().trim().min(1).max(128),
+  }),
+  DELETE_ARTIFACT_FROM_IDB: z.strictObject({
+    artifactId: z.string().trim().min(1).max(128),
   }),
 };
 

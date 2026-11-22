@@ -38,7 +38,18 @@ import {
   type ExtensionMessageResponse,
   type RuntimeMessageEnvelope,
   type SenderContextInfo,
+  type ToolId,
 } from '../protocol/messages.js';
+import {
+  buildResearchSessionId,
+  sanitizeActivityErrorCategory,
+  sanitizeActivityOptions,
+  sanitizeActivitySourceUrl,
+  sanitizeActivitySummary,
+  sanitizeActivityTitle,
+  type ActivityStatus,
+  type LocalActivityRecord,
+} from '../storage/activity-history.js';
 import {
   LocalExtensionStorage,
   QuotaExceededStorageError,
@@ -81,6 +92,7 @@ export interface BackgroundEnvironmentAdapters {
   ) => Promise<OpenedResponsiveWindow | null>;
   updateResponsiveWindow?: (windowId: number, width: number, height: number) => Promise<void>;
   closeResponsiveWindow?: (windowId: number) => Promise<void>;
+  openDashboardTab?: (relativeUrl: string) => Promise<void>;
   fetchImpl?: typeof fetch;
   captureMinIntervalMs?: number;
   composeCaptureImpl?: typeof composeCaptureFromTiles;
@@ -231,6 +243,120 @@ export class BackgroundCoordinator {
         })
         .catch(() => undefined);
     }
+  }
+
+  private async recordActivityLifecycle(params: {
+    activityId: string;
+    tool: ToolId;
+    actionLabel: string;
+    rawUrl: string;
+    rawTitle?: string | undefined;
+    status: ActivityStatus;
+    durationMs?: number | null | undefined;
+    optionsSummary?: Record<string, unknown> | undefined;
+    resultSummary?: string | undefined;
+    linkedArtifactId?: string | null | undefined;
+    linkedCaptureId?: string | null | undefined;
+    errorCategory?: string | null | undefined;
+  }): Promise<LocalActivityRecord | null> {
+    const settings = await this.env.settingsStore.getSettings();
+    if (!settings.recordActivityHistory) {
+      return null;
+    }
+
+    const existing = await this.env.storage.getActivity(params.activityId);
+    const nowIso = new Date().toISOString();
+    const cleanUrl = sanitizeActivitySourceUrl(params.rawUrl || existing?.sourceUrl || '');
+    const cleanTitle = params.rawTitle
+      ? sanitizeActivityTitle(params.rawTitle)
+      : (existing?.pageTitle ?? 'Untitled Page');
+    const cleanOpts =
+      params.optionsSummary !== undefined
+        ? sanitizeActivityOptions(params.optionsSummary)
+        : (existing?.optionsSummary ?? {});
+    const startedAt = existing?.startedAt ?? nowIso;
+    const isTerminal = params.status !== 'running';
+
+    const record: LocalActivityRecord = {
+      id: params.activityId,
+      sessionId: existing?.sessionId ?? buildResearchSessionId(cleanUrl.sourceDomain, startedAt),
+      tool: params.tool,
+      actionLabel: params.actionLabel.slice(0, 120),
+      sourceUrl: cleanUrl.sourceUrl,
+      sourceOrigin: cleanUrl.sourceOrigin,
+      sourceDomain: cleanUrl.sourceDomain,
+      pageTitle: cleanTitle,
+      startedAt,
+      completedAt: isTerminal ? nowIso : null,
+      durationMs:
+        typeof params.durationMs === 'number'
+          ? Math.max(0, Math.round(params.durationMs))
+          : (existing?.durationMs ?? null),
+      status: params.status,
+      optionsSummary: cleanOpts,
+      resultSummary: sanitizeActivitySummary(params.resultSummary ?? existing?.resultSummary ?? ''),
+      linkedArtifactId:
+        params.linkedArtifactId !== undefined
+          ? params.linkedArtifactId
+          : (existing?.linkedArtifactId ?? null),
+      linkedCaptureId:
+        params.linkedCaptureId !== undefined
+          ? params.linkedCaptureId
+          : (existing?.linkedCaptureId ?? null),
+      errorCategory:
+        params.errorCategory !== undefined
+          ? sanitizeActivityErrorCategory(params.errorCategory)
+          : (existing?.errorCategory ?? null),
+    };
+
+    const saved = await this.env.storage.upsertActivity(record);
+    if (isTerminal) {
+      await this.env.storage
+        .pruneActivities({
+          retentionDays: settings.activityRetentionDays,
+          maxEntries: settings.activityMaxEntries,
+        })
+        .catch(() => undefined);
+    }
+    return saved;
+  }
+
+  public async handleActionClicked(tab: {
+    id?: number | undefined;
+    url?: string | undefined;
+    title?: string | undefined;
+  }): Promise<{ opened: 'overlay' | 'dashboard_fallback' | 'dashboard_unsupported' }> {
+    await this.ensureInitialized().catch(() => undefined);
+    const tabUrl = tab.url ?? '';
+    if (typeof tab.id === 'number' && isHttpOrHttpsUrl(tabUrl) && this.env.sendToTab) {
+      try {
+        const res = await this.env.sendToTab(tab.id, {
+          schemaVersion: 1,
+          requestId: `act-toggle-${Date.now()}`,
+          operation: 'TOGGLE_OVERLAY_DASHBOARD',
+          tabId: tab.id,
+          payload: { mode: 'toggle' },
+        });
+        if (res.ok) {
+          return { opened: 'overlay' };
+        }
+      } catch {
+        if (this.env.openDashboardTab) {
+          await this.env.openDashboardTab(
+            `workspace.html?tabId=${tab.id}&targetUrl=${encodeURIComponent(tabUrl)}`,
+          );
+        }
+        return { opened: 'dashboard_fallback' };
+      }
+    }
+
+    if (this.env.openDashboardTab) {
+      const qs = tabUrl
+        ? `?unsupportedUrl=${encodeURIComponent(tabUrl)}`
+        : '?unsupportedUrl=about:blank';
+      await this.env.openDashboardTab(`workspace.html${qs}`);
+    }
+    return { opened: 'dashboard_unsupported' };
   }
 
   private async updateJob(
@@ -684,6 +810,151 @@ export class BackgroundCoordinator {
           return createSuccessResponse(msg, { cleared: true });
         }
 
+        case 'GET_ARTIFACT_FROM_IDB': {
+          const artifactId = String(msg.payload['artifactId']);
+          const artifact = await this.env.storage.getArtifact(artifactId);
+          return createSuccessResponse(msg, { artifact: artifact ?? null });
+        }
+
+        case 'DELETE_ARTIFACT_FROM_IDB': {
+          const artifactId = String(msg.payload['artifactId']);
+          await this.env.storage.deleteArtifact(artifactId);
+          return createSuccessResponse(msg, { deleted: true, artifactId });
+        }
+
+        case 'OPEN_FULL_DASHBOARD': {
+          const tool = typeof msg.payload['tool'] === 'string' ? msg.payload['tool'] : undefined;
+          const autorun = msg.payload['autorun'] === true;
+          const section =
+            typeof msg.payload['section'] === 'string' ? msg.payload['section'] : undefined;
+          const params = new URLSearchParams();
+          const sourceTabId = sender.tab?.id ?? msg.tabId;
+          const sourceTabUrl = sender.tab?.url ?? '';
+          if (typeof sourceTabId === 'number' && isHttpOrHttpsUrl(sourceTabUrl)) {
+            params.set('tabId', String(sourceTabId));
+            params.set('targetUrl', sourceTabUrl);
+          }
+          if (tool) {
+            params.set('tool', tool);
+          }
+          if (autorun) {
+            params.set('autorun', '1');
+          }
+          if (section) {
+            params.set('section', section);
+          }
+          const query = params.toString();
+          const targetRel = query ? `workspace.html?${query}` : 'workspace.html';
+          if (this.env.openDashboardTab) {
+            await this.env.openDashboardTab(targetRel);
+          }
+          return createSuccessResponse(msg, { openedUrl: targetRel });
+        }
+
+        case 'RECORD_LOCAL_ACTIVITY': {
+          const rawUrl =
+            senderAuth.isContentScript && sender.tab?.url
+              ? sender.tab.url
+              : typeof msg.payload['sourceUrl'] === 'string'
+                ? msg.payload['sourceUrl']
+                : '';
+          const recorded = await this.recordActivityLifecycle({
+            activityId: String(msg.payload['activityId']),
+            tool: msg.payload['tool'] as ToolId,
+            actionLabel: String(msg.payload['actionLabel']),
+            rawUrl,
+            rawTitle:
+              typeof msg.payload['pageTitle'] === 'string' ? msg.payload['pageTitle'] : undefined,
+            status: msg.payload['status'] as ActivityStatus,
+            durationMs:
+              typeof msg.payload['durationMs'] === 'number' ? msg.payload['durationMs'] : null,
+            optionsSummary:
+              typeof msg.payload['optionsSummary'] === 'object' &&
+              msg.payload['optionsSummary'] !== null
+                ? (msg.payload['optionsSummary'] as Record<string, unknown>)
+                : undefined,
+            resultSummary:
+              typeof msg.payload['resultSummary'] === 'string'
+                ? msg.payload['resultSummary']
+                : undefined,
+            linkedArtifactId:
+              typeof msg.payload['linkedArtifactId'] === 'string'
+                ? msg.payload['linkedArtifactId']
+                : null,
+            linkedCaptureId:
+              typeof msg.payload['linkedCaptureId'] === 'string'
+                ? msg.payload['linkedCaptureId']
+                : null,
+            errorCategory:
+              typeof msg.payload['errorCategory'] === 'string'
+                ? msg.payload['errorCategory']
+                : null,
+          });
+          return createSuccessResponse(msg, { recorded: recorded !== null, activity: recorded });
+        }
+
+        case 'QUERY_ACTIVITY_HISTORY': {
+          const result = await this.env.storage.queryActivities({
+            origin: typeof msg.payload['origin'] === 'string' ? msg.payload['origin'] : undefined,
+            domain: typeof msg.payload['domain'] === 'string' ? msg.payload['domain'] : undefined,
+            tool: typeof msg.payload['tool'] === 'string' ? msg.payload['tool'] : undefined,
+            status: msg.payload['status'] as ActivityStatus | undefined,
+            search: typeof msg.payload['search'] === 'string' ? msg.payload['search'] : undefined,
+            fromIso:
+              typeof msg.payload['fromIso'] === 'string' ? msg.payload['fromIso'] : undefined,
+            toIso: typeof msg.payload['toIso'] === 'string' ? msg.payload['toIso'] : undefined,
+            limit: typeof msg.payload['limit'] === 'number' ? msg.payload['limit'] : 25,
+            offset: typeof msg.payload['offset'] === 'number' ? msg.payload['offset'] : 0,
+          });
+          return createSuccessResponse(msg, result);
+        }
+
+        case 'LIST_SITE_ACTIVITY': {
+          const tabUrl = sender.tab?.url ?? '';
+          const clean = sanitizeActivitySourceUrl(tabUrl);
+          if (!clean.sourceOrigin) {
+            return createSuccessResponse(msg, {
+              items: [],
+              totalMatching: 0,
+              hasMore: false,
+              domains: [],
+            });
+          }
+          const limit = typeof msg.payload['limit'] === 'number' ? msg.payload['limit'] : 6;
+          const result = await this.env.storage.queryActivities({
+            origin: clean.sourceOrigin,
+            limit: Math.min(20, limit),
+            offset: 0,
+          });
+          return createSuccessResponse(msg, result);
+        }
+
+        case 'DELETE_ACTIVITY_ENTRY': {
+          const activityId = String(msg.payload['activityId']);
+          await this.env.storage.deleteActivity(activityId);
+          return createSuccessResponse(msg, { deleted: true, activityId });
+        }
+
+        case 'DELETE_ACTIVITY_SESSION': {
+          const sessionId = String(msg.payload['sessionId']);
+          const deletedCount = await this.env.storage.deleteActivitySession(sessionId);
+          return createSuccessResponse(msg, { deletedCount, sessionId });
+        }
+
+        case 'CLEAR_ACTIVITY_HISTORY': {
+          await this.env.storage.clearActivities();
+          return createSuccessResponse(msg, { cleared: true });
+        }
+
+        case 'PRUNE_ACTIVITY_HISTORY': {
+          const settings = await this.env.settingsStore.getSettings();
+          const deletedCount = await this.env.storage.pruneActivities({
+            retentionDays: settings.activityRetentionDays,
+            maxEntries: settings.activityMaxEntries,
+          });
+          return createSuccessResponse(msg, { deletedCount });
+        }
+
         case 'RUN_ASSETS_EXTRACT': {
           if (typeof msg.tabId !== 'number' || !this.env.sendToTab) {
             return createErrorResponse(
@@ -694,6 +965,10 @@ export class BackgroundCoordinator {
             );
           }
           const includeZip = msg.payload['includeZip'] === true;
+          const startedMono = performance.now();
+          const tabMeta = this.env.getTabInfo
+            ? await this.env.getTabInfo(msg.tabId).catch(() => null)
+            : null;
           const abortCtrl = new AbortController();
           this.activeJobControllers.set(msg.requestId, abortCtrl);
           this.activeJobTabs.set(msg.requestId, msg.tabId);
@@ -702,6 +977,16 @@ export class BackgroundCoordinator {
             tool: 'assets',
             tabId: msg.tabId,
             documentId: msg.documentId ?? 'unbound',
+          });
+          await this.recordActivityLifecycle({
+            activityId: msg.requestId,
+            tool: 'assets',
+            actionLabel: includeZip ? 'Extract Assets ZIP' : 'Discover Assets',
+            rawUrl: tabMeta?.url ?? '',
+            rawTitle: tabMeta?.title,
+            status: 'running',
+            optionsSummary: { includeZip },
+            resultSummary: 'Discovering page assets',
           });
 
           try {
@@ -714,6 +999,17 @@ export class BackgroundCoordinator {
                 status: 'failed',
                 statusMessage: discoverRes.error.message,
               });
+              await this.recordActivityLifecycle({
+                activityId: msg.requestId,
+                tool: 'assets',
+                actionLabel: includeZip ? 'Extract Assets ZIP' : 'Discover Assets',
+                rawUrl: tabMeta?.url ?? '',
+                rawTitle: tabMeta?.title,
+                status: 'failed',
+                durationMs: performance.now() - startedMono,
+                errorCategory: discoverRes.error.code,
+                resultSummary: discoverRes.error.message,
+              });
               return discoverRes;
             }
 
@@ -723,6 +1019,16 @@ export class BackgroundCoordinator {
                 status: 'completed',
                 progressPercent: 100,
                 statusMessage: `Discovered ${report.summary.totalDiscovered} assets`,
+              });
+              await this.recordActivityLifecycle({
+                activityId: msg.requestId,
+                tool: 'assets',
+                actionLabel: 'Discover Assets',
+                rawUrl: tabMeta?.url ?? '',
+                rawTitle: tabMeta?.title,
+                status: 'completed',
+                durationMs: performance.now() - startedMono,
+                resultSummary: `Discovered ${report.summary.totalDiscovered} assets`,
               });
               return createSuccessResponse(
                 msg,
@@ -759,6 +1065,17 @@ export class BackgroundCoordinator {
               progressPercent: 100,
               statusMessage: `Packaged ${zipRes.packagedFilesCount} files into assets ZIP`,
             });
+            await this.recordActivityLifecycle({
+              activityId: msg.requestId,
+              tool: 'assets',
+              actionLabel: 'Extract Assets ZIP',
+              rawUrl: tabMeta?.url ?? '',
+              rawTitle: tabMeta?.title,
+              status: 'completed',
+              durationMs: performance.now() - startedMono,
+              optionsSummary: { includeZip: true },
+              resultSummary: `Packaged ${zipRes.packagedFilesCount} files (${zipRes.skippedOrUnavailable.length} skipped)`,
+            });
 
             return createSuccessResponse(
               msg,
@@ -779,6 +1096,17 @@ export class BackgroundCoordinator {
             await this.updateJob(job, {
               status: cancelled ? 'cancelled' : 'failed',
               statusMessage: errMsg,
+            });
+            await this.recordActivityLifecycle({
+              activityId: msg.requestId,
+              tool: 'assets',
+              actionLabel: includeZip ? 'Extract Assets ZIP' : 'Discover Assets',
+              rawUrl: tabMeta?.url ?? '',
+              rawTitle: tabMeta?.title,
+              status: cancelled ? 'cancelled' : 'failed',
+              durationMs: performance.now() - startedMono,
+              errorCategory: cancelled ? 'JOB_CANCELLED' : 'TOOL_EXECUTION_ERROR',
+              resultSummary: errMsg,
             });
             return createErrorResponse(
               msg.requestId,
@@ -802,6 +1130,10 @@ export class BackgroundCoordinator {
             );
           }
           const abortCtrl = new AbortController();
+          const startedMono = performance.now();
+          const tabMeta = this.env.getTabInfo
+            ? await this.env.getTabInfo(msg.tabId).catch(() => null)
+            : null;
           this.activeJobControllers.set(msg.requestId, abortCtrl);
           this.activeJobTabs.set(msg.requestId, msg.tabId);
           let job = await this.env.storage.StartToolJob({
@@ -809,6 +1141,15 @@ export class BackgroundCoordinator {
             tool: 'clone_page',
             tabId: msg.tabId,
             documentId: msg.documentId ?? 'unbound',
+          });
+          await this.recordActivityLifecycle({
+            activityId: msg.requestId,
+            tool: 'clone_page',
+            actionLabel: 'Clone Page Snapshot ZIP',
+            rawUrl: tabMeta?.url ?? '',
+            rawTitle: tabMeta?.title,
+            status: 'running',
+            resultSummary: 'Preparing sanitized HTML/CSS snapshot',
           });
 
           try {
@@ -820,6 +1161,17 @@ export class BackgroundCoordinator {
               await this.updateJob(job, {
                 status: 'failed',
                 statusMessage: prepareRes.error.message,
+              });
+              await this.recordActivityLifecycle({
+                activityId: msg.requestId,
+                tool: 'clone_page',
+                actionLabel: 'Clone Page Snapshot ZIP',
+                rawUrl: tabMeta?.url ?? '',
+                rawTitle: tabMeta?.title,
+                status: 'failed',
+                durationMs: performance.now() - startedMono,
+                errorCategory: prepareRes.error.code,
+                resultSummary: prepareRes.error.message,
               });
               return prepareRes;
             }
@@ -849,6 +1201,16 @@ export class BackgroundCoordinator {
               progressPercent: 100,
               statusMessage: `Snapshot packaged (${snapshot.manifest.rewrittenAssets.length} bundled assets)`,
             });
+            await this.recordActivityLifecycle({
+              activityId: msg.requestId,
+              tool: 'clone_page',
+              actionLabel: 'Clone Page Snapshot ZIP',
+              rawUrl: prepared.baseHref || tabMeta?.url || '',
+              rawTitle: prepared.sourceTitle || tabMeta?.title,
+              status: 'completed',
+              durationMs: performance.now() - startedMono,
+              resultSummary: `Snapshot packaged (${snapshot.manifest.rewrittenAssets.length} assets, ${snapshot.manifest.missingResources.length} missing)`,
+            });
 
             return createSuccessResponse(
               msg,
@@ -868,6 +1230,17 @@ export class BackgroundCoordinator {
             await this.updateJob(job, {
               status: cancelled ? 'cancelled' : 'failed',
               statusMessage: errMsg,
+            });
+            await this.recordActivityLifecycle({
+              activityId: msg.requestId,
+              tool: 'clone_page',
+              actionLabel: 'Clone Page Snapshot ZIP',
+              rawUrl: tabMeta?.url ?? '',
+              rawTitle: tabMeta?.title,
+              status: cancelled ? 'cancelled' : 'failed',
+              durationMs: performance.now() - startedMono,
+              errorCategory: cancelled ? 'JOB_CANCELLED' : 'TOOL_EXECUTION_ERROR',
+              resultSummary: errMsg,
             });
             return createErrorResponse(
               msg.requestId,
@@ -996,6 +1369,18 @@ export class BackgroundCoordinator {
             }
           }
 
+          if (openWindows && openedTabIds.length > 0) {
+            await this.recordActivityLifecycle({
+              activityId: msg.requestId,
+              tool: 'responsive',
+              actionLabel: 'Open Responsive Windows',
+              rawUrl: plan.targetUrl,
+              status: 'completed',
+              optionsSummary: { syncEnabled, viewportCount: openedTabIds.length },
+              resultSummary: `Opened ${openedTabIds.length} managed responsive viewport window(s)`,
+            });
+          }
+
           return createSuccessResponse(msg, {
             plan,
             openedTabIds,
@@ -1104,6 +1489,7 @@ export class BackgroundCoordinator {
             typeof msg.payload['quality'] === 'number' ? msg.payload['quality'] : 0.92;
           const minIntervalMs = this.env.captureMinIntervalMs ?? MIN_CAPTURE_INTERVAL_MS;
 
+          const startedMono = performance.now();
           const abortCtrl = new AbortController();
           this.activeJobControllers.set(msg.requestId, abortCtrl);
           this.activeJobTabs.set(msg.requestId, tabId);
@@ -1116,9 +1502,25 @@ export class BackgroundCoordinator {
           });
 
           let preparedDom = false;
+          let capturePageUrl =
+            typeof msg.payload['pageUrl'] === 'string' ? msg.payload['pageUrl'] : '';
+          let capturePageTitle =
+            typeof msg.payload['title'] === 'string' ? msg.payload['title'] : undefined;
+          await this.recordActivityLifecycle({
+            activityId: msg.requestId,
+            tool: 'capture',
+            actionLabel: `Capture (${mode})`,
+            rawUrl: capturePageUrl,
+            rawTitle: capturePageTitle,
+            status: 'running',
+            optionsSummary: { mode, exportMime, ...(selector ? { selector } : {}) },
+            resultSummary: 'Preparing capture',
+          });
           try {
             const initialTab = await this.verifyTargetTabForCapture(tabId);
             const expectedTabUrl = initialTab.url;
+            capturePageUrl = initialTab.url;
+            capturePageTitle = initialTab.title ?? capturePageTitle;
 
             const prepareRes = await this.env.sendToTab(tabId, {
               schemaVersion: 1,
@@ -1136,6 +1538,17 @@ export class BackgroundCoordinator {
               await this.updateJob(job, {
                 status: 'failed',
                 statusMessage: prepareRes.error.message,
+              });
+              await this.recordActivityLifecycle({
+                activityId: msg.requestId,
+                tool: 'capture',
+                actionLabel: `Capture (${mode})`,
+                rawUrl: capturePageUrl,
+                rawTitle: capturePageTitle,
+                status: 'failed',
+                durationMs: performance.now() - startedMono,
+                errorCategory: prepareRes.error.code,
+                resultSummary: prepareRes.error.message,
               });
               return prepareRes;
             }
@@ -1276,6 +1689,17 @@ export class BackgroundCoordinator {
               progressPercent: 100,
               statusMessage: `Captured ${verified.width}×${verified.height} (${verified.mimeType})`,
             });
+            await this.recordActivityLifecycle({
+              activityId: msg.requestId,
+              tool: 'capture',
+              actionLabel: `Capture (${mode})`,
+              rawUrl: prepData.pageUrl || capturePageUrl,
+              rawTitle: prepData.pageTitle || capturePageTitle,
+              status: 'completed',
+              durationMs: performance.now() - startedMono,
+              optionsSummary: { mode, exportMime, ...(selector ? { selector } : {}) },
+              resultSummary: `Captured ${verified.width}×${verified.height} (${verified.mimeType}, ${tiles.length} tile${tiles.length === 1 ? '' : 's'})`,
+            });
 
             return createSuccessResponse(
               msg,
@@ -1300,6 +1724,17 @@ export class BackgroundCoordinator {
             await this.updateJob(job, {
               status: cancelled ? 'cancelled' : 'failed',
               statusMessage: errMsg,
+            });
+            await this.recordActivityLifecycle({
+              activityId: msg.requestId,
+              tool: 'capture',
+              actionLabel: `Capture (${mode})`,
+              rawUrl: capturePageUrl,
+              rawTitle: capturePageTitle,
+              status: cancelled ? 'cancelled' : 'failed',
+              durationMs: performance.now() - startedMono,
+              errorCategory: cancelled ? 'JOB_CANCELLED' : 'TOOL_EXECUTION_ERROR',
+              resultSummary: errMsg,
             });
             return createErrorResponse(
               msg.requestId,
@@ -1413,6 +1848,7 @@ export class BackgroundCoordinator {
 interface ChromeGlobalApis {
   runtime?: {
     id?: string;
+    getURL?: (path: string) => string;
     onInstalled?: { addListener: (cb: () => void) => void };
     onStartup?: { addListener: (cb: () => void) => void };
     onMessage?: {
@@ -1425,11 +1861,17 @@ interface ChromeGlobalApis {
       ) => void;
     };
   };
+  action?: {
+    onClicked?: {
+      addListener: (cb: (tab: { id?: number; url?: string; title?: string }) => void) => void;
+    };
+  };
   storage?: {
     local?: KeyValueArea;
     session?: KeyValueArea;
   };
   tabs?: {
+    create?: (props: { url: string }) => Promise<{ id?: number }>;
     get?: (tabId: number) => Promise<{
       id?: number;
       windowId?: number;
@@ -1550,8 +1992,20 @@ function bootstrapServiceWorker(): void {
         await chromeApi.windows.remove(windowId);
       }
     },
+    openDashboardTab: async (relativeUrl) => {
+      if (!chromeApi.tabs?.create) {
+        return;
+      }
+      const fullUrl = chromeApi.runtime?.getURL
+        ? chromeApi.runtime.getURL(relativeUrl)
+        : relativeUrl;
+      await chromeApi.tabs.create({ url: fullUrl });
+    },
   });
 
+  chromeApi.action?.onClicked?.addListener((tab) => {
+    void coordinator.handleActionClicked(tab).catch(() => undefined);
+  });
   chromeApi.runtime.onInstalled?.addListener(() => {
     void coordinator.initialize().catch(() => undefined);
   });
