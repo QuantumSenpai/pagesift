@@ -14,7 +14,7 @@ The following libraries were resolved and queried through the Context7 MCP serve
    - **Reference**: https://github.com/101arrowz/fflate/blob/master/docs/functions/zipSync.md
 3. **idb (`idb@8.0.4`)**
    - **Context7 Library ID**: `/jakearchibald/idb`
-   - **Topics Consulted**: Typed IndexedDB schema definition (`DBSchema`), versioned upgrades (`openDB`, `upgrade(db, oldVersion, newVersion, transaction)`), `createObjectStore`, `createIndex`, and multi-store readwrite transactions.
+   - **Topics Consulted**: Typed IndexedDB schema definition (`DBSchema`), versioned upgrades (`openDB`, `upgrade(db, oldVersion, newVersion, transaction)`), `createObjectStore`, `createIndex`, `getKey()`, and multi-store readwrite transactions.
    - **Reference**: https://github.com/jakearchibald/idb/blob/main/README.md
 4. **Fastify (`fastify@5.12.8`) & Plugins (`@fastify/cors@11.4.3`, `@fastify/helmet@13.2.0`, `@fastify/rate-limit@11.3.0`, `@fastify/swagger@9.9.5`)**
    - **Context7 Library IDs**: `/fastify/fastify`, `/fastify/fastify-cors`, `/fastify/fastify-helmet`, `/fastify/fastify-rate-limit`, `/fastify/fastify-swagger`
@@ -35,20 +35,21 @@ The following libraries were resolved and queried through the Context7 MCP serve
 
 ---
 
-## 2. Official Platform & Provider Documentation Fallbacks
-
-Where Context7 did not index platform-specific Chrome Extension MV3 APIs or NVIDIA NIM specifications, official documentation was consulted:
+## 2. Official Platform, Font & Provider Documentation
 
 1. **Chrome Extensions Manifest V3 (Chrome for Developers)**
-   - Service worker lifecycle, `chrome.runtime.onMessage` sender verification, `chrome.storage.local` and `chrome.storage.session`, `chrome.tabs.captureVisibleTab` (including Chromium's `<all_urls>` or `activeTab` requirement for non-popup capture contexts), `chrome.downloads.download`, `chrome.windows.create`, and `chrome.permissions.request`.
-   - Reference: https://developer.chrome.com/docs/extensions/reference/api & https://developer.chrome.com/docs/extensions/reference/api/tabs#method-captureVisibleTab
-2. **NVIDIA NIM Chat Completions API**
-   - OpenAI-compatible endpoint `https://integrate.api.nvidia.com/v1/chat/completions` (`POST` with `Authorization: Bearer <NVIDIA_API_KEY>`, `model`, `messages`, `temperature`, `max_tokens`, `stream: false`) and `GET https://integrate.api.nvidia.com/v1/models`.
+   - `chrome.action.onClicked` behavior (does not fire when `action.default_popup` is declared), `web_accessible_resources` for Shadow DOM local `.woff2` fonts and icons, `chrome.tabs.setZoom` / `getZoom`, service worker lifecycle, `chrome.runtime.onMessage` sender verification, `chrome.storage.local` / `chrome.storage.session`, `chrome.tabs.captureVisibleTab`, `chrome.downloads.download`, and `chrome.windows.create`.
+   - Reference: https://developer.chrome.com/docs/extensions/reference/api/action & https://developer.chrome.com/docs/extensions/reference/api/tabs
+2. **Bundled Local Typefaces (SIL Open Font License 1.1)**
+   - Instrument Sans (`@fontsource/instrument-sans`) and IBM Plex Mono (`@fontsource/ibm-plex-mono`) bundled directly in `dist/extension/fonts/` for zero runtime external font requests.
+3. **NVIDIA NIM Chat Completions API**
+   - OpenAI-compatible endpoint `https://integrate.api.nvidia.com/v1/chat/completions` and `GET https://integrate.api.nvidia.com/v1/models`.
    - Reference: https://docs.api.nvidia.com/nim/reference/llm-apis
 
 ---
 
-## 3. REA & Reference Investigation Disclosure
+## 3. Design Direction & Reference Disclosures
 
-- **REA Availability**: The `rea` CLI / MCP server (`https://github.com/morluto/rea`) is not installed in this local environment (`which rea` returned `rea not found`). No REA execution was fabricated.
-- **Public Reference Evidence**: Publicly accessible Chrome Web Store metadata and public documentation for Sitepeel (`khcjkaobanoeohahnlffnnppinoeljme`) were reviewed via web search to confirm the 15-tool functional taxonomy (Inspect, Clone Page, Clone Prompt, Design MD, Assets, Colors, Fonts, Measure, Edit Text, Capture, Responsive, Swap Font, Arrange, AI Slop / Design Review, and Tech Stack). All PageSift code, UI, extraction algorithms, and branding are independently authored.
+- **Visual Inspiration**: Reviewed the solid dark midnight canvas, disciplined electric-blue interactive accents, fine hairline borders, and compact control hierarchy inspired by https://cloud.laravel.com while strictly using solid flat colors (zero gradients, glow, or glass effects) and zero copied branding, logos, illustrations, or text.
+- **Playwright Toolbar Click Boundary**: Playwright cannot click Chromium's native browser-chrome toolbar action button directly; automated Chromium E2E verifies `manifest.json` omits `action.default_popup`, tests the exact `TOGGLE_OVERLAY_DASHBOARD` overlay toggle flow on a real web page, and unit-tests `handleActionClicked` for both supported `http(s)://` tabs and restricted `chrome://` fallback URLs.
+- **Public Reference Evidence**: Publicly accessible Chrome Web Store metadata for Sitepeel (`khcjkaobanoeohahnlffnnppinoeljme`) was reviewed to confirm the 15-tool functional taxonomy. All PageSift code, UI, extraction algorithms, and branding are independently authored.

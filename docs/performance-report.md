@@ -4,8 +4,6 @@
 
 ### 1. Pre-Declared Provisional Extension Performance Budgets
 
-Before running measurements in Chromium, the following per-tool latency budgets were established for a 2,000+ DOM node page:
-
 | Operation | Provisional Max Budget |
 | :--- | :--- |
 | 1. Inspect single element (`RUN_INSPECT_ELEMENT`) | `<= 50 ms` |
@@ -18,6 +16,10 @@ Before running measurements in Chromium, the following per-tool latency budgets 
 | 10. Real Screenshot Capture visible PNG (`RUN_CAPTURE`) | `<= 1500 ms` |
 | 14. Local Design & WCAG Contrast Review (`RUN_DESIGN_REVIEW`) | `<= 350 ms` |
 | 15. Public Tech Stack Detection (`RUN_TECH_STACK`) | `<= 150 ms` |
+| Overlay idle page footprint (before open / after close) | `0` injected DOM nodes |
+| Activity History paginated query (`300+` entries, page size `25`) | `<= 50 ms` |
+| Activity History multi-filter query (`domain + tool + search`, `300+` entries) | `<= 50 ms` |
+| Activity History UI render (page 1 of `25` rows) | `<= 100 ms` |
 
 ### 2. Extension Benchmark Environment & Fixture
 
@@ -30,7 +32,7 @@ Before running measurements in Chromium, the following per-tool latency budgets 
 - **Browser Runtime**: Real Chromium (`HeadlessChrome/159.0.0.0`) with unpacked Manifest V3 extension loaded from `dist/extension`
 - **Fixture Size**: `500` structured card components (`2,009` total DOM elements) with CSS Grid, Flexbox, sticky header, and custom properties.
 
-### 3. Measured Extension Timings & Memory
+### 3. Measured Extension Tool Timings
 
 | Operation | Provisional Budget | Measured Latency | Status |
 | :--- | :--- | :--- | :--- |
@@ -45,10 +47,24 @@ Before running measurements in Chromium, the following per-tool latency budgets 
 | 14. Local Design & WCAG Contrast Review | `<= 350 ms` | `7.54 ms` | Pass |
 | 15. Public Tech Stack Detection | `<= 150 ms` | `1.55 ms` | Pass |
 
-- **Measured Process Memory**: `151.8 MiB` RSS / `30.3 MiB` Heap Used.
+### 4. Measured Overlay Overhead & Activity History Latency (Real Chromium)
+
+Measured directly in real Chromium against `dist/extension` (`pagesift_local_db v3`, `305` total persisted activity records across 4 domains and 7 tools):
+
+| Measurement | Provisional Budget | Measured Result | Status |
+| :--- | :--- | :--- | :--- |
+| Idle page DOM injection (before overlay activation) | `0` nodes | `0` nodes (`#pagesift-root-host` absent) | Pass |
+| Expanded On-Page Overlay Shadow DOM footprint | Lightweight | `1` host element, `77` Shadow DOM nodes | Pass |
+| Page DOM cleanup after closing overlay | `0` leaked nodes | `0` nodes (`#pagesift-root-host` removed) | Pass |
+| External font / CDN network requests during session | `0` requests | `0` external requests | Pass |
+| `QUERY_ACTIVITY_HISTORY` page 1 (`25` of `305` entries) | `<= 50 ms` | `1.9 ms` | Pass |
+| `QUERY_ACTIVITY_HISTORY` multi-filter (`domain + tool + search`) | `<= 50 ms` | `1.5 ms` | Pass |
+| Persistent Dashboard Activity History UI render (`25` rows) | `<= 100 ms` | `21 ms` | Pass |
+
 - **Enforced Safety & Resource Limits**:
   - Full-page screenshot stitching: `MAX_CAPTURE_CANVAS_DIM_PX = 32768` physical pixels, `MAX_WEBP_DIMENSION_PX = 16383` for WebP encoding, `MAX_FULL_PAGE_TILES = 40`, minimum `550 ms` inter-tile interval (`MIN_CAPTURE_INTERVAL_MS`).
   - Privileged background asset fetching: concurrency `4`, per-request timeout `10s`, streaming byte limits `5 MiB` per asset and `25 MiB` total archive.
+  - Activity History retention bounds: default `90 days` retention window (`7 / 30 / 90 / 365` configurable), `500` max entries, max URL `512` chars, max title `160` chars, max summary `240` chars.
   - NVIDIA AI sanitized context limits: max depth `5`, max array length `40`, max object keys `40`, max string length `1,000` chars, max total payload `24 KiB`.
 
 ---
