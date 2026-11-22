@@ -1,5 +1,7 @@
+import createDOMPurify from 'dompurify';
 import { strToU8, zipSync } from 'fflate';
 import {
+  parseSrcsetUrls,
   sanitizeArchiveFilename,
   sanitizeInlineSvgMarkup,
   type AssetBinaryFetcher,
@@ -27,7 +29,7 @@ export interface ClonePageOptions {
 
 export interface ClonePageMissingResource {
   url: string;
-  context: 'image' | 'stylesheet' | 'css_url' | 'frame';
+  context: 'image' | 'stylesheet' | 'css_url' | 'frame' | 'font' | 'poster' | 'active_container';
   reason: string;
 }
 
@@ -35,6 +37,14 @@ export interface ClonePageManifest {
   schemaVersion: 1;
   exportedAt: string;
   sourceTitle: string;
+  isSelfContained: boolean;
+  residualRemoteResources: string[];
+  sanitizationPolicy: {
+    sanitizer: string;
+    strippedActiveElements: string[];
+    defensiveCspApplied: boolean;
+    externalLinksPolicy: string;
+  };
   cssFidelity: {
     accessibleStylesheetRulesCount: number;
     inaccessibleStylesheetsCount: number;
@@ -47,6 +57,19 @@ export interface ClonePageManifest {
   scopeDisclaimer: string;
 }
 
+export interface ClonePagePreparedPayload {
+  baseHref: string;
+  sourceTitle: string;
+  sanitizedHtmlTemplate: string;
+  cssBlocks: Array<{ baseHref: string; cssText: string }>;
+  candidateAssetUrls: Array<{
+    url: string;
+    context: 'image' | 'css_url' | 'font' | 'poster';
+  }>;
+  missingResources: ClonePageMissingResource[];
+  cssFidelity: ClonePageManifest['cssFidelity'];
+}
+
 export interface ClonePageSnapshotResult {
   zipBytes: Uint8Array;
   htmlContent: string;
@@ -54,10 +77,72 @@ export interface ClonePageSnapshotResult {
   manifest: ClonePageManifest;
 }
 
+const SNAPSHOT_DEFENSIVE_CSP =
+  "default-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; img-src 'self' data:; font-src 'self' data:; style-src 'self' 'unsafe-inline';";
+
+const FORBIDDEN_SNAPSHOT_TAGS = [
+  'script',
+  'noscript',
+  'iframe',
+  'frame',
+  'frameset',
+  'object',
+  'embed',
+  'applet',
+  'base',
+  'meta',
+  'link',
+  'foreignobject',
+  'animate',
+  'animatemotion',
+  'animatetransform',
+  'set',
+  'template',
+  'selectedcontent',
+  'portal',
+];
+
+const FORBIDDEN_SNAPSHOT_ATTRS = [
+  'srcdoc',
+  'action',
+  'formaction',
+  'xlink:actuate',
+  'autofocus',
+  'ping',
+  'imagesrcset',
+  'patchsrc',
+];
+
+const SAFE_DATA_IMAGE_REGEX = /^data:image\/(png|jpeg|jpg|webp|gif|avif);base64,[a-z0-9+/=\s]+$/i;
+
 function checkAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error('Clone page snapshot cancelled by user');
   }
+}
+
+function normalizeUrlSchemeCheck(raw: string): string {
+  return Array.from(raw)
+    .filter((ch) => ch.charCodeAt(0) > 32)
+    .join('')
+    .toLowerCase();
+}
+
+function isDangerousUri(rawUrl: string): boolean {
+  const normalized = normalizeUrlSchemeCheck(rawUrl);
+  if (
+    normalized.startsWith('javascript:') ||
+    normalized.startsWith('vbscript:') ||
+    normalized.startsWith('file:') ||
+    normalized.startsWith('chrome:') ||
+    normalized.startsWith('chrome-extension:')
+  ) {
+    return true;
+  }
+  if (normalized.startsWith('data:')) {
+    return !SAFE_DATA_IMAGE_REGEX.test(rawUrl.trim());
+  }
+  return false;
 }
 
 export function rewriteCssAssetUrls(
@@ -70,20 +155,25 @@ export function rewriteCssAssetUrls(
     /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi,
     (fullMatch, _quote, rawUrl: string) => {
       const trimmed = rawUrl.trim();
-      if (
-        !trimmed ||
-        trimmed.startsWith('data:') ||
-        trimmed.startsWith('#') ||
-        trimmed.toLowerCase().startsWith('javascript:')
-      ) {
-        return trimmed.toLowerCase().startsWith('javascript:') ? 'url("")' : fullMatch;
+      if (!trimmed || trimmed.startsWith('#')) {
+        return fullMatch;
+      }
+      if (isDangerousUri(trimmed)) {
+        return 'url("")';
+      }
+      if (trimmed.startsWith('data:')) {
+        return fullMatch;
       }
 
       let resolved: string;
       try {
-        resolved = new URL(trimmed, baseHref).toString();
+        const parsed = new URL(trimmed, baseHref);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          return 'url("")';
+        }
+        resolved = parsed.toString();
       } catch {
-        return fullMatch;
+        return 'url("")';
       }
 
       discoveredCssUrls.add(resolved);
@@ -141,14 +231,23 @@ function buildComputedStyleFallbackCss(doc: Document, win: Window): string {
   return Array.from(rulesBySelector.values()).join('\n\n');
 }
 
-export async function exportStaticPageClone(
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function escapeHtmlText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+export function prepareStaticPageClone(
   doc: Document,
   win: Window,
-  options: ClonePageOptions = {},
-): Promise<ClonePageSnapshotResult> {
-  const maxAssetCount = options.maxAssetCount ?? 100;
-  const maxSingleAssetBytes = options.maxSingleAssetBytes ?? 5 * 1024 * 1024;
-  const maxTotalArchiveBytes = options.maxTotalArchiveBytes ?? 25 * 1024 * 1024;
+  options: { signal?: AbortSignal; onProgress?: (update: ClonePageProgressUpdate) => void } = {},
+): ClonePagePreparedPayload {
   const baseHref = doc.location.href || 'https://localhost/';
 
   checkAborted(options.signal);
@@ -165,7 +264,7 @@ export async function exportStaticPageClone(
     missingResources.push({
       url: frameUrl,
       context: 'frame',
-      reason: 'Cross-origin iframe content cannot be accessed due to browser Same-Origin Policy',
+      reason: 'Cross-origin iframe removed by static snapshot safety policy',
     });
   }
   for (const sheetUrl of frameAndSheetReport.inaccessibleStylesheets) {
@@ -178,52 +277,88 @@ export async function exportStaticPageClone(
 
   const rootClone = doc.documentElement.cloneNode(true) as HTMLElement;
 
-  const stripSelectors = [
-    'script',
-    'noscript',
-    'object',
-    'embed',
-    'applet',
-    'base',
-    'meta[http-equiv="refresh" i]',
-    'meta[http-equiv="content-security-policy" i]',
-    'link[rel="preload" i]',
-    'link[rel="modulepreload" i]',
-    'link[rel="prefetch" i]',
-    '[data-pagesift-root]',
-    '#pagesift-root-host',
-  ];
-  for (const node of Array.from(rootClone.querySelectorAll(stripSelectors.join(', ')))) {
+  for (const node of Array.from(
+    rootClone.querySelectorAll('[data-pagesift-root], #pagesift-root-host'),
+  )) {
     node.remove();
   }
 
-  for (const svg of Array.from(rootClone.querySelectorAll('svg'))) {
+  for (const activeContainer of Array.from(
+    rootClone.querySelectorAll('iframe, frame, frameset, object, embed, applet'),
+  )) {
+    const srcAttr =
+      activeContainer.getAttribute('src') ??
+      activeContainer.getAttribute('data') ??
+      (activeContainer.hasAttribute('srcdoc') ? 'inline:srcdoc' : 'inline:active-container');
+    if (!missingResources.some((m) => m.url === srcAttr)) {
+      missingResources.push({
+        url: srcAttr,
+        context: 'active_container',
+        reason: `Removed active <${activeContainer.tagName.toLowerCase()}> container from static snapshot`,
+      });
+    }
+    activeContainer.remove();
+  }
+
+  for (const formControl of Array.from(rootClone.querySelectorAll('input, textarea, select'))) {
+    const tag = formControl.tagName.toLowerCase();
+    if (tag === 'input') {
+      formControl.removeAttribute('value');
+      (formControl as HTMLInputElement).value = '';
+      formControl.removeAttribute('checked');
+      (formControl as HTMLInputElement).checked = false;
+    } else if (tag === 'textarea') {
+      formControl.textContent = '';
+      (formControl as HTMLTextAreaElement).value = '';
+    }
+  }
+
+  const purify = createDOMPurify(win as unknown as Window & typeof globalThis);
+  const sanitizedDoc = purify.sanitize(rootClone.outerHTML, {
+    WHOLE_DOCUMENT: true,
+    RETURN_DOM: true,
+    FORBID_TAGS: FORBIDDEN_SNAPSHOT_TAGS,
+    FORBID_ATTR: FORBIDDEN_SNAPSHOT_ATTRS,
+    ALLOW_UNKNOWN_PROTOCOLS: false,
+    ALLOWED_URI_REGEXP:
+      /^(?:(?:https?|mailto|tel):|data:image\/(?:png|jpeg|jpg|webp|gif|avif);base64,|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
+    SANITIZE_DOM: true,
+    SAFE_FOR_XML: true,
+  }) as unknown as HTMLElement;
+
+  for (const svg of Array.from(sanitizedDoc.querySelectorAll('svg'))) {
     const cleanSvgMarkup = sanitizeInlineSvgMarkup(svg);
     const wrapper = doc.createElement('div');
     wrapper.innerHTML = cleanSvgMarkup;
     const replacement = wrapper.firstElementChild;
     if (replacement) {
       svg.replaceWith(replacement);
+    } else {
+      svg.remove();
     }
   }
 
-  const candidateAssetUrls = new Map<string, { elements: Element[]; attr: string }>();
-  const registerAssetUrl = (rawUrl: string, el: Element, attr: string): string | null => {
+  const candidateAssets = new Map<string, 'image' | 'css_url' | 'font' | 'poster'>();
+  const registerAssetUrl = (
+    rawUrl: string,
+    context: 'image' | 'css_url' | 'font' | 'poster',
+    resolveBase: string = baseHref,
+  ): string | null => {
     const trimmed = rawUrl.trim();
     if (!trimmed || trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
       return null;
     }
+    if (isDangerousUri(trimmed)) {
+      return null;
+    }
     try {
-      const resolved = new URL(trimmed, baseHref);
+      const resolved = new URL(trimmed, resolveBase);
       if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
         return null;
       }
       const urlStr = resolved.toString();
-      const existing = candidateAssetUrls.get(urlStr);
-      if (existing) {
-        existing.elements.push(el);
-      } else {
-        candidateAssetUrls.set(urlStr, { elements: [el], attr });
+      if (!candidateAssets.has(urlStr)) {
+        candidateAssets.set(urlStr, context);
       }
       return urlStr;
     } catch {
@@ -231,14 +366,16 @@ export async function exportStaticPageClone(
     }
   };
 
-  const allNodes = [rootClone, ...Array.from(rootClone.querySelectorAll('*'))];
+  const allNodes = [sanitizedDoc, ...Array.from(sanitizedDoc.querySelectorAll('*'))];
   for (const node of allNodes) {
     for (const attr of Array.from(node.attributes)) {
       const nameLower = attr.name.toLowerCase();
-      const valTrimmed = attr.value.trim();
-      const valLower = valTrimmed.toLowerCase();
-
-      if (nameLower.startsWith('on')) {
+      if (
+        nameLower.startsWith('on') ||
+        nameLower === 'srcdoc' ||
+        nameLower === 'action' ||
+        nameLower === 'formaction'
+      ) {
         node.removeAttribute(attr.name);
         continue;
       }
@@ -246,16 +383,11 @@ export async function exportStaticPageClone(
       if (
         nameLower === 'href' ||
         nameLower === 'src' ||
-        nameLower === 'action' ||
-        nameLower === 'formaction' ||
         nameLower === 'poster' ||
-        nameLower === 'xlink:href'
+        nameLower === 'xlink:href' ||
+        nameLower === 'data'
       ) {
-        if (
-          valLower.startsWith('javascript:') ||
-          valLower.startsWith('vbscript:') ||
-          valLower.startsWith('data:text/html')
-        ) {
+        if (isDangerousUri(attr.value)) {
           node.removeAttribute(attr.name);
           continue;
         }
@@ -264,55 +396,96 @@ export async function exportStaticPageClone(
 
     const tag = node.tagName.toLowerCase();
     if (tag === 'input') {
-      const inputType = (node.getAttribute('type') ?? 'text').toLowerCase();
-      const autoComplete = (node.getAttribute('autocomplete') ?? '').toLowerCase();
-      if (
-        inputType === 'password' ||
-        inputType === 'hidden' ||
-        inputType === 'email' ||
-        inputType === 'tel' ||
-        inputType === 'text' ||
-        inputType === 'search' ||
-        inputType === 'number' ||
-        autoComplete.includes('cc-') ||
-        autoComplete.includes('password')
-      ) {
-        node.removeAttribute('value');
-        (node as HTMLInputElement).value = '';
-      }
+      node.removeAttribute('value');
+      (node as HTMLInputElement).value = '';
     } else if (tag === 'textarea') {
       node.textContent = '';
       (node as HTMLTextAreaElement).value = '';
     } else if (tag === 'form') {
       node.removeAttribute('action');
+      node.removeAttribute('method');
+      node.removeAttribute('target');
     } else if (tag === 'img') {
+      const rawSrcset = node.getAttribute('srcset') ?? node.getAttribute('data-srcset');
+      if (rawSrcset) {
+        for (const candidate of parseSrcsetUrls(rawSrcset)) {
+          registerAssetUrl(candidate, 'image');
+        }
+      }
       node.removeAttribute('srcset');
       const src = node.getAttribute('src') ?? node.getAttribute('data-src');
       if (src) {
-        const resolved = registerAssetUrl(src, node, 'src');
+        const resolved = registerAssetUrl(src, 'image');
         if (resolved) {
           node.setAttribute('src', resolved);
+        } else if (isDangerousUri(src)) {
+          node.removeAttribute('src');
+        }
+      }
+    } else if (tag === 'source') {
+      const rawSrcset = node.getAttribute('srcset');
+      if (rawSrcset) {
+        const firstCandidate = parseSrcsetUrls(rawSrcset)[0];
+        if (firstCandidate) {
+          const resolved = registerAssetUrl(firstCandidate, 'image');
+          if (resolved) {
+            node.setAttribute('srcset', resolved);
+          } else {
+            node.removeAttribute('srcset');
+          }
+        }
+      }
+    } else if (tag === 'video') {
+      const poster = node.getAttribute('poster');
+      if (poster) {
+        const resolved = registerAssetUrl(poster, 'poster');
+        if (resolved) {
+          node.setAttribute('poster', resolved);
+        } else if (isDangerousUri(poster)) {
+          node.removeAttribute('poster');
         }
       }
     } else if (tag === 'a') {
       const href = node.getAttribute('href');
-      if (
-        href &&
-        !href.startsWith('#') &&
-        !href.startsWith('mailto:') &&
-        !href.startsWith('tel:')
-      ) {
-        try {
-          node.setAttribute('href', new URL(href, baseHref).toString());
-        } catch {
+      if (href) {
+        if (isDangerousUri(href)) {
           node.removeAttribute('href');
+        } else if (
+          !href.startsWith('#') &&
+          !href.toLowerCase().startsWith('mailto:') &&
+          !href.toLowerCase().startsWith('tel:')
+        ) {
+          try {
+            const resolved = new URL(href, baseHref);
+            if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
+              node.setAttribute('href', resolved.toString());
+              node.setAttribute('rel', 'noopener noreferrer');
+            } else {
+              node.removeAttribute('href');
+            }
+          } catch {
+            node.removeAttribute('href');
+          }
         }
       }
-    } else if (tag === 'link') {
-      const rel = (node.getAttribute('rel') ?? '').toLowerCase();
-      if (rel === 'stylesheet') {
-        node.remove();
+    } else if (tag === 'style') {
+      const inlineCss = node.textContent;
+      const discovered = new Set<string>();
+      const cleaned = rewriteCssAssetUrls(inlineCss, baseHref, new Map(), discovered);
+      for (const u of discovered) {
+        registerAssetUrl(u, 'css_url');
       }
+      node.textContent = cleaned;
+    }
+
+    const inlineStyle = node.getAttribute('style');
+    if (inlineStyle && inlineStyle.includes('url(')) {
+      const discovered = new Set<string>();
+      const cleanedInlineStyle = rewriteCssAssetUrls(inlineStyle, baseHref, new Map(), discovered);
+      for (const u of discovered) {
+        registerAssetUrl(u, 'css_url');
+      }
+      node.setAttribute('style', cleanedInlineStyle);
     }
   }
 
@@ -323,7 +496,7 @@ export async function exportStaticPageClone(
     message: 'Extracting accessible CSS rules and computed fallbacks',
   });
 
-  const rawCssChunks: string[] = [];
+  const cssBlocks: Array<{ baseHref: string; cssText: string }> = [];
   let accessibleRulesCount = 0;
 
   for (const sheet of Array.from(doc.styleSheets)) {
@@ -333,27 +506,98 @@ export async function exportStaticPageClone(
     } catch {
       continue;
     }
+    const sheetBase = sheet.href || baseHref;
+    const sheetChunks: string[] = [];
     for (const rule of Array.from(rules)) {
       accessibleRulesCount += 1;
-      rawCssChunks.push(rule.cssText);
+      sheetChunks.push(rule.cssText);
+    }
+    if (sheetChunks.length > 0) {
+      const rawCss = sheetChunks.join('\n');
+      const discoveredCssUrls = new Set<string>();
+      rewriteCssAssetUrls(rawCss, sheetBase, new Map(), discoveredCssUrls);
+      for (const cssUrl of discoveredCssUrls) {
+        const withoutQuery = cssUrl.toLowerCase().split('?')[0] || '';
+        const ctx: 'font' | 'css_url' =
+          withoutQuery.endsWith('.woff2') ||
+          withoutQuery.endsWith('.woff') ||
+          withoutQuery.endsWith('.ttf') ||
+          withoutQuery.endsWith('.otf')
+            ? 'font'
+            : 'css_url';
+        registerAssetUrl(cssUrl, ctx, sheetBase);
+      }
+      cssBlocks.push({ baseHref: sheetBase, cssText: rawCss });
     }
   }
 
   const usedComputedFallback =
     accessibleRulesCount === 0 || frameAndSheetReport.inaccessibleStylesheets.length > 0;
   if (usedComputedFallback) {
-    rawCssChunks.push(buildComputedStyleFallbackCss(doc, win));
-  }
-
-  const combinedRawCss = rawCssChunks.join('\n');
-  const preliminaryCssUrls = new Set<string>();
-  rewriteCssAssetUrls(combinedRawCss, baseHref, new Map(), preliminaryCssUrls);
-
-  for (const cssUrl of preliminaryCssUrls) {
-    if (!candidateAssetUrls.has(cssUrl)) {
-      candidateAssetUrls.set(cssUrl, { elements: [], attr: 'css_url' });
+    const fallbackCss = buildComputedStyleFallbackCss(doc, win);
+    if (fallbackCss) {
+      cssBlocks.push({ baseHref, cssText: fallbackCss });
     }
   }
+
+  const sourceTitle = doc.title.trim() || 'Snapshot';
+  let headEl = sanitizedDoc.querySelector('head');
+  if (!headEl) {
+    headEl = doc.createElement('head');
+    sanitizedDoc.insertBefore(headEl, sanitizedDoc.firstChild);
+  }
+  const existingTitle = headEl.querySelector('title');
+  if (existingTitle) {
+    existingTitle.remove();
+  }
+
+  const headPrefix =
+    `<meta charset="UTF-8">` +
+    `<meta http-equiv="Content-Security-Policy" content="${SNAPSHOT_DEFENSIVE_CSP}">` +
+    `<title>${escapeHtmlText(sourceTitle)}</title>` +
+    `<link rel="stylesheet" href="styles/snapshot.css">`;
+
+  const bodyEl = sanitizedDoc.querySelector('body');
+  const bodyAttrs = bodyEl
+    ? Array.from(bodyEl.attributes)
+        .map((a) => ` ${a.name}="${escapeHtmlText(a.value)}"`)
+        .join('')
+    : '';
+  const bodyHtml = bodyEl ? bodyEl.innerHTML : sanitizedDoc.innerHTML;
+  const htmlLang = sanitizedDoc.getAttribute('lang');
+  const htmlOpenTag = htmlLang ? `<html lang="${escapeHtmlText(htmlLang)}">` : '<html>';
+  const remainingHeadHtml = headEl.innerHTML;
+
+  const sanitizedHtmlTemplate = `<!DOCTYPE html>\n${htmlOpenTag}<head>${headPrefix}${remainingHeadHtml}</head><body${bodyAttrs}>${bodyHtml}</body></html>\n`;
+
+  return {
+    baseHref,
+    sourceTitle,
+    sanitizedHtmlTemplate,
+    cssBlocks,
+    candidateAssetUrls: Array.from(candidateAssets.entries()).map(([url, context]) => ({
+      url,
+      context,
+    })),
+    missingResources,
+    cssFidelity: {
+      accessibleStylesheetRulesCount: accessibleRulesCount,
+      inaccessibleStylesheetsCount: frameAndSheetReport.inaccessibleStylesheets.length,
+      usedComputedStyleFallback: usedComputedFallback,
+      fidelityNote: usedComputedFallback
+        ? 'Includes viewport-specific computed-style fallback rules where original cross-origin stylesheets were inaccessible.'
+        : 'All stylesheet rules were extracted directly from accessible CSSOM stylesheets.',
+    },
+  };
+}
+
+export async function finalizeStaticPageClone(
+  prepared: ClonePagePreparedPayload,
+  options: ClonePageOptions = {},
+): Promise<ClonePageSnapshotResult> {
+  const maxAssetCount = options.maxAssetCount ?? 100;
+  const maxSingleAssetBytes = options.maxSingleAssetBytes ?? 5 * 1024 * 1024;
+  const maxTotalArchiveBytes = options.maxTotalArchiveBytes ?? 25 * 1024 * 1024;
 
   checkAborted(options.signal);
   options.onProgress?.({
@@ -367,77 +611,82 @@ export async function exportStaticPageClone(
   const urlToLocalPath = new Map<string, string>();
   const rewrittenAssets: Array<{ originalUrl: string; archivePath: string; byteLength: number }> =
     [];
+  const missingResources: ClonePageMissingResource[] = [...prepared.missingResources];
+  const residualRemoteResources = new Set<string>();
   let totalBytes = 0;
 
-  const assetEntries = Array.from(candidateAssetUrls.entries()).slice(0, maxAssetCount);
-  for (const [assetUrl, info] of assetEntries) {
+  const assetEntries = prepared.candidateAssetUrls.slice(0, maxAssetCount);
+  for (const asset of assetEntries) {
     checkAborted(options.signal);
     if (!options.fetcher) {
       missingResources.push({
-        url: assetUrl,
-        context: info.attr === 'css_url' ? 'css_url' : 'image',
-        reason: 'Static offline mode without asset fetcher; preserved resolved absolute URL',
+        url: asset.url,
+        context: asset.context,
+        reason: 'Static offline mode without asset fetcher; resource not bundled',
       });
+      residualRemoteResources.add(asset.url);
       continue;
     }
 
-    const fetched = await options.fetcher(assetUrl);
+    const fetched = await options.fetcher(asset.url);
     if (!fetched.ok || !fetched.bytes) {
       missingResources.push({
-        url: assetUrl,
-        context: info.attr === 'css_url' ? 'css_url' : 'image',
+        url: asset.url,
+        context: asset.context,
         reason: fetched.reason ?? 'Asset fetch failed or blocked by status/CORS',
       });
+      residualRemoteResources.add(asset.url);
       continue;
     }
 
     if (fetched.bytes.byteLength > maxSingleAssetBytes) {
       missingResources.push({
-        url: assetUrl,
-        context: info.attr === 'css_url' ? 'css_url' : 'image',
+        url: asset.url,
+        context: asset.context,
         reason: `Asset size (${fetched.bytes.byteLength} bytes) exceeds per-asset limit (${maxSingleAssetBytes} bytes)`,
       });
+      residualRemoteResources.add(asset.url);
       continue;
     }
 
     if (totalBytes + fetched.bytes.byteLength > maxTotalArchiveBytes) {
       missingResources.push({
-        url: assetUrl,
-        context: info.attr === 'css_url' ? 'css_url' : 'image',
+        url: asset.url,
+        context: asset.context,
         reason: `Archive total byte limit (${maxTotalArchiveBytes} bytes) reached`,
       });
+      residualRemoteResources.add(asset.url);
       continue;
     }
 
-    const safeName = sanitizeArchiveFilename(assetUrl, 'asset', 'bin', usedFilenames);
+    const safeName = sanitizeArchiveFilename(
+      asset.url,
+      'asset',
+      'bin',
+      usedFilenames,
+      fetched.mimeType,
+    );
     const archivePath = `assets/${safeName}`;
     zipFiles[archivePath] = fetched.bytes;
     totalBytes += fetched.bytes.byteLength;
-    urlToLocalPath.set(assetUrl, archivePath);
+    urlToLocalPath.set(asset.url, archivePath);
     rewrittenAssets.push({
-      originalUrl: assetUrl,
+      originalUrl: asset.url,
       archivePath,
       byteLength: fetched.bytes.byteLength,
     });
-
-    for (const el of info.elements) {
-      el.setAttribute(info.attr, archivePath);
-    }
   }
 
-  const finalCss = rewriteCssAssetUrls(combinedRawCss, baseHref, urlToLocalPath, new Set<string>());
-
-  let headEl = rootClone.querySelector('head');
-  if (!headEl) {
-    headEl = doc.createElement('head');
-    rootClone.insertBefore(headEl, rootClone.firstChild);
+  let htmlContent = prepared.sanitizedHtmlTemplate;
+  for (const [originalUrl, archivePath] of urlToLocalPath.entries()) {
+    const escapedUrl = originalUrl.replace(/&/g, '&amp;');
+    htmlContent = htmlContent.replace(new RegExp(escapeRegExp(escapedUrl), 'g'), archivePath);
+    htmlContent = htmlContent.replace(new RegExp(escapeRegExp(originalUrl), 'g'), archivePath);
   }
-  const styleLink = doc.createElement('link');
-  styleLink.setAttribute('rel', 'stylesheet');
-  styleLink.setAttribute('href', 'styles/snapshot.css');
-  headEl.appendChild(styleLink);
 
-  const htmlContent = `<!DOCTYPE html>\n${rootClone.outerHTML}\n`;
+  const finalCss = prepared.cssBlocks
+    .map((block) => rewriteCssAssetUrls(block.cssText, block.baseHref, urlToLocalPath, new Set()))
+    .join('\n');
 
   checkAborted(options.signal);
   options.onProgress?.({
@@ -449,18 +698,23 @@ export async function exportStaticPageClone(
   zipFiles['index.html'] = strToU8(htmlContent);
   zipFiles['styles/snapshot.css'] = strToU8(finalCss);
 
+  const residualList = Array.from(residualRemoteResources);
+  const isSelfContained = residualList.length === 0 && missingResources.length === 0;
+
   const manifest: ClonePageManifest = {
     schemaVersion: 1,
     exportedAt: new Date().toISOString(),
-    sourceTitle: doc.title.trim() || 'Snapshot',
-    cssFidelity: {
-      accessibleStylesheetRulesCount: accessibleRulesCount,
-      inaccessibleStylesheetsCount: frameAndSheetReport.inaccessibleStylesheets.length,
-      usedComputedStyleFallback: usedComputedFallback,
-      fidelityNote: usedComputedFallback
-        ? 'Includes viewport-specific computed-style fallback rules where original cross-origin stylesheets were inaccessible.'
-        : 'All stylesheet rules were extracted directly from accessible CSSOM stylesheets.',
+    sourceTitle: prepared.sourceTitle,
+    isSelfContained,
+    residualRemoteResources: residualList,
+    sanitizationPolicy: {
+      sanitizer: 'DOMPurify',
+      strippedActiveElements: FORBIDDEN_SNAPSHOT_TAGS,
+      defensiveCspApplied: true,
+      externalLinksPolicy:
+        'External http(s) anchor links are preserved with rel="noopener noreferrer"; scripts, iframes, srcdoc, form actions, and executable URI schemes are removed.',
     },
+    cssFidelity: prepared.cssFidelity,
     files: [
       'index.html',
       'styles/snapshot.css',
@@ -469,8 +723,9 @@ export async function exportStaticPageClone(
     ],
     rewrittenAssets,
     missingResources,
-    scopeDisclaimer:
-      'Static client-side HTML/CSS snapshot only.Executable scripts, event handlers, sensitive form values, server backends, and private APIs are intentionally excluded.',
+    scopeDisclaimer: isSelfContained
+      ? 'Static client-side HTML/CSS snapshot only. Executable scripts, iframes, event handlers, sensitive form values, server backends, and private APIs are intentionally excluded.'
+      : 'Static client-side HTML/CSS snapshot only (not fully self-contained; see missingResources and residualRemoteResources). Executable scripts, iframes, event handlers, sensitive form values, server backends, and private APIs are intentionally excluded.',
   };
 
   zipFiles['manifest.json'] = strToU8(JSON.stringify(manifest, null, 2));
@@ -488,4 +743,16 @@ export async function exportStaticPageClone(
     cssContent: finalCss,
     manifest,
   };
+}
+
+export async function exportStaticPageClone(
+  doc: Document,
+  win: Window,
+  options: ClonePageOptions = {},
+): Promise<ClonePageSnapshotResult> {
+  const prepared = prepareStaticPageClone(doc, win, {
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+  });
+  return finalizeStaticPageClone(prepared, options);
 }

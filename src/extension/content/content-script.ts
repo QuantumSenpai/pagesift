@@ -1,12 +1,16 @@
 import { strFromU8 } from 'fflate';
-import { buildAssetsZipArchive, extractPageAssets } from '../engines/assets-engine.js';
+import {
+  buildAssetsZipArchive,
+  extractPageAssets,
+  type AssetBinaryFetcher,
+} from '../engines/assets-engine.js';
 import {
   buildCapturePlan,
   executeDomCaptureCoordinator,
   type CaptureMode,
   type CaptureRect,
 } from '../engines/capture-engine.js';
-import { exportStaticPageClone } from '../engines/clone-page-engine.js';
+import { exportStaticPageClone, prepareStaticPageClone } from '../engines/clone-page-engine.js';
 import {
   generateLocalClonePrompt,
   type PromptTargetFramework,
@@ -29,6 +33,7 @@ import {
   validateMessageEnvelope,
   verifyDocumentBinding,
   type ExtensionMessageResponse,
+  type MessageOperation,
   type RuntimeMessageEnvelope,
   type ToolId,
 } from '../protocol/messages.js';
@@ -44,13 +49,45 @@ interface ChromeRuntimeLike {
       ) => boolean | undefined,
     ) => void;
   };
-  sendMessage?: (message: unknown) => Promise<unknown>;
+  sendMessage?: (message: unknown) => Promise<ExtensionMessageResponse>;
 }
 
+export interface ContentScriptAdapters {
+  fetchAssetBinary?: AssetBinaryFetcher;
+  captureViewportTab?: () => Promise<string>;
+  sendBackgroundMessage?: (message: RuntimeMessageEnvelope) => Promise<ExtensionMessageResponse>;
+}
+
+interface ActiveCaptureDomState {
+  originalScrollX: number;
+  originalScrollY: number;
+  savedPageSiftVisibility: Array<{ el: HTMLElement; visibility: string; priority: string }>;
+  fixedOrStickySaved: Array<{ el: HTMLElement; visibility: string; priority: string }>;
+}
+
+const UNBOUND_CONTENT_OPERATIONS = new Set<MessageOperation>([
+  'PING_CONTENT',
+  'GET_DOCUMENT_CONTEXT',
+  'GET_VIEWPORT_METRICS',
+  'SET_RESPONSIVE_SYNC',
+  'SYNC_SCROLL',
+  'CANCEL_JOB',
+  'CAPTURE_RESTORE',
+]);
+
 function uint8ToBase64(bytes: Uint8Array): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64');
+  }
   let binary = '';
-  for (let i = 0; i < bytes.byteLength; i += 1) {
-    binary += String.fromCharCode(bytes[i] ?? 0);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.byteLength; i += chunkSize) {
+    const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.byteLength));
+    let part = '';
+    for (let j = 0; j < slice.byteLength; j += 1) {
+      part += String.fromCharCode(slice[j] ?? 0);
+    }
+    binary += part;
   }
   return btoa(binary);
 }
@@ -59,6 +96,7 @@ export class ContentScriptRuntime {
   public readonly documentId: string;
   private readonly doc: Document;
   private readonly win: Window;
+  private readonly adapters: ContentScriptAdapters;
   private readonly editController: PageEditController;
   private activeTool: ToolId | null = null;
   private selectedElement: Element | null = null;
@@ -69,10 +107,16 @@ export class ContentScriptRuntime {
   private rafPending = false;
   private lastPointerTarget: Element | null = null;
   private readonly activeAbortControllers = new Map<string, AbortController>();
+  private activeCaptureState: ActiveCaptureDomState | null = null;
+  private responsiveSyncEnabled = false;
+  private suppressScrollEmitUntilMs = 0;
+  private scrollEmitTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastScrollEmitMs = 0;
 
-  public constructor(doc: Document, win: Window) {
+  public constructor(doc: Document, win: Window, adapters: ContentScriptAdapters = {}) {
     this.doc = doc;
     this.win = win;
+    this.adapters = adapters;
     this.documentId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     this.editController = new PageEditController(doc);
   }
@@ -85,8 +129,14 @@ export class ContentScriptRuntime {
   }
 
   public dispose(): void {
+    this.restoreCaptureDomState();
     this.deactivateInteractiveTools();
     this.editController.resetAll();
+    this.responsiveSyncEnabled = false;
+    if (this.scrollEmitTimer !== null) {
+      clearTimeout(this.scrollEmitTimer);
+      this.scrollEmitTimer = null;
+    }
     for (const controller of this.activeAbortControllers.values()) {
       controller.abort();
     }
@@ -107,11 +157,62 @@ export class ContentScriptRuntime {
     this.dispose();
   };
 
-  private readonly handleScrollOrResize = (): void => {
+  private readonly handleScrollOrResize = (event?: Event): void => {
     if (this.activeTool && this.selectedElement && this.selectedElement.isConnected) {
       this.scheduleOverlayUpdate(this.selectedElement);
     }
+    if (
+      event?.type === 'scroll' &&
+      this.responsiveSyncEnabled &&
+      Date.now() >= this.suppressScrollEmitUntilMs
+    ) {
+      this.scheduleResponsiveScrollEmit();
+    }
   };
+
+  private scheduleResponsiveScrollEmit(): void {
+    const now = Date.now();
+    const minEmitIntervalMs = 45;
+    const elapsed = now - this.lastScrollEmitMs;
+
+    const emitNow = (): void => {
+      this.scrollEmitTimer = null;
+      if (!this.responsiveSyncEnabled || Date.now() < this.suppressScrollEmitUntilMs) {
+        return;
+      }
+      this.lastScrollEmitMs = Date.now();
+      const maxScrollX = Math.max(
+        0,
+        (this.doc.documentElement.scrollWidth || 0) - (this.win.innerWidth || 0),
+      );
+      const maxScrollY = Math.max(
+        0,
+        (this.doc.documentElement.scrollHeight || 0) - (this.win.innerHeight || 0),
+      );
+      const scrollXRatio =
+        maxScrollX > 0 ? Math.max(0, Math.min(1, this.win.scrollX / maxScrollX)) : 0;
+      const scrollYRatio =
+        maxScrollY > 0 ? Math.max(0, Math.min(1, this.win.scrollY / maxScrollY)) : 0;
+
+      const envelope: RuntimeMessageEnvelope = {
+        schemaVersion: 1,
+        requestId: `sync-out-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        operation: 'SYNC_SCROLL',
+        documentId: this.documentId,
+        payload: { scrollXRatio, scrollYRatio },
+      };
+
+      if (this.adapters.sendBackgroundMessage) {
+        void this.adapters.sendBackgroundMessage(envelope).catch(() => undefined);
+      }
+    };
+
+    if (elapsed >= minEmitIntervalMs && this.scrollEmitTimer === null) {
+      emitNow();
+    } else if (this.scrollEmitTimer === null) {
+      this.scrollEmitTimer = setTimeout(emitNow, Math.max(10, minEmitIntervalMs - elapsed));
+    }
+  }
 
   private readonly handlePointerMove = (event: MouseEvent): void => {
     if (!this.activeTool) {
@@ -259,6 +360,56 @@ export class ContentScriptRuntime {
     return fallback;
   }
 
+  private restoreCaptureDomState(): {
+    restoredScroll: { scrollX: number; scrollY: number };
+    restoredFixedElementsCount: number;
+  } {
+    const state = this.activeCaptureState;
+    if (!state) {
+      return {
+        restoredScroll: { scrollX: this.win.scrollX, scrollY: this.win.scrollY },
+        restoredFixedElementsCount: 0,
+      };
+    }
+
+    for (const fixedItem of state.fixedOrStickySaved) {
+      if (fixedItem.visibility) {
+        fixedItem.el.style.setProperty('visibility', fixedItem.visibility, fixedItem.priority);
+      } else {
+        fixedItem.el.style.removeProperty('visibility');
+      }
+    }
+
+    for (const item of state.savedPageSiftVisibility) {
+      if (item.visibility) {
+        item.el.style.setProperty('visibility', item.visibility, item.priority);
+      } else {
+        item.el.style.removeProperty('visibility');
+      }
+    }
+
+    this.win.scrollTo(state.originalScrollX, state.originalScrollY);
+    const count = state.fixedOrStickySaved.length;
+    this.activeCaptureState = null;
+
+    return {
+      restoredScroll: { scrollX: this.win.scrollX, scrollY: this.win.scrollY },
+      restoredFixedElementsCount: count,
+    };
+  }
+
+  private async waitForPaintFrame(): Promise<void> {
+    if (typeof this.win.requestAnimationFrame === 'function') {
+      await new Promise<void>((resolve) => {
+        this.win.requestAnimationFrame(() => {
+          this.win.requestAnimationFrame(() => {
+            resolve();
+          });
+        });
+      });
+    }
+  }
+
   public async handleMessage(rawMessage: unknown): Promise<ExtensionMessageResponse> {
     const validated = validateMessageEnvelope(rawMessage);
     if (!validated.valid) {
@@ -266,16 +417,15 @@ export class ContentScriptRuntime {
     }
 
     const msg: RuntimeMessageEnvelope = validated.message;
+    const bindingRequired = !UNBOUND_CONTENT_OPERATIONS.has(msg.operation);
 
-    if (
-      msg.operation !== 'PING_CONTENT' &&
-      msg.operation !== 'GET_DOCUMENT_CONTEXT' &&
-      !verifyDocumentBinding(msg.documentId, this.documentId)
-    ) {
+    if (!verifyDocumentBinding(msg.documentId, this.documentId, bindingRequired)) {
       return createErrorResponse(
         msg.requestId,
         'STALE_DOCUMENT',
-        'Page navigated since operation was initiated; stale request rejected',
+        msg.documentId
+          ? 'Page navigated since operation was initiated; stale request rejected'
+          : `Operation ${msg.operation} requires an active documentId binding`,
         msg.operation,
       );
     }
@@ -292,6 +442,25 @@ export class ContentScriptRuntime {
               pageTitle: this.doc.title,
               activeTool: this.activeTool,
               editHistory: this.editController.getStatus(),
+              responsiveSyncEnabled: this.responsiveSyncEnabled,
+            },
+            this.documentId,
+          );
+
+        case 'GET_VIEWPORT_METRICS':
+          return createSuccessResponse(
+            msg,
+            {
+              innerWidth: this.win.innerWidth || 0,
+              innerHeight: this.win.innerHeight || 0,
+              outerWidth: this.win.outerWidth || 0,
+              outerHeight: this.win.outerHeight || 0,
+              devicePixelRatio: this.win.devicePixelRatio || 1,
+              scrollX: this.win.scrollX,
+              scrollY: this.win.scrollY,
+              scrollWidth: this.doc.documentElement.scrollWidth || 0,
+              scrollHeight: this.doc.documentElement.scrollHeight || 0,
+              pageUrl: this.doc.location.href,
             },
             this.documentId,
           );
@@ -323,6 +492,7 @@ export class ContentScriptRuntime {
             ctrl.abort();
             this.activeAbortControllers.delete(targetJobId);
           }
+          this.restoreCaptureDomState();
           return createSuccessResponse(
             msg,
             { cancelled: true, jobId: targetJobId },
@@ -361,11 +531,19 @@ export class ContentScriptRuntime {
           const report = extractPageAssets(this.doc, this.win);
           const includeZip = msg.payload['includeZip'] === true;
           let zipBase64: string | null = null;
+          let packagedFilesCount = 0;
+          let skippedOrUnavailable: Array<{ id: string; url: string; reason: string }> = [];
           if (includeZip) {
-            const zipRes = await buildAssetsZipArchive(report);
+            const zipRes = await buildAssetsZipArchive(report, this.adapters.fetchAssetBinary);
             zipBase64 = uint8ToBase64(zipRes.zipBytes);
+            packagedFilesCount = zipRes.packagedFilesCount;
+            skippedOrUnavailable = zipRes.skippedOrUnavailable;
           }
-          return createSuccessResponse(msg, { report, zipBase64 }, this.documentId);
+          return createSuccessResponse(
+            msg,
+            { report, zipBase64, packagedFilesCount, skippedOrUnavailable },
+            this.documentId,
+          );
         }
 
         case 'RUN_DESIGN_MD': {
@@ -389,8 +567,17 @@ export class ContentScriptRuntime {
           const abortCtrl = new AbortController();
           this.activeAbortControllers.set(msg.requestId, abortCtrl);
           try {
+            if (msg.payload['prepareOnly'] === true) {
+              const prepared = prepareStaticPageClone(this.doc, this.win, {
+                signal: abortCtrl.signal,
+              });
+              return createSuccessResponse(msg, { prepared }, this.documentId);
+            }
             const snapshot = await exportStaticPageClone(this.doc, this.win, {
               signal: abortCtrl.signal,
+              ...(this.adapters.fetchAssetBinary
+                ? { fetcher: this.adapters.fetchAssetBinary }
+                : {}),
             });
             return createSuccessResponse(
               msg,
@@ -486,6 +673,160 @@ export class ContentScriptRuntime {
           return createSuccessResponse(msg, { report }, this.documentId);
         }
 
+        case 'CAPTURE_PREPARE': {
+          this.restoreCaptureDomState();
+          const mode = (msg.payload['mode'] as CaptureMode | undefined) ?? 'visible';
+          const originalScrollX = this.win.scrollX;
+          const originalScrollY = this.win.scrollY;
+          let targetRect: CaptureRect | undefined;
+
+          if (mode === 'element') {
+            const el = this.resolveTargetElement(msg.payload['selector']);
+            if (typeof el.scrollIntoView === 'function') {
+              el.scrollIntoView({ block: 'center', inline: 'nearest' });
+              await this.waitForPaintFrame();
+            }
+            const rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) {
+              throw new Error('Target element has zero visible width or height');
+            }
+            targetRect = {
+              x: Math.max(0, rect.left),
+              y: Math.max(0, rect.top),
+              width: rect.width,
+              height: rect.height,
+            };
+          } else if (
+            mode === 'area' &&
+            typeof msg.payload['rect'] === 'object' &&
+            msg.payload['rect'] !== null
+          ) {
+            const r = msg.payload['rect'] as Record<string, number>;
+            targetRect = {
+              x: r['x'] ?? 0,
+              y: r['y'] ?? 0,
+              width: r['width'] ?? 400,
+              height: r['height'] ?? 300,
+            };
+          }
+
+          const pageSiftNodes = Array.from(
+            this.doc.querySelectorAll<HTMLElement>(`[${PAGESIFT_ROOT_ATTR}], #pagesift-root-host`),
+          );
+          const savedPageSiftVisibility = pageSiftNodes.map((el) => ({
+            el,
+            visibility: el.style.getPropertyValue('visibility'),
+            priority: el.style.getPropertyPriority('visibility'),
+          }));
+          for (const item of savedPageSiftVisibility) {
+            item.el.style.setProperty('visibility', 'hidden', 'important');
+          }
+
+          const fixedOrStickySaved: Array<{
+            el: HTMLElement;
+            visibility: string;
+            priority: string;
+          }> = [];
+          if (mode === 'full_page') {
+            for (const node of Array.from(this.doc.querySelectorAll('*'))) {
+              if (!('style' in node) || node.hasAttribute(PAGESIFT_ROOT_ATTR)) {
+                continue;
+              }
+              const htmlNode = node as HTMLElement;
+              const pos = this.win.getComputedStyle(htmlNode).position;
+              if (pos === 'fixed' || pos === 'sticky') {
+                fixedOrStickySaved.push({
+                  el: htmlNode,
+                  visibility: htmlNode.style.getPropertyValue('visibility'),
+                  priority: htmlNode.style.getPropertyPriority('visibility'),
+                });
+              }
+            }
+          }
+
+          this.activeCaptureState = {
+            originalScrollX,
+            originalScrollY,
+            savedPageSiftVisibility,
+            fixedOrStickySaved,
+          };
+
+          const plan = buildCapturePlan({
+            mode,
+            viewportWidth: this.win.innerWidth || 1280,
+            viewportHeight: this.win.innerHeight || 800,
+            documentWidth: Math.max(
+              this.doc.documentElement.scrollWidth || 0,
+              this.doc.body.scrollWidth || 0,
+              this.win.innerWidth || 1280,
+            ),
+            documentHeight: Math.max(
+              this.doc.documentElement.scrollHeight || 0,
+              this.doc.body.scrollHeight || 0,
+              this.win.innerHeight || 800,
+            ),
+            currentScrollX: this.win.scrollX,
+            currentScrollY: this.win.scrollY,
+            devicePixelRatio: this.win.devicePixelRatio || 1,
+            ...(targetRect ? { targetRect } : {}),
+          });
+
+          await this.waitForPaintFrame();
+
+          return createSuccessResponse(
+            msg,
+            {
+              plan,
+              pageTitle: this.doc.title || 'PageSift Capture',
+              pageUrl: this.doc.location.href,
+              viewportWidth: this.win.innerWidth || 1280,
+              viewportHeight: this.win.innerHeight || 800,
+              devicePixelRatio: this.win.devicePixelRatio || 1,
+              fixedElementsCount: fixedOrStickySaved.length,
+            },
+            this.documentId,
+          );
+        }
+
+        case 'CAPTURE_SCROLL_TO': {
+          const scrollX = typeof msg.payload['scrollX'] === 'number' ? msg.payload['scrollX'] : 0;
+          const scrollY = typeof msg.payload['scrollY'] === 'number' ? msg.payload['scrollY'] : 0;
+          const hideFixed = msg.payload['hideFixed'] === true;
+          const lazyWaitMs =
+            typeof msg.payload['lazyWaitMs'] === 'number'
+              ? Math.min(400, Math.max(0, msg.payload['lazyWaitMs']))
+              : 50;
+
+          if (hideFixed && this.activeCaptureState) {
+            for (const fixedItem of this.activeCaptureState.fixedOrStickySaved) {
+              fixedItem.el.style.setProperty('visibility', 'hidden', 'important');
+            }
+          }
+
+          this.win.scrollTo(scrollX, scrollY);
+          if (lazyWaitMs > 0) {
+            await new Promise((r) => setTimeout(r, lazyWaitMs));
+          }
+          await this.waitForPaintFrame();
+
+          return createSuccessResponse(
+            msg,
+            {
+              actualScrollX: this.win.scrollX,
+              actualScrollY: this.win.scrollY,
+              viewportWidth: this.win.innerWidth || 1280,
+              viewportHeight: this.win.innerHeight || 800,
+              devicePixelRatio: this.win.devicePixelRatio || 1,
+            },
+            this.documentId,
+          );
+        }
+
+        case 'CAPTURE_RESTORE': {
+          const restored = this.restoreCaptureDomState();
+          return createSuccessResponse(msg, restored, this.documentId);
+        }
+
         case 'RUN_CAPTURE': {
           const mode = (msg.payload['mode'] as CaptureMode | undefined) ?? 'visible';
           let targetRect: CaptureRect | undefined;
@@ -533,6 +874,15 @@ export class ContentScriptRuntime {
             return createSuccessResponse(msg, { plan }, this.documentId);
           }
 
+          if (!this.adapters.captureViewportTab) {
+            return createErrorResponse(
+              msg.requestId,
+              'TOOL_EXECUTION_ERROR',
+              'Real browser tab capture must be executed through the background service worker',
+              msg.operation,
+            );
+          }
+
           const coordinated = await executeDomCaptureCoordinator({
             doc: this.doc,
             win: this.win,
@@ -540,14 +890,22 @@ export class ContentScriptRuntime {
             ...(targetRect ? { targetRect } : {}),
             minIntervalMs: 10,
             lazyWaitMs: 10,
-            captureViewportTab: () =>
-              Promise.resolve(
-                typeof msg.payload['fallbackDataUrl'] === 'string'
-                  ? msg.payload['fallbackDataUrl']
-                  : '',
-              ),
+            captureViewportTab: this.adapters.captureViewportTab,
           });
           return createSuccessResponse(msg, { coordinated }, this.documentId);
+        }
+
+        case 'SET_RESPONSIVE_SYNC': {
+          this.responsiveSyncEnabled = msg.payload['enabled'] === true;
+          if (!this.responsiveSyncEnabled && this.scrollEmitTimer !== null) {
+            clearTimeout(this.scrollEmitTimer);
+            this.scrollEmitTimer = null;
+          }
+          return createSuccessResponse(
+            msg,
+            { responsiveSyncEnabled: this.responsiveSyncEnabled },
+            this.documentId,
+          );
         }
 
         case 'SYNC_SCROLL': {
@@ -563,6 +921,7 @@ export class ContentScriptRuntime {
             0,
             (this.doc.documentElement.scrollHeight || 0) - (this.win.innerHeight || 0),
           );
+          this.suppressScrollEmitUntilMs = Date.now() + 260;
           this.win.scrollTo(Math.round(xRatio * maxScrollX), Math.round(yRatio * maxScrollY));
           return createSuccessResponse(
             msg,
@@ -612,7 +971,14 @@ function bootstrapContentScript(): void {
     return;
   }
 
-  const runtime = new ContentScriptRuntime(document, window);
+  const runtime = new ContentScriptRuntime(document, window, {
+    sendBackgroundMessage: (message) => {
+      if (!chromeGlobal.runtime?.sendMessage) {
+        return Promise.reject(new Error('chrome.runtime.sendMessage unavailable'));
+      }
+      return chromeGlobal.runtime.sendMessage(message);
+    },
+  });
   runtime.init();
   (
     window as unknown as { __pagesiftContentRuntime?: ContentScriptRuntime }

@@ -6,6 +6,28 @@ export interface ResponsiveViewportPreset {
   category: 'mobile' | 'tablet' | 'laptop' | 'desktop';
 }
 
+export interface ManagedResponsiveWindowRecord {
+  presetId: string;
+  label: string;
+  windowId: number;
+  tabId: number;
+  requestedWidth: number;
+  requestedHeight: number;
+  actualInnerWidth: number | null;
+  actualInnerHeight: number | null;
+  chromeDeltaWidth: number | null;
+  chromeDeltaHeight: number | null;
+  sizeConstrainedByBrowser: boolean;
+}
+
+export interface ResponsiveSessionState {
+  sessionId: string;
+  targetUrl: string;
+  syncEnabled: boolean;
+  windows: ManagedResponsiveWindowRecord[];
+  createdAt: string;
+}
+
 export const DEFAULT_RESPONSIVE_PRESETS: ResponsiveViewportPreset[] = [
   { id: 'mobile-sm', label: 'Mobile (375×812)', width: 375, height: 812, category: 'mobile' },
   { id: 'tablet-md', label: 'Tablet (768×1024)', width: 768, height: 1024, category: 'tablet' },
@@ -51,6 +73,7 @@ export function createResponsiveInspectionPlan(
     synchronizationSupported: true,
     limitationsDisclosure: [
       'Uses controlled browser popup windows at target CSS pixel dimensions so top-level media queries execute natively without violating X-Frame-Options or CSP frame-ancestors.',
+      'Operating systems and Chromium enforce minimum and maximum popup window dimensions; actual measured inner viewport sizes are reported alongside requested dimensions.',
       'Does not emulate touch hardware events, mobile GPU shaders, or server-side User-Agent sniffing without debugger attachment.',
       'Synchronized scrolling operates across controllable HTTP(S) tabs where the PageSift content script is active.',
     ],
@@ -62,15 +85,28 @@ export class ResponsiveScrollSynchronizer {
   private lastEventTimestampMs = 0;
   private readonly echoSuppressionWindowMs: number;
   private readonly managedTabIds = new Set<number>();
+  private enabled = true;
 
-  public constructor(echoSuppressionWindowMs = 150) {
+  public constructor(echoSuppressionWindowMs = 180) {
     this.echoSuppressionWindowMs = echoSuppressionWindowMs;
+  }
+
+  public setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+  }
+
+  public isEnabled(): boolean {
+    return this.enabled;
   }
 
   public registerManagedTabs(tabIds: number[]): void {
     for (const id of tabIds) {
       this.managedTabIds.add(id);
     }
+  }
+
+  public getManagedTabIds(): number[] {
+    return Array.from(this.managedTabIds);
   }
 
   public unregisterTab(tabId: number): void {
@@ -97,7 +133,7 @@ export class ResponsiveScrollSynchronizer {
     scrollYRatio: number;
   } {
     const now = params.nowMs ?? Date.now();
-    if (!this.managedTabIds.has(params.sourceTabId)) {
+    if (!this.enabled || !this.managedTabIds.has(params.sourceTabId)) {
       return {
         shouldBroadcast: false,
         targetTabIds: [],

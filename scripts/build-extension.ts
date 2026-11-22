@@ -148,8 +148,8 @@ async function buildExtension(): Promise<void> {
     version: '1.0.0',
     description:
       'Free, open-source local web inspection, design token extraction, static page snapshot, and DESIGN.md toolkit.',
-    permissions: ['activeTab', 'storage', 'downloads', 'unlimitedStorage'],
-    optional_host_permissions: ['https://*/*', 'http://*/*'],
+    permissions: ['activeTab', 'tabs', 'storage', 'downloads', 'unlimitedStorage'],
+    host_permissions: ['<all_urls>'],
     background: {
       service_worker: 'service-worker.js',
     },

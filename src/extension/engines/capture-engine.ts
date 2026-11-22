@@ -23,6 +23,8 @@ export interface CaptureTile {
   tileIndex: number;
   scrollX: number;
   scrollY: number;
+  actualScrollX: number;
+  actualScrollY: number;
   viewportWidth: number;
   viewportHeight: number;
   devicePixelRatio: number;
@@ -40,6 +42,8 @@ export interface CapturePlan {
 }
 
 export const MAX_CAPTURE_HEIGHT_CSS_PX = 16384;
+export const MAX_CAPTURE_CANVAS_DIM_PX = 32768;
+export const MAX_WEBP_DIMENSION_PX = 16383;
 export const MAX_CAPTURE_TILES = 20;
 export const MIN_CAPTURE_INTERVAL_MS = 550;
 
@@ -88,7 +92,13 @@ export function buildCapturePlan(params: {
   }
 
   const rawDocHeight = Math.max(vh, Math.round(params.documentHeight));
-  const cappedHeight = Math.min(MAX_CAPTURE_HEIGHT_CSS_PX, vh * MAX_CAPTURE_TILES, rawDocHeight);
+  const maxCssHeightForCanvas = Math.floor(MAX_CAPTURE_CANVAS_DIM_PX / dpr);
+  const cappedHeight = Math.min(
+    MAX_CAPTURE_HEIGHT_CSS_PX,
+    maxCssHeightForCanvas,
+    vh * MAX_CAPTURE_TILES,
+    rawDocHeight,
+  );
   const truncatedToMaxHeight = rawDocHeight > cappedHeight;
 
   const tiles: Array<{ scrollX: number; scrollY: number; tileIndex: number }> = [];
@@ -128,6 +138,7 @@ export async function executeDomCaptureCoordinator(params: {
   tiles: CaptureTile[];
   restoredScroll: { scrollX: number; scrollY: number };
   restoredFixedElementsCount: number;
+  nestedScrollDetected: boolean;
 }> {
   const { doc, win, mode, targetRect, captureViewportTab, signal } = params;
   const minIntervalMs = params.minIntervalMs ?? MIN_CAPTURE_INTERVAL_MS;
@@ -173,6 +184,7 @@ export async function executeDomCaptureCoordinator(params: {
 
   const capturedTiles: CaptureTile[] = [];
   let lastCaptureTime = 0;
+  let nestedScrollDetected = false;
 
   try {
     for (const item of savedPageSiftVisibility) {
@@ -216,6 +228,19 @@ export async function executeDomCaptureCoordinator(params: {
         await new Promise((r) => setTimeout(r, lazyWaitMs));
       }
 
+      const actualScrollX = win.scrollX;
+      const actualScrollY = win.scrollY;
+      const previousTile = capturedTiles[capturedTiles.length - 1];
+      if (
+        tileSpec.tileIndex > 0 &&
+        previousTile &&
+        actualScrollY <= previousTile.actualScrollY &&
+        tileSpec.scrollY > previousTile.scrollY
+      ) {
+        nestedScrollDetected = true;
+        break;
+      }
+
       const elapsed = Date.now() - lastCaptureTime;
       if (lastCaptureTime > 0 && elapsed < minIntervalMs) {
         await new Promise((r) => setTimeout(r, minIntervalMs - elapsed));
@@ -226,12 +251,17 @@ export async function executeDomCaptureCoordinator(params: {
       }
 
       const dataUrl = await captureViewportTab();
+      if (!dataUrl || !dataUrl.startsWith('data:image/')) {
+        throw new Error('Tab capture returned empty or invalid image data');
+      }
       lastCaptureTime = Date.now();
 
       capturedTiles.push({
         tileIndex: tileSpec.tileIndex,
         scrollX: tileSpec.scrollX,
         scrollY: tileSpec.scrollY,
+        actualScrollX,
+        actualScrollY,
         viewportWidth: win.innerWidth || 1280,
         viewportHeight: win.innerHeight || 800,
         devicePixelRatio: plan.devicePixelRatio,
@@ -263,10 +293,11 @@ export async function executeDomCaptureCoordinator(params: {
     tiles: capturedTiles,
     restoredScroll: { scrollX: win.scrollX, scrollY: win.scrollY },
     restoredFixedElementsCount: fixedOrStickySaved.length,
+    nestedScrollDetected,
   };
 }
 
-function decodeBase64ToBytes(base64: string): Uint8Array {
+export function decodeBase64ToBytes(base64: string): Uint8Array {
   if (typeof Buffer !== 'undefined') {
     return new Uint8Array(Buffer.from(base64, 'base64'));
   }
@@ -278,15 +309,255 @@ function decodeBase64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-function encodeBytesToBase64(bytes: Uint8Array): string {
+export function encodeBytesToBase64(bytes: Uint8Array): string {
   if (typeof Buffer !== 'undefined') {
     return Buffer.from(bytes).toString('base64');
   }
   let binary = '';
-  for (let i = 0; i < bytes.byteLength; i += 1) {
-    binary += String.fromCharCode(bytes[i] ?? 0);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.byteLength; i += chunkSize) {
+    const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.byteLength));
+    let part = '';
+    for (let j = 0; j < slice.byteLength; j += 1) {
+      part += String.fromCharCode(slice[j] ?? 0);
+    }
+    binary += part;
   }
   return btoa(binary);
+}
+
+export async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+  const commaIdx = dataUrl.indexOf(',');
+  if (commaIdx === -1 || !dataUrl.startsWith('data:')) {
+    throw new Error('Invalid data URL');
+  }
+  const header = dataUrl.slice(5, commaIdx);
+  const mime = header.split(';')[0] || 'application/octet-stream';
+  const bytes = decodeBase64ToBytes(dataUrl.slice(commaIdx + 1));
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return Promise.resolve(new Blob([copy], { type: mime }));
+}
+
+export async function blobToDataUrl(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  return `data:${blob.type || 'application/octet-stream'};base64,${encodeBytesToBase64(bytes)}`;
+}
+
+export async function composeCaptureFromTiles(params: {
+  tiles: CaptureTile[];
+  plan: CapturePlan;
+  exportMime: CaptureExportMime;
+  cropRect?: CaptureRect;
+  annotations?: CaptureAnnotation[];
+  title: string;
+  pageUrl: string;
+  quality?: number;
+}): Promise<{
+  dataUrl: string;
+  previewPngDataUrl?: string;
+  width: number;
+  height: number;
+  mimeType: CaptureExportMime;
+}> {
+  const { tiles, plan, exportMime, cropRect, annotations, title, pageUrl } = params;
+  if (tiles.length === 0) {
+    throw new Error('No captured image tiles available to compose');
+  }
+  if (typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') {
+    throw new Error('OffscreenCanvas and createImageBitmap are required for image composition');
+  }
+
+  const bitmaps: Array<{ tile: CaptureTile; bitmap: ImageBitmap }> = [];
+  try {
+    for (const tile of tiles) {
+      const blob = await dataUrlToBlob(tile.dataUrl);
+      const bitmap = await createImageBitmap(blob);
+      bitmaps.push({ tile, bitmap });
+    }
+
+    const first = bitmaps[0];
+    if (!first) {
+      throw new Error('Failed to decode first capture tile');
+    }
+
+    const scaleX = first.bitmap.width / Math.max(1, first.tile.viewportWidth);
+    const scaleY = first.bitmap.height / Math.max(1, first.tile.viewportHeight);
+
+    let fullCanvasWidthPx: number;
+    let fullCanvasHeightPx: number;
+    let stitchedCanvas: OffscreenCanvas;
+
+    if (tiles.length === 1) {
+      fullCanvasWidthPx = first.bitmap.width;
+      fullCanvasHeightPx = first.bitmap.height;
+      stitchedCanvas = new OffscreenCanvas(fullCanvasWidthPx, fullCanvasHeightPx);
+      const ctx = stitchedCanvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Failed to acquire 2D context for capture composition');
+      }
+      ctx.drawImage(first.bitmap, 0, 0);
+    } else {
+      const last = bitmaps[bitmaps.length - 1];
+      const measuredCssHeight = last
+        ? Math.min(plan.totalHeightCssPx, last.tile.actualScrollY + last.tile.viewportHeight)
+        : plan.totalHeightCssPx;
+      fullCanvasWidthPx = Math.min(
+        MAX_CAPTURE_CANVAS_DIM_PX,
+        Math.max(1, Math.round(first.tile.viewportWidth * scaleX)),
+      );
+      fullCanvasHeightPx = Math.min(
+        MAX_CAPTURE_CANVAS_DIM_PX,
+        Math.max(1, Math.round(measuredCssHeight * scaleY)),
+      );
+      stitchedCanvas = new OffscreenCanvas(fullCanvasWidthPx, fullCanvasHeightPx);
+      const ctx = stitchedCanvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Failed to acquire 2D context for full-page stitching');
+      }
+
+      let coveredBottomCss = 0;
+      for (let i = 0; i < bitmaps.length; i += 1) {
+        const current = bitmaps[i];
+        if (!current) {
+          continue;
+        }
+        const { tile, bitmap } = current;
+        if (i === 0) {
+          ctx.drawImage(bitmap, 0, 0);
+          coveredBottomCss = tile.actualScrollY + tile.viewportHeight;
+        } else {
+          const overlapCss = Math.max(0, coveredBottomCss - tile.actualScrollY);
+          const srcYPx = Math.min(bitmap.height - 1, Math.round(overlapCss * scaleY));
+          const remainingSrcHeightPx = Math.max(1, bitmap.height - srcYPx);
+          const destYPx = Math.round(coveredBottomCss * scaleY);
+          const drawHeightPx = Math.min(remainingSrcHeightPx, fullCanvasHeightPx - destYPx);
+          if (drawHeightPx > 0) {
+            ctx.drawImage(
+              bitmap,
+              0,
+              srcYPx,
+              bitmap.width,
+              drawHeightPx,
+              0,
+              destYPx,
+              fullCanvasWidthPx,
+              drawHeightPx,
+            );
+          }
+          coveredBottomCss = Math.max(coveredBottomCss, tile.actualScrollY + tile.viewportHeight);
+        }
+      }
+    }
+
+    const activeCrop =
+      cropRect ??
+      (plan.mode === 'area' || plan.mode === 'element' ? plan.cropRectCssPx : undefined);
+
+    let outputCanvas = stitchedCanvas;
+    if (activeCrop) {
+      const cropX = Math.max(0, Math.min(fullCanvasWidthPx - 1, Math.round(activeCrop.x * scaleX)));
+      const cropY = Math.max(
+        0,
+        Math.min(fullCanvasHeightPx - 1, Math.round(activeCrop.y * scaleY)),
+      );
+      const cropW = Math.max(
+        1,
+        Math.min(fullCanvasWidthPx - cropX, Math.round(activeCrop.width * scaleX)),
+      );
+      const cropH = Math.max(
+        1,
+        Math.min(fullCanvasHeightPx - cropY, Math.round(activeCrop.height * scaleY)),
+      );
+      const cropped = new OffscreenCanvas(cropW, cropH);
+      const cropCtx = cropped.getContext('2d');
+      if (!cropCtx) {
+        throw new Error('Failed to acquire 2D context for cropping');
+      }
+      cropCtx.drawImage(stitchedCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+      outputCanvas = cropped;
+    }
+
+    if (annotations && annotations.length > 0) {
+      const annCtx = outputCanvas.getContext('2d');
+      if (annCtx) {
+        for (const ann of annotations) {
+          const ax = Math.round(ann.x * scaleX);
+          const ay = Math.round(ann.y * scaleY);
+          const aw = Math.max(2, Math.round(ann.width * scaleX));
+          const ah = Math.max(2, Math.round(ann.height * scaleY));
+          annCtx.strokeStyle = ann.color;
+          annCtx.lineWidth = Math.max(2, Math.round(3 * scaleX));
+          annCtx.strokeRect(ax, ay, aw, ah);
+          if (ann.label.trim().length > 0) {
+            const fontSize = Math.max(12, Math.round(13 * scaleX));
+            annCtx.font = `bold ${fontSize}px sans-serif`;
+            const textWidth = Math.ceil(annCtx.measureText(ann.label).width);
+            const labelHeight = fontSize + Math.round(8 * scaleY);
+            const labelY = Math.max(0, ay - labelHeight);
+            annCtx.fillStyle = ann.color;
+            annCtx.fillRect(ax, labelY, textWidth + Math.round(12 * scaleX), labelHeight);
+            annCtx.fillStyle = '#ffffff';
+            annCtx.fillText(ann.label, ax + Math.round(6 * scaleX), labelY + fontSize);
+          }
+        }
+      }
+    }
+
+    const quality = params.quality ?? 0.92;
+
+    if (
+      exportMime === 'image/webp' &&
+      (outputCanvas.width > MAX_WEBP_DIMENSION_PX || outputCanvas.height > MAX_WEBP_DIMENSION_PX)
+    ) {
+      throw new Error(
+        `WebP format maximum dimension is ${MAX_WEBP_DIMENSION_PX}px (captured ${outputCanvas.width}×${outputCanvas.height}px); use PNG, JPEG, or PDF`,
+      );
+    }
+
+    if (exportMime === 'application/pdf') {
+      const jpegBlob = await outputCanvas.convertToBlob({ type: 'image/jpeg', quality });
+      const jpegDataUrl = await blobToDataUrl(jpegBlob);
+      const pngBlob = await outputCanvas.convertToBlob({ type: 'image/png' });
+      const previewPngDataUrl = await blobToDataUrl(pngBlob);
+      const pdfDataUrl = buildPdfDocumentFromCapture({
+        width: outputCanvas.width,
+        height: outputCanvas.height,
+        title,
+        pageUrl,
+        jpegDataUrl,
+      });
+      return {
+        dataUrl: pdfDataUrl,
+        previewPngDataUrl,
+        width: outputCanvas.width,
+        height: outputCanvas.height,
+        mimeType: 'application/pdf',
+      };
+    }
+
+    const encodedBlob = await outputCanvas.convertToBlob({
+      type: exportMime,
+      ...(exportMime === 'image/jpeg' || exportMime === 'image/webp' ? { quality } : {}),
+    });
+    if (encodedBlob.type !== exportMime) {
+      throw new Error(
+        `Browser canvas encoder does not support requested format ${exportMime} (returned ${encodedBlob.type})`,
+      );
+    }
+    const dataUrl = await blobToDataUrl(encodedBlob);
+    return {
+      dataUrl,
+      width: outputCanvas.width,
+      height: outputCanvas.height,
+      mimeType: exportMime,
+    };
+  } finally {
+    for (const item of bitmaps) {
+      item.bitmap.close();
+    }
+  }
 }
 
 export function verifyCaptureBinaryAndDimensions(dataUrl: string): {
@@ -399,6 +670,9 @@ export function verifyCaptureBinaryAndDimensions(dataUrl: string): {
   if (!pdfText.startsWith('%PDF-1.4') || !pdfText.includes('%%EOF')) {
     throw new Error('Invalid PDF 1.4 binary structure');
   }
+  if (!pdfText.includes('/Subtype /Image') || !pdfText.includes('/Filter /DCTDecode')) {
+    throw new Error('PDF capture is missing embedded raster image stream');
+  }
   const mediaBoxMatch = /\/MediaBox\s*\[\s*0\s+0\s+(\d+)\s+(\d+)\s*\]/.exec(pdfText);
   const width = Number.parseInt(mediaBoxMatch?.[1] ?? '0', 10);
   const height = Number.parseInt(mediaBoxMatch?.[2] ?? '0', 10);
@@ -408,6 +682,28 @@ export function verifyCaptureBinaryAndDimensions(dataUrl: string): {
   return { valid: true, mimeType: 'application/pdf', width, height, byteLength: bytes.byteLength };
 }
 
+function asciiToBytes(text: string): Uint8Array {
+  const out = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i += 1) {
+    out[i] = text.charCodeAt(i) & 0xff;
+  }
+  return out;
+}
+
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const part of parts) {
+    total += part.byteLength;
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.byteLength;
+  }
+  return out;
+}
+
 export function buildPdfDocumentFromCapture(params: {
   width: number;
   height: number;
@@ -415,39 +711,54 @@ export function buildPdfDocumentFromCapture(params: {
   pageUrl: string;
   jpegDataUrl?: string;
 }): string {
-  const width = Math.max(1, Math.round(params.width));
-  const height = Math.max(1, Math.round(params.height));
-  const safeTitle = params.title.replace(/[()\\]/g, '');
+  if (!params.jpegDataUrl || !params.jpegDataUrl.startsWith('data:image/jpeg;base64,')) {
+    throw new Error(
+      'PDF screenshot export requires valid captured JPEG image data; text-only PDFs are not allowed',
+    );
+  }
 
-  const objects: string[] = [];
-  objects.push('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj');
-  objects.push('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj');
+  const verifiedJpeg = verifyCaptureBinaryAndDimensions(params.jpegDataUrl);
+  const jpegBase64 = params.jpegDataUrl.slice('data:image/jpeg;base64,'.length);
+  const jpegBytes = decodeBase64ToBytes(jpegBase64);
 
-  const contentStream = `q\n${width} 0 0 ${height} 0 0 cm\nQ\nBT\n/F1 12 Tf\n24 ${Math.max(24, height - 36)} Td\n(PageSift Capture: ${safeTitle}) Tj\nET`;
-  objects.push(
-    `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj`,
+  const imgWidth = Math.max(1, verifiedJpeg.width || Math.round(params.width));
+  const imgHeight = Math.max(1, verifiedJpeg.height || Math.round(params.height));
+  const pageWidth = Math.max(1, Math.round(params.width) || imgWidth);
+  const pageHeight = Math.max(1, Math.round(params.height) || imgHeight);
+
+  const headerBytes = asciiToBytes('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  const obj1 = asciiToBytes('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+  const obj2 = asciiToBytes('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
+  const obj3 = asciiToBytes(
+    `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>\nendobj\n`,
   );
-  objects.push(
-    `4 0 obj\n<< /Length ${contentStream.length} >>\nstream\n${contentStream}\nendstream\nendobj`,
-  );
-  objects.push('5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj');
 
-  let pdf = '%PDF-1.4\n';
+  const contentStreamText = `q\n${pageWidth} 0 0 ${pageHeight} 0 0 cm\n/Im0 Do\nQ\n`;
+  const obj4 = asciiToBytes(
+    `4 0 obj\n<< /Length ${contentStreamText.length} >>\nstream\n${contentStreamText}endstream\nendobj\n`,
+  );
+
+  const obj5Prefix = asciiToBytes(
+    `5 0 obj\n<< /Type /XObject /Subtype /Image /Width ${imgWidth} /Height ${imgHeight} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.byteLength} >>\nstream\n`,
+  );
+  const obj5Suffix = asciiToBytes('\nendstream\nendobj\n');
+  const obj5 = concatBytes([obj5Prefix, jpegBytes, obj5Suffix]);
+
+  const objects = [obj1, obj2, obj3, obj4, obj5];
   const offsets: number[] = [0];
+  let cursor = headerBytes.byteLength;
   for (const obj of objects) {
-    offsets.push(pdf.length);
-    pdf += `${obj}\n`;
+    offsets.push(cursor);
+    cursor += obj.byteLength;
   }
 
-  const xrefOffset = pdf.length;
-  pdf += `xref\n0 ${objects.length + 1}\n`;
-  pdf += '0000000000 65535 f \n';
+  const xrefOffset = cursor;
+  let xrefStr = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
   for (let i = 1; i <= objects.length; i += 1) {
-    const off = String(offsets[i] ?? 0).padStart(10, '0');
-    pdf += `${off} 00000 n \n`;
+    xrefStr += `${String(offsets[i] ?? 0).padStart(10, '0')} 00000 n \n`;
   }
-  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  xrefStr += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
 
-  const bytes = new TextEncoder().encode(pdf);
-  return `data:application/pdf;base64,${encodeBytesToBase64(bytes)}`;
+  const pdfBytes = concatBytes([headerBytes, ...objects, asciiToBytes(xrefStr)]);
+  return `data:application/pdf;base64,${encodeBytesToBase64(pdfBytes)}`;
 }

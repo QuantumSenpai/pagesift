@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PageSift Workspace — 15 Local Web Inspection & Design Tools</title>
+    <title>PageSift Workspace — 15 Local Web Inspection &amp; Design Tools</title>
     <style>
       :root {
         --bg: #0f172a;
@@ -20,8 +20,8 @@
       }
       body {
         margin: 0;
-        min-width: 760px;
-        min-height: 560px;
+        min-width: 780px;
+        min-height: 600px;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         background: var(--bg);
         color: var(--text);
@@ -34,6 +34,8 @@
         padding: 10px 16px;
         background: var(--panel);
         border-bottom: 1px solid var(--border);
+        gap: 10px;
+        flex-wrap: wrap;
       }
       .brand {
         font-weight: 700;
@@ -52,6 +54,7 @@
         display: flex;
         gap: 8px;
         align-items: center;
+        flex-wrap: wrap;
       }
       select,
       input,
@@ -70,14 +73,28 @@
         border-color: var(--accent);
         font-weight: 600;
       }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
       button.secondary {
         background: var(--panel);
         border-color: var(--border);
       }
+      button.danger {
+        background: #991b1b;
+        border-color: var(--danger);
+      }
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid #93c5fd;
+        outline-offset: 1px;
+      }
       .layout {
         display: grid;
         grid-template-columns: 185px 1fr;
-        min-height: calc(100vh - 49px);
+        min-height: calc(100vh - 52px);
       }
       nav#tool-dock {
         background: var(--panel);
@@ -120,6 +137,38 @@
         gap: 8px;
         align-items: center;
       }
+      .sub-panel {
+        border-top: 1px solid var(--border);
+        padding-top: 10px;
+        display: none;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .sub-panel.visible {
+        display: flex;
+      }
+      .small-num {
+        width: 74px;
+      }
+      .capture-preview-wrap {
+        display: none;
+        flex-direction: column;
+        gap: 8px;
+        background: #020617;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+      }
+      .capture-preview-wrap.visible {
+        display: flex;
+      }
+      #capture-preview-img {
+        max-width: 100%;
+        max-height: 280px;
+        object-fit: contain;
+        border: 1px solid var(--border);
+        background: #0f172a;
+      }
       pre#tool-output {
         margin: 0;
         background: #020617;
@@ -127,7 +176,7 @@
         border-radius: 8px;
         padding: 12px;
         overflow: auto;
-        max-height: 360px;
+        max-height: 320px;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 12px;
         line-height: 1.45;
@@ -136,6 +185,19 @@
       .status-bar {
         font-size: 12px;
         color: var(--muted);
+      }
+      .status-bar.error {
+        color: #fca5a5;
+      }
+      .status-bar.success {
+        color: #6ee7b7;
+      }
+      label.inline-check {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        color: var(--text);
       }
     </style>
   </head>
@@ -150,7 +212,8 @@
         <select id="project-select"></select>
         <input id="new-project-name" type="text" placeholder="New project name" />
         <button id="create-project-btn" class="secondary" type="button">New Project</button>
-        <button id="save-artifact-btn" class="secondary" type="button">Save Result to IndexedDB</button>
+        <button id="save-artifact-btn" class="secondary" type="button">Save to IndexedDB</button>
+        <button id="open-tab-workspace-btn" class="secondary" type="button">Open Full Tab</button>
         <a href="options.html" target="_blank" style="color: #93c5fd; text-decoration: none; font-size: 12px;">Options &amp; Storage</a>
       </div>
     </header>
@@ -176,38 +239,115 @@
 
       <main>
         <div class="control-card">
-          <div id="active-tool-title" style="font-weight: 700; font-size: 14px;">1. Inspect Element</div>
+          <div id="active-tool-title" style="font-weight: 700; font-size: 14px;">1. Inspect Element &amp; Computed Styles</div>
+
           <div class="control-row">
-            <input id="target-selector-input" type="text" placeholder="CSS selector (e.g. h1, #hero, .card)" style="min-width: 220px;" />
-            <input id="secondary-input" type="text" placeholder="Secondary selector / Text / Font / Offset" style="min-width: 240px;" />
-            <select id="mode-select">
+            <input id="target-selector-input" type="text" placeholder="CSS selector (e.g. h1, #hero, .card)" style="min-width: 210px;" />
+            <input id="secondary-input" type="text" placeholder="Secondary selector / Text / Font" style="min-width: 210px;" />
+            <select id="mode-select" aria-label="Tool mode">
               <option value="default">Default Mode</option>
-              <option value="react_tailwind">React + Tailwind</option>
-              <option value="html_css">HTML + CSS</option>
-              <option value="vue_css">Vue 3 + CSS</option>
-              <option value="visible">Capture: Visible Viewport</option>
-              <option value="full_page">Capture: Full Page</option>
-              <option value="image/png">Export: PNG</option>
-              <option value="image/jpeg">Export: JPEG</option>
-              <option value="image/webp">Export: WebP</option>
-              <option value="application/pdf">Export: PDF</option>
+              <option value="react_tailwind">Prompt: React + Tailwind</option>
+              <option value="html_css">Prompt: HTML + CSS</option>
+              <option value="vue_css">Prompt: Vue 3 + CSS</option>
+              <option value="generic">Prompt: Generic</option>
               <option value="move">Arrange: Move</option>
               <option value="hide">Arrange: Hide</option>
               <option value="remove">Arrange: Remove</option>
             </select>
             <button id="run-tool-btn" type="button">Run Tool Locally</button>
-            <button id="toggle-picker-btn" class="secondary" type="button">Toggle On-Page Picker</button>
+            <button id="cancel-job-btn" class="danger" type="button" disabled>Cancel</button>
+            <button id="toggle-picker-btn" class="secondary" type="button">Toggle Picker</button>
           </div>
+
+          <div id="capture-controls" class="sub-panel">
+            <div class="control-row">
+              <label for="capture-mode-select">Capture Mode:</label>
+              <select id="capture-mode-select">
+                <option value="visible">Visible Viewport</option>
+                <option value="full_page">Full Page (Stitched)</option>
+                <option value="element">Selected Element (CSS Selector)</option>
+                <option value="area">Selected Area (Crop Rect)</option>
+              </select>
+              <label for="capture-format-select">Format:</label>
+              <select id="capture-format-select">
+                <option value="image/png">PNG</option>
+                <option value="image/jpeg">JPEG</option>
+                <option value="image/webp">WebP</option>
+                <option value="application/pdf">PDF (Embedded Screenshot)</option>
+              </select>
+            </div>
+            <div class="control-row">
+              <span>Area/Crop (CSS px):</span>
+              <input id="crop-x" class="small-num" type="number" min="0" value="0" aria-label="Crop X" placeholder="X" />
+              <input id="crop-y" class="small-num" type="number" min="0" value="0" aria-label="Crop Y" placeholder="Y" />
+              <input id="crop-w" class="small-num" type="number" min="1" value="400" aria-label="Crop Width" placeholder="W" />
+              <input id="crop-h" class="small-num" type="number" min="1" value="300" aria-label="Crop Height" placeholder="H" />
+              <button id="apply-crop-btn" class="secondary" type="button" disabled>Apply Crop to Capture</button>
+            </div>
+            <div class="control-row">
+              <span>Annotation:</span>
+              <input id="ann-x" class="small-num" type="number" min="0" value="16" aria-label="Annotation X" />
+              <input id="ann-y" class="small-num" type="number" min="0" value="16" aria-label="Annotation Y" />
+              <input id="ann-w" class="small-num" type="number" min="1" value="160" aria-label="Annotation Width" />
+              <input id="ann-h" class="small-num" type="number" min="1" value="60" aria-label="Annotation Height" />
+              <input id="ann-label" type="text" placeholder="Callout label" style="width: 130px;" />
+              <input id="ann-color" type="color" value="#ef4444" aria-label="Annotation color" style="width: 42px; padding: 2px;" />
+              <button id="add-annotation-btn" class="secondary" type="button" disabled>Add Annotation</button>
+            </div>
+          </div>
+
+          <div id="responsive-controls" class="sub-panel">
+            <div class="control-row">
+              <label class="inline-check"><input type="checkbox" name="resp-preset" value="mobile-sm" checked /> Mobile 375×812</label>
+              <label class="inline-check"><input type="checkbox" name="resp-preset" value="tablet-md" checked /> Tablet 768×1024</label>
+              <label class="inline-check"><input type="checkbox" name="resp-preset" value="laptop-lg" /> Laptop 1280×800</label>
+              <label class="inline-check"><input type="checkbox" name="resp-preset" value="desktop-xl" /> Desktop 1440×900</label>
+            </div>
+            <div class="control-row">
+              <span>Custom (optional):</span>
+              <input id="resp-custom-w" class="small-num" type="number" min="240" max="3840" placeholder="Width" aria-label="Custom viewport width" />
+              <input id="resp-custom-h" class="small-num" type="number" min="320" max="2160" placeholder="Height" aria-label="Custom viewport height" />
+              <label class="inline-check"><input id="responsive-sync-toggle" type="checkbox" checked /> Synchronize Scroll</label>
+              <button id="open-responsive-btn" type="button">Open Responsive Windows</button>
+              <button id="close-responsive-btn" class="danger" type="button">Close Preview Windows</button>
+            </div>
+            <div id="responsive-session-status" class="status-bar">No active responsive preview session.</div>
+          </div>
+
+          <div id="colors-controls" class="sub-panel">
+            <div class="control-row">
+              <label for="colors-export-format">Palette Export Format:</label>
+              <select id="colors-export-format">
+                <option value="cssVariables">CSS Variables (.css)</option>
+                <option value="tailwindV4">Tailwind v4 @theme (.css)</option>
+                <option value="tailwindV3">Tailwind v3 Config (.js)</option>
+                <option value="scss">SCSS Variables (.scss)</option>
+                <option value="json">JSON Tokens (.json)</option>
+              </select>
+            </div>
+          </div>
+
           <div class="control-row">
             <button id="undo-edit-btn" class="secondary" type="button">Undo Edit</button>
             <button id="redo-edit-btn" class="secondary" type="button">Redo Edit</button>
             <button id="reset-edit-btn" class="secondary" type="button">Reset All Edits</button>
             <button id="preview-nvidia-btn" class="secondary" type="button">Preview NVIDIA Data Egress</button>
-            <button id="run-nvidia-btn" class="secondary" type="button">Enhance with Optional NVIDIA AI</button>
+            <button id="run-nvidia-btn" class="secondary" type="button" disabled>Confirm &amp; Enhance with Optional NVIDIA AI</button>
           </div>
         </div>
 
-        <div id="status-message" class="status-bar">Ready — 100% local execution (no login or backend required).</div>
+        <div id="result-actions" class="control-row">
+          <button id="download-result-btn" type="button" disabled>Download File</button>
+          <button id="copy-result-btn" class="secondary" type="button" disabled>Copy Output Text</button>
+          <span id="download-meta" class="status-bar">Run a tool to generate downloadable or copyable output.</span>
+        </div>
+
+        <div id="capture-preview-wrap" class="capture-preview-wrap">
+          <div id="capture-meta" class="status-bar"></div>
+          <img id="capture-preview-img" alt="Captured screenshot preview" />
+        </div>
+
+        <div id="status-message" class="status-bar" role="status">Ready — 100% local execution (no login or backend required).</div>
         <pre id="tool-output" aria-live="polite">Select any of the 15 tools and click "Run Tool Locally".</pre>
       </main>
     </div>

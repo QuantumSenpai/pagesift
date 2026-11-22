@@ -102,13 +102,16 @@ async function main(): Promise<void> {
       waitUntil: 'domcontentloaded',
     });
 
-    const targetTabId = await wsPage.evaluate(async () => {
+    const targetContext = await wsPage.evaluate(async () => {
       const chromeApi = (
         globalThis as unknown as {
           chrome: {
             tabs: {
               query: (q: object) => Promise<Array<{ id?: number }>>;
-              sendMessage: (id: number, m: unknown) => Promise<{ ok?: boolean }>;
+              sendMessage: (
+                id: number,
+                m: unknown,
+              ) => Promise<{ ok?: boolean; data?: { documentId?: string } }>;
             };
           };
         }
@@ -125,20 +128,20 @@ async function main(): Promise<void> {
             operation: 'GET_DOCUMENT_CONTEXT',
             payload: {},
           });
-          if (r.ok) {
-            return t.id;
+          if (r.ok && r.data?.documentId) {
+            return { tabId: t.id, documentId: r.data.documentId };
           }
         } catch {
           continue;
         }
       }
-      return 0;
+      return { tabId: 0, documentId: '' };
     });
 
     const measureOpMs = async (operation: string, payload: Record<string, unknown> = {}) => {
       const t0 = performance.now();
       const res = await wsPage.evaluate(
-        async ({ tId, op, pl }) => {
+        async ({ tId, docId, op, pl }) => {
           const chromeTabs = (
             globalThis as unknown as {
               chrome: {
@@ -151,10 +154,11 @@ async function main(): Promise<void> {
             requestId: `bench-${op}-${Date.now()}`,
             operation: op,
             tabId: tId,
+            documentId: docId,
             payload: pl,
           });
         },
-        { tId: targetTabId, op: operation, pl: payload },
+        { tId: targetContext.tabId, docId: targetContext.documentId, op: operation, pl: payload },
       );
       if (!res.ok) {
         throw new Error(`Benchmark operation ${operation} failed`);
@@ -162,13 +166,45 @@ async function main(): Promise<void> {
       return Number((performance.now() - t0).toFixed(2));
     };
 
+    const measureBgOpMs = async (operation: string, payload: Record<string, unknown> = {}) => {
+      const t0 = performance.now();
+      const res = await wsPage.evaluate(
+        async ({ tId, docId, op, pl }) => {
+          const chromeRuntime = (
+            globalThis as unknown as {
+              chrome: {
+                runtime: { sendMessage: (m: unknown) => Promise<{ ok: boolean }> };
+              };
+            }
+          ).chrome.runtime;
+          return chromeRuntime.sendMessage({
+            schemaVersion: 1,
+            requestId: `bench-bg-${op}-${Date.now()}`,
+            operation: op,
+            tabId: tId,
+            documentId: docId,
+            payload: pl,
+          });
+        },
+        { tId: targetContext.tabId, docId: targetContext.documentId, op: operation, pl: payload },
+      );
+      if (!res.ok) {
+        throw new Error(`Benchmark background operation ${operation} failed`);
+      }
+      return Number((performance.now() - t0).toFixed(2));
+    };
+
     const inspectMs = await measureOpMs('RUN_INSPECT_ELEMENT', { selector: '#card-250' });
     const colorsMs = await measureOpMs('RUN_COLORS_EXTRACT');
     const fontsMs = await measureOpMs('RUN_FONTS_EXTRACT');
-    const assetsMs = await measureOpMs('RUN_ASSETS_EXTRACT', { includeZip: true });
+    const assetsMs = await measureBgOpMs('RUN_ASSETS_EXTRACT', { includeZip: true });
     const designMdMs = await measureOpMs('RUN_DESIGN_MD');
     const clonePromptMs = await measureOpMs('RUN_CLONE_PROMPT');
-    const clonePageMs = await measureOpMs('RUN_CLONE_PAGE');
+    const clonePageMs = await measureBgOpMs('RUN_CLONE_PAGE');
+    const captureVisibleMs = await measureBgOpMs('RUN_CAPTURE', {
+      mode: 'visible',
+      exportMime: 'image/png',
+    });
     const designReviewMs = await measureOpMs('RUN_DESIGN_REVIEW');
     const techStackMs = await measureOpMs('RUN_TECH_STACK');
 
@@ -191,10 +227,11 @@ async function main(): Promise<void> {
         inspectSingleElementMaxMs: 50,
         colorsExtractionMaxMs: 250,
         fontsExtractionMaxMs: 250,
-        assetsZipMaxMs: 300,
+        assetsZipMaxMs: 500,
         designMdMaxMs: 400,
         clonePromptMaxMs: 400,
-        clonePageSnapshotZipMaxMs: 600,
+        clonePageSnapshotZipMaxMs: 1200,
+        captureVisiblePngMaxMs: 1500,
         designReviewMaxMs: 350,
         techStackMaxMs: 150,
       },
@@ -206,6 +243,7 @@ async function main(): Promise<void> {
         designMdMs,
         clonePromptMs,
         clonePageSnapshotZipMs: clonePageMs,
+        captureVisiblePngMs: captureVisibleMs,
         designReviewMs,
         techStackMs,
       },

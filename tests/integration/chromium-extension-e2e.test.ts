@@ -1,10 +1,11 @@
-import { strFromU8, unzipSync } from 'fflate';
+import { deflateSync, strFromU8, unzipSync } from 'fflate';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { chromium, type BrowserContext } from 'playwright';
+import { chromium, type BrowserContext, type Download, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { verifyCaptureBinaryAndDimensions } from '../../src/extension/engines/capture-engine.js';
 import type { ExtensionMessageResponse } from '../../src/extension/protocol/messages.js';
 
 const ROOT_DIR = process.cwd();
@@ -34,80 +35,185 @@ function resolveChromiumExecutablePath(): string | undefined {
   return undefined;
 }
 
+function crc32(buf: Uint8Array): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.byteLength; i += 1) {
+    c ^= buf[i] ?? 0;
+    for (let k = 0; k < 8; k += 1) {
+      c = (c & 1) !== 0 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function makePngChunk(type: string, data: Uint8Array): Uint8Array {
+  const out = new Uint8Array(12 + data.byteLength);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, data.byteLength, false);
+  for (let i = 0; i < 4; i += 1) {
+    out[4 + i] = type.charCodeAt(i);
+  }
+  out.set(data, 8);
+  view.setUint32(8 + data.byteLength, crc32(out.subarray(4, 8 + data.byteLength)), false);
+  return out;
+}
+
+function buildTestPngBytes(
+  width: number,
+  height: number,
+  r: number,
+  g: number,
+  b: number,
+): Uint8Array {
+  const sig = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdr = new Uint8Array(13);
+  const view = new DataView(ihdr.buffer);
+  view.setUint32(0, width, false);
+  view.setUint32(4, height, false);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const rowStride = width * 4 + 1;
+  const raw = new Uint8Array(rowStride * height);
+  for (let y = 0; y < height; y += 1) {
+    const rowStart = y * rowStride;
+    raw[rowStart] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const px = rowStart + 1 + x * 4;
+      raw[px] = r;
+      raw[px + 1] = g;
+      raw[px + 2] = b;
+      raw[px + 3] = 255;
+    }
+  }
+  const compressed = deflateSync(raw, { level: 6 });
+  let s1 = 1;
+  let s2 = 0;
+  for (let i = 0; i < raw.byteLength; i += 1) {
+    s1 = (s1 + (raw[i] ?? 0)) % 65521;
+    s2 = (s2 + s1) % 65521;
+  }
+  const adler = new Uint8Array(4);
+  new DataView(adler.buffer).setUint32(0, ((s2 << 16) | s1) >>> 0, false);
+  const idatPayload = new Uint8Array(2 + compressed.byteLength + 4);
+  idatPayload.set([0x78, 0x9c], 0);
+  idatPayload.set(compressed, 2);
+  idatPayload.set(adler, 2 + compressed.byteLength);
+  const c1 = makePngChunk('IHDR', ihdr);
+  const c2 = makePngChunk('IDAT', idatPayload);
+  const c3 = makePngChunk('IEND', new Uint8Array(0));
+  const out = new Uint8Array(sig.byteLength + c1.byteLength + c2.byteLength + c3.byteLength);
+  let off = 0;
+  for (const part of [sig, c1, c2, c3]) {
+    out.set(part, off);
+    off += part.byteLength;
+  }
+  return out;
+}
+
+const HERO_IMG_BYTES = buildTestPngBytes(80, 60, 220, 38, 38);
+const DUPLICATE_IMG_BYTES = buildTestPngBytes(60, 40, 22, 163, 74);
+const FONT_STUB_BYTES = new Uint8Array([
+  0x77, 0x4f, 0x46, 0x32, 0x00, 0x01, 0x00, 0x00, 0x50, 0x53,
+]);
+
+const EXTERNAL_THEME_CSS = `
+@font-face {
+  font-family: "FixtureFont";
+  src: url("../fonts/fixture.woff2") format("woff2");
+}
+body {
+  margin: 0;
+  font-family: "FixtureFont", -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #ffffff;
+  color: #0f172a;
+}
+header#sticky-header {
+  position: sticky;
+  top: 0;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background-color: #1e293b;
+  color: #ffffff;
+  z-index: 10;
+}
+#top-red-band {
+  height: 220px;
+  background-color: #ef4444;
+  color: #ffffff;
+  padding: 24px;
+}
+#green-box {
+  width: 240px;
+  height: 160px;
+  margin: 24px;
+  background-color: #22c55e;
+  color: #052e16;
+  padding: 16px;
+}
+#middle-blue-spacer {
+  height: 900px;
+  background-color: #2563eb;
+  color: #ffffff;
+  padding: 24px;
+}
+#bottom-yellow-band {
+  height: 360px;
+  background-color: #eab308;
+  color: #111827;
+  padding: 24px;
+}
+`;
+
 const FIXTURE_HTML = `<!DOCTYPE html>
 <html lang="en" data-wf-site="wf-e2e-live">
   <head>
     <meta charset="UTF-8" />
-    <title>PageSift Live Chromium E2E Fixture — 日本語・🚀</title>
+    <title>PageSift Acceptance Fixture — 日本語・🚀</title>
     <meta name="generator" content="Astro v4.15" />
-    <link rel="icon" href="/favicon.ico" />
-    <style>
-      :root {
-        --brand-primary: #2563eb;
-        --brand-accent: #7c3aed;
-        --tw-ring-color: #3b82f6;
-      }
-      body {
-        margin: 0;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        font-size: 16px;
-        color: #0f172a;
-        background-color: #ffffff;
-      }
-      header#sticky-header {
-        position: sticky;
-        top: 0;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 16px 32px;
-        background-color: #0f172a;
-        color: #f8fafc;
-      }
-      section#hero-section {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 24px;
-        padding: 40px 32px;
-        margin: 16px;
-        border-radius: 12px;
-        background-image: linear-gradient(135deg, #2563eb, #7c3aed);
-        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.15);
-      }
-      .low-contrast {
-        color: #d1d5db;
-        background-color: #ffffff;
-        padding: 7px 13px 19px;
-      }
-    </style>
+    <link rel="stylesheet" href="/styles/theme.css" />
   </head>
   <body>
     <div id="__next">
       <header id="sticky-header">
         <nav aria-label="Primary"><a id="nav-link" href="/docs">Documentation</a></nav>
-        <button id="primary-cta" type="button" class="flex items-center justify-between px-4 py-2 rounded-lg">Get Started</button>
+        <button id="primary-cta" type="button">Get Started</button>
       </header>
       <main>
-        <section id="hero-section">
-          <div>
-            <h1 id="hero-title">Visual Design Extraction <strong>Pro</strong></h1>
-            <p id="hero-copy" class="low-contrast">Inspect styles, tokens, assets, and static snapshots locally.</p>
-          </div>
-          <div>
-            <svg id="inline-logo" width="72" height="72" viewBox="0 0 72 72">
-              <circle cx="36" cy="36" r="30" fill="#38bdf8" />
-            </svg>
-          </div>
+        <section id="top-red-band">
+          <h1 id="hero-title">Visual Design Extraction <strong>Pro</strong></h1>
+          <img id="hero-img" src="/img/a/banner.png" alt="Red Hero Asset" width="80" height="60" />
+          <img id="dup-img" src="/img/b/banner.png" alt="Green Duplicate Name Asset" width="60" height="40" />
+          <img id="missing-img" src="/img/missing-404.png" alt="Missing Asset" />
         </section>
-        <form id="sensitive-form" action="/login">
+        <section id="green-box">
+          <h2>Green Capture Box</h2>
+          <svg id="inline-logo" width="48" height="48" viewBox="0 0 48 48" onload="window.__SVG_XSS=true">
+            <script>window.__SVG_SCRIPT=true;</script>
+            <circle cx="24" cy="24" r="20" fill="#38bdf8" />
+          </svg>
+        </section>
+        <iframe id="evil-srcdoc" srcdoc="<script>window.__SRCDOC_RAN=true;parent.__SRCDOC_RAN=true;</script><img src=x onerror='window.__SRCDOC_ERR=true'>"></iframe>
+        <a id="evil-link" href="  java&#x09;script:window.__OBF_RAN=true">Obfuscated Link</a>
+        <form id="sensitive-form" action="/steal-login">
           <input type="text" name="email" value="private_customer@example.com" />
           <input type="password" name="secret_pw" value="NEVER_EXPORT_THIS_PASSWORD_999" />
+          <input type="hidden" name="csrf" value="SECRET_HIDDEN_CSRF_999" />
+          <button formaction="javascript:window.__FORMACTION_RAN=true" type="submit">Send</button>
         </form>
-        <div id="shadow-mount"></div>
+        <section id="middle-blue-spacer">
+          <p id="hero-copy">Tall blue section pushing content well beyond a single viewport.</p>
+          <div id="shadow-mount"></div>
+        </section>
+        <section id="bottom-yellow-band">
+          <h2 id="bottom-heading">Bottom Yellow Region Beyond First Viewport</h2>
+        </section>
       </main>
-      <footer id="page-footer">PageSift E2E Footer</footer>
     </div>
     <script>
+      window.__LIVE_SCRIPT_RAN = true;
       const host = document.getElementById('shadow-mount');
       if (host) {
         const root = host.attachShadow({ mode: 'open' });
@@ -120,7 +226,118 @@ const FIXTURE_HTML = `<!DOCTYPE html>
   </body>
 </html>`;
 
-describe('Real Chromium Manifest V3 Extension End-to-End Verification', () => {
+async function readDownloadedBytes(download: Download): Promise<Uint8Array> {
+  const filePath = await download.path();
+  if (!filePath) {
+    throw new Error(`Download ${download.suggestedFilename()} did not produce a local path`);
+  }
+  return new Uint8Array(fs.readFileSync(filePath));
+}
+
+async function sampleImagePixelsInPage(
+  page: Page,
+  mimeType: string,
+  bytes: Uint8Array,
+  samplePoints: Array<{ xRatio: number; yRatio: number }>,
+): Promise<{ width: number; height: number; pixels: Array<[number, number, number, number]> }> {
+  const b64 = Buffer.from(bytes).toString('base64');
+  return page.evaluate(
+    async ({ mime, base64, points }) => {
+      const dataUrl = `data:${mime};base64,${base64}`;
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => {
+          resolve(el);
+        };
+        el.onerror = () => {
+          reject(new Error(`Browser failed to decode ${mime}`));
+        };
+        el.src = dataUrl;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('2D context unavailable');
+      }
+      ctx.drawImage(img, 0, 0);
+      const pixels: Array<[number, number, number, number]> = points.map((pt) => {
+        const x = Math.max(0, Math.min(canvas.width - 1, Math.floor(pt.xRatio * canvas.width)));
+        const y = Math.max(0, Math.min(canvas.height - 1, Math.floor(pt.yRatio * canvas.height)));
+        const data = ctx.getImageData(x, y, 1, 1).data;
+        return [data[0] ?? 0, data[1] ?? 0, data[2] ?? 0, data[3] ?? 0];
+      });
+      return { width: img.naturalWidth, height: img.naturalHeight, pixels };
+    },
+    { mime: mimeType, base64: b64, points: samplePoints },
+  );
+}
+
+function extractJpegStreamFromPdf(pdfBytes: Uint8Array): Uint8Array {
+  const startMarker = new Uint8Array([0xff, 0xd8]);
+  let startIdx = -1;
+  for (let i = 0; i < pdfBytes.byteLength - 1; i += 1) {
+    if (pdfBytes[i] === startMarker[0] && pdfBytes[i + 1] === startMarker[1]) {
+      startIdx = i;
+      break;
+    }
+  }
+  if (startIdx === -1) {
+    throw new Error('No JPEG SOI marker (FF D8) found in PDF');
+  }
+  let endIdx = -1;
+  for (let i = pdfBytes.byteLength - 2; i > startIdx; i -= 1) {
+    if (pdfBytes[i] === 0xff && pdfBytes[i + 1] === 0xd9) {
+      endIdx = i + 2;
+      break;
+    }
+  }
+  if (endIdx === -1) {
+    throw new Error('No JPEG EOI marker (FF D9) found in PDF');
+  }
+  return pdfBytes.subarray(startIdx, endIdx);
+}
+
+async function waitForWorkspaceStatus(
+  page: Page,
+  expectedSubstring: string,
+  timeoutMs = 15000,
+): Promise<string> {
+  const handle = await page.waitForFunction(
+    (expected: string) => {
+      const text = document.getElementById('status-message')?.textContent ?? '';
+      if (text.includes(expected)) {
+        return { done: true, error: false, text };
+      }
+      if (text.startsWith('Error:')) {
+        return {
+          done: true,
+          error: true,
+          text,
+          output: document.getElementById('tool-output')?.textContent ?? '',
+        };
+      }
+      return null;
+    },
+    expectedSubstring,
+    { polling: 100, timeout: timeoutMs },
+  );
+  const result = (await handle.jsonValue()) as {
+    done: boolean;
+    error: boolean;
+    text: string;
+    output?: string;
+  };
+  if (result.error) {
+    throw new Error(
+      `Workspace reported error while waiting for "${expectedSubstring}": ${result.text}\n${result.output ?? ''}`,
+    );
+  }
+  return result.text;
+}
+
+describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', () => {
   let server: http.Server;
   let fixtureUrl = '';
   let userDataDir = '';
@@ -134,13 +351,34 @@ describe('Real Chromium Manifest V3 Extension End-to-End Verification', () => {
     }
 
     server = http.createServer((req, res) => {
-      if (req.url?.startsWith('/fixture')) {
+      const pathname = (req.url ?? '/').split('?')[0];
+      if (pathname === '/fixture') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(FIXTURE_HTML);
         return;
       }
+      if (pathname === '/styles/theme.css') {
+        res.writeHead(200, { 'content-type': 'text/css; charset=utf-8' });
+        res.end(EXTERNAL_THEME_CSS);
+        return;
+      }
+      if (pathname === '/img/a/banner.png') {
+        res.writeHead(200, { 'content-type': 'image/png' });
+        res.end(HERO_IMG_BYTES);
+        return;
+      }
+      if (pathname === '/img/b/banner.png') {
+        res.writeHead(200, { 'content-type': 'image/png' });
+        res.end(DUPLICATE_IMG_BYTES);
+        return;
+      }
+      if (pathname === '/fonts/fixture.woff2') {
+        res.writeHead(200, { 'content-type': 'font/woff2' });
+        res.end(FONT_STUB_BYTES);
+        return;
+      }
       res.writeHead(404);
-      res.end();
+      res.end('Not Found');
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -160,6 +398,8 @@ describe('Real Chromium Manifest V3 Extension End-to-End Verification', () => {
 
     context = await chromium.launchPersistentContext(userDataDir, {
       headless: true,
+      acceptDownloads: true,
+      viewport: { width: 1024, height: 700 },
       ...(executablePath ? { executablePath } : { channel: 'chromium' }),
       args: [
         `--disable-extensions-except=${EXTENSION_DIR}`,
@@ -182,8 +422,7 @@ describe('Real Chromium Manifest V3 Extension End-to-End Verification', () => {
       }
     });
 
-    const swUrlParts = serviceWorker.url().split('/');
-    extensionId = swUrlParts[2] ?? '';
+    extensionId = serviceWorker.url().split('/')[2] ?? '';
   });
 
   afterAll(async () => {
@@ -200,7 +439,7 @@ describe('Real Chromium Manifest V3 Extension End-to-End Verification', () => {
     });
   });
 
-  it('loads the MV3 service worker, injects the content script, runs all 15 tools in real Chromium, verifies exported snapshot HTML in an isolated tab, and preserves website storage privacy', async () => {
+  it('verifies real capture (PNG/JPEG/WebP/PDF, full-page, crop, annotation), safe offline clone & asset downloads, responsive windows & scroll sync, and storage persistence in Chromium', async () => {
     if (!context) {
       throw new Error('BrowserContext not initialized');
     }
@@ -264,167 +503,260 @@ describe('Real Chromium Manifest V3 Extension End-to-End Verification', () => {
       { waitUntil: 'domcontentloaded' },
     );
 
-    const callContentViaExtension = async (
-      operation: string,
-      payload: Record<string, unknown> = {},
-    ): Promise<ExtensionMessageResponse> => {
-      return workspacePage.evaluate(
-        async ({ tId, op, pl }) => {
-          const chromeTabs = (
-            globalThis as unknown as {
-              chrome: {
-                tabs: {
-                  sendMessage: (id: number, msg: unknown) => Promise<ExtensionMessageResponse>;
-                };
-              };
-            }
-          ).chrome.tabs;
-          return chromeTabs.sendMessage(tId, {
-            schemaVersion: 1,
-            requestId: `e2e-${op}-${Date.now()}`,
-            operation: op,
-            tabId: tId,
-            payload: pl,
-          });
-        },
-        { tId: tabId, op: operation, pl: payload },
-      );
-    };
+    const decoderPage = await context.newPage();
+    await decoderPage.setContent('<!DOCTYPE html><html><body></body></html>');
 
-    const callBackgroundViaExtension = async (
-      operation: string,
-      payload: Record<string, unknown> = {},
-    ): Promise<ExtensionMessageResponse> => {
-      return workspacePage.evaluate(
-        async ({ op, pl, tId }) => {
-          const chromeRuntime = (
-            globalThis as unknown as {
-              chrome: {
-                runtime: {
-                  sendMessage: (msg: unknown) => Promise<ExtensionMessageResponse>;
-                };
-              };
-            }
-          ).chrome.runtime;
-          return chromeRuntime.sendMessage({
-            schemaVersion: 1,
-            requestId: `e2e-bg-${op}-${Date.now()}`,
-            operation: op,
-            tabId: tId,
-            payload: pl,
-          });
-        },
-        { op: operation, pl: payload, tId: tabId },
-      );
-    };
+    await workspacePage.click('button[data-tool="capture"]');
+    await workspacePage.selectOption('#capture-mode-select', 'visible');
+    await workspacePage.selectOption('#capture-format-select', 'image/png');
+    await workspacePage.click('#run-tool-btn');
+    await waitForWorkspaceStatus(workspacePage, 'Captured ', 15000);
 
-    const pingRes = await callContentViaExtension('GET_DOCUMENT_CONTEXT');
-    expect(pingRes.ok).toBe(true);
+    const [pngDownload] = await Promise.all([
+      workspacePage.waitForEvent('download'),
+      workspacePage.click('#download-result-btn'),
+    ]);
+    expect(pngDownload.suggestedFilename()).toMatch(/\.png$/);
+    const visiblePngBytes = await readDownloadedBytes(pngDownload);
+    const visiblePngMeta = verifyCaptureBinaryAndDimensions(
+      `data:image/png;base64,${Buffer.from(visiblePngBytes).toString('base64')}`,
+    );
+    expect(visiblePngMeta.mimeType).toBe('image/png');
+    expect(visiblePngMeta.width).toBeGreaterThan(200);
+    expect(visiblePngMeta.height).toBeGreaterThan(200);
 
-    const inspectRes = await callContentViaExtension('RUN_INSPECT_ELEMENT', {
-      selector: '#hero-section',
+    const visibleSample = await sampleImagePixelsInPage(decoderPage, 'image/png', visiblePngBytes, [
+      { xRatio: 0.75, yRatio: 0.2 },
+    ]);
+    const topBandRgb = visibleSample.pixels[0] ?? [0, 0, 0, 0];
+    expect(topBandRgb[0]).toBeGreaterThan(180);
+    expect(topBandRgb[1]).toBeLessThan(110);
+
+    await workspacePage.selectOption('#capture-mode-select', 'element');
+    await workspacePage.selectOption('#capture-format-select', 'image/webp');
+    await workspacePage.fill('#target-selector-input', '#green-box');
+    await workspacePage.click('#run-tool-btn');
+    await waitForWorkspaceStatus(workspacePage, 'image/webp', 15000);
+    const [webpDownload] = await Promise.all([
+      workspacePage.waitForEvent('download'),
+      workspacePage.click('#download-result-btn'),
+    ]);
+    expect(webpDownload.suggestedFilename()).toMatch(/\.webp$/);
+    const webpBytes = await readDownloadedBytes(webpDownload);
+    const webpMeta = verifyCaptureBinaryAndDimensions(
+      `data:image/webp;base64,${Buffer.from(webpBytes).toString('base64')}`,
+    );
+    expect(webpMeta.mimeType).toBe('image/webp');
+    const greenSample = await sampleImagePixelsInPage(decoderPage, 'image/webp', webpBytes, [
+      { xRatio: 0.8, yRatio: 0.8 },
+    ]);
+    const greenRgb = greenSample.pixels[0] ?? [0, 0, 0, 0];
+    expect(greenRgb[1]).toBeGreaterThan(150);
+    expect(greenRgb[0]).toBeLessThan(100);
+
+    await workspacePage.selectOption('#capture-format-select', 'image/jpeg');
+    await workspacePage.fill('#ann-label', 'Callout');
+    await workspacePage.click('#add-annotation-btn');
+    await waitForWorkspaceStatus(workspacePage, 'image/jpeg', 10000);
+    const [jpegDownload] = await Promise.all([
+      workspacePage.waitForEvent('download'),
+      workspacePage.click('#download-result-btn'),
+    ]);
+    expect(jpegDownload.suggestedFilename()).toMatch(/\.jpg$/);
+    const jpegBytes = await readDownloadedBytes(jpegDownload);
+    const jpegMeta = verifyCaptureBinaryAndDimensions(
+      `data:image/jpeg;base64,${Buffer.from(jpegBytes).toString('base64')}`,
+    );
+    expect(jpegMeta.mimeType).toBe('image/jpeg');
+
+    await workspacePage.selectOption('#capture-mode-select', 'full_page');
+    await workspacePage.selectOption('#capture-format-select', 'image/png');
+    await workspacePage.fill('#target-selector-input', '');
+    await fixturePage.evaluate(() => {
+      window.scrollTo(0, 120);
     });
-    expect(inspectRes.ok).toBe(true);
+    await workspacePage.click('#run-tool-btn');
+    await waitForWorkspaceStatus(workspacePage, 'Captured ', 25000);
+    const fullOutputText = (await workspacePage.locator('#tool-output').textContent()) ?? '';
+    expect(fullOutputText).toContain('"full_page"');
+    const [fullPngDownload] = await Promise.all([
+      workspacePage.waitForEvent('download'),
+      workspacePage.click('#download-result-btn'),
+    ]);
+    const fullPngBytes = await readDownloadedBytes(fullPngDownload);
+    const fullSample = await sampleImagePixelsInPage(decoderPage, 'image/png', fullPngBytes, [
+      { xRatio: 0.75, yRatio: 0.94 },
+    ]);
+    expect(fullSample.height).toBeGreaterThan(visibleSample.height);
+    const bottomRgb = fullSample.pixels[0] ?? [0, 0, 0, 0];
+    expect(bottomRgb[0]).toBeGreaterThan(190);
+    expect(bottomRgb[1]).toBeGreaterThan(140);
+    expect(bottomRgb[2]).toBeLessThan(80);
 
-    const colorsRes = await callContentViaExtension('RUN_COLORS_EXTRACT');
-    expect(colorsRes.ok).toBe(true);
+    const restoredScrollY = await fixturePage.evaluate(() => window.scrollY);
+    expect(restoredScrollY).toBe(120);
+    const restoredHeaderVis = await fixturePage.evaluate(
+      () => document.getElementById('sticky-header')?.style.visibility ?? '',
+    );
+    expect(restoredHeaderVis).toBe('');
 
-    const fontsRes = await callContentViaExtension('RUN_FONTS_EXTRACT');
-    expect(fontsRes.ok).toBe(true);
+    await workspacePage.selectOption('#capture-mode-select', 'visible');
+    await workspacePage.selectOption('#capture-format-select', 'application/pdf');
+    await workspacePage.click('#run-tool-btn');
+    await waitForWorkspaceStatus(workspacePage, 'application/pdf', 15000);
+    const [pdfDownload] = await Promise.all([
+      workspacePage.waitForEvent('download'),
+      workspacePage.click('#download-result-btn'),
+    ]);
+    expect(pdfDownload.suggestedFilename()).toMatch(/\.pdf$/);
+    const pdfBytes = await readDownloadedBytes(pdfDownload);
+    const pdfMeta = verifyCaptureBinaryAndDimensions(
+      `data:application/pdf;base64,${Buffer.from(pdfBytes).toString('base64')}`,
+    );
+    expect(pdfMeta.mimeType).toBe('application/pdf');
+    const embeddedJpeg = extractJpegStreamFromPdf(pdfBytes);
+    const embeddedSample = await sampleImagePixelsInPage(decoderPage, 'image/jpeg', embeddedJpeg, [
+      { xRatio: 0.75, yRatio: 0.12 },
+    ]);
+    expect(embeddedSample.width).toBeGreaterThan(200);
+    expect(embeddedSample.pixels[0]?.[0] ?? 0).toBeGreaterThan(170);
 
-    const measureRes = await callContentViaExtension('RUN_MEASURE', {
-      primarySelector: '#hero-title',
-      secondarySelector: '#primary-cta',
-    });
-    expect(measureRes.ok).toBe(true);
+    await workspacePage.click('button[data-tool="assets"]');
+    await workspacePage.click('#run-tool-btn');
+    await waitForWorkspaceStatus(workspacePage, 'Assets ZIP ready', 15000);
+    const [assetsZipDownload] = await Promise.all([
+      workspacePage.waitForEvent('download'),
+      workspacePage.click('#download-result-btn'),
+    ]);
+    expect(assetsZipDownload.suggestedFilename()).toMatch(/\.zip$/);
+    const assetsZipBytes = await readDownloadedBytes(assetsZipDownload);
+    const unzippedAssets = unzipSync(assetsZipBytes);
+    expect(unzippedAssets['assets/banner.png']).toEqual(HERO_IMG_BYTES);
+    expect(unzippedAssets['assets/banner-1.png']).toEqual(DUPLICATE_IMG_BYTES);
+    expect(unzippedAssets['assets/fixture.woff2']).toEqual(FONT_STUB_BYTES);
+    const assetsManifestText = strFromU8(
+      unzippedAssets['assets-manifest.json'] ?? new Uint8Array(),
+    );
+    expect(assetsManifestText).toContain('missing-404.png');
 
-    const assetsRes = await callContentViaExtension('RUN_ASSETS_EXTRACT', {
-      includeZip: true,
-    });
-    expect(assetsRes.ok).toBe(true);
+    await workspacePage.click('button[data-tool="clone_page"]');
+    await workspacePage.click('#run-tool-btn');
+    await waitForWorkspaceStatus(workspacePage, 'Static HTML/CSS snapshot ZIP ready', 15000);
+    const [cloneZipDownload] = await Promise.all([
+      workspacePage.waitForEvent('download'),
+      workspacePage.click('#download-result-btn'),
+    ]);
+    expect(cloneZipDownload.suggestedFilename()).toMatch(/\.zip$/);
+    const cloneZipBytes = await readDownloadedBytes(cloneZipDownload);
+    const unzippedClone = unzipSync(cloneZipBytes);
+    const exportedHtml = strFromU8(unzippedClone['index.html'] ?? new Uint8Array());
+    const exportedCss = strFromU8(unzippedClone['styles/snapshot.css'] ?? new Uint8Array());
+    const exportedManifest = JSON.parse(
+      strFromU8(unzippedClone['manifest.json'] ?? new Uint8Array()),
+    ) as { isSelfContained: boolean; missingResources: Array<{ url: string }> };
 
-    const designMdRes = await callContentViaExtension('RUN_DESIGN_MD');
-    expect(designMdRes.ok).toBe(true);
+    expect(exportedHtml).not.toContain('NEVER_EXPORT_THIS_PASSWORD_999');
+    expect(exportedHtml).not.toContain('SECRET_HIDDEN_CSRF_999');
+    expect(exportedHtml).not.toContain('srcdoc');
+    expect(exportedHtml).not.toContain('<iframe');
+    expect(exportedHtml).not.toContain('<script');
+    expect(exportedHtml).not.toContain('__SRCDOC_RAN');
+    expect(exportedHtml).not.toContain('__OBF_RAN');
+    expect(exportedHtml).not.toContain('__FORMACTION_RAN');
+    expect(exportedHtml).toContain('Content-Security-Policy');
+    expect(exportedHtml).toContain('assets/banner.png');
+    expect(exportedHtml).toContain('assets/banner-1.png');
+    expect(exportedCss).toContain('url("../assets/fixture.woff2")');
+    expect(exportedManifest.isSelfContained).toBe(false);
+    expect(exportedManifest.missingResources.some((m) => m.url.includes('missing-404.png'))).toBe(
+      true,
+    );
 
-    const clonePromptRes = await callContentViaExtension('RUN_CLONE_PROMPT', {
-      targetFramework: 'react_tailwind',
-    });
-    expect(clonePromptRes.ok).toBe(true);
+    const offlineExtractDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pagesift-offline-snap-'));
+    try {
+      for (const [relPath, fileBytes] of Object.entries(unzippedClone)) {
+        const destPath = path.join(offlineExtractDir, relPath);
+        fs.mkdirSync(path.dirname(destPath), { recursive: true });
+        fs.writeFileSync(destPath, fileBytes);
+      }
 
-    const clonePageRes = await callContentViaExtension('RUN_CLONE_PAGE');
-    expect(clonePageRes.ok).toBe(true);
-    if (clonePageRes.ok) {
-      const data = clonePageRes.data as { zipBase64: string };
-      const zipBytes = new Uint8Array(Buffer.from(data.zipBase64, 'base64'));
-      const unzipped = unzipSync(zipBytes);
-      const exportedHtml = strFromU8(unzipped['index.html'] ?? new Uint8Array());
-      expect(exportedHtml).not.toContain('NEVER_EXPORT_THIS_PASSWORD_999');
-      expect(exportedHtml).not.toContain('<script>');
-
-      const snapshotViewerPage = await context.newPage();
-      snapshotViewerPage.on('pageerror', (err) => {
-        runtimeErrors.push(`snapshot-viewer: ${err.message}`);
+      const offlinePage = await context.newPage();
+      await offlinePage.route('**/*', (route) => {
+        if (route.request().url().startsWith('file://')) {
+          return route.continue();
+        }
+        return route.abort();
       });
-      await snapshotViewerPage.setContent(exportedHtml, { waitUntil: 'domcontentloaded' });
-      const renderedHeading = await snapshotViewerPage.locator('#hero-title').textContent();
-      expect(renderedHeading).toContain('Visual Design Extraction');
-      await snapshotViewerPage.close();
+      await offlinePage.goto(`file://${path.join(offlineExtractDir, 'index.html')}`, {
+        waitUntil: 'load',
+      });
+      const offlineCheck = await offlinePage.evaluate(() => {
+        const w = window as unknown as Record<string, unknown>;
+        const heroImg = document.getElementById('hero-img') as HTMLImageElement | null;
+        const heading = document.getElementById('hero-title')?.textContent ?? '';
+        return {
+          srcdocRan: w['__SRCDOC_RAN'] === true,
+          liveScriptRan: w['__LIVE_SCRIPT_RAN'] === true,
+          svgScriptRan: w['__SVG_SCRIPT'] === true,
+          heading,
+          heroNaturalWidth: heroImg?.naturalWidth ?? 0,
+        };
+      });
+      expect(offlineCheck.srcdocRan).toBe(false);
+      expect(offlineCheck.liveScriptRan).toBe(false);
+      expect(offlineCheck.svgScriptRan).toBe(false);
+      expect(offlineCheck.heading).toContain('Visual Design Extraction');
+      expect(offlineCheck.heroNaturalWidth).toBe(80);
+      await offlinePage.close();
+    } finally {
+      fs.rmSync(offlineExtractDir, { recursive: true, force: true });
     }
 
-    const editTextRes = await callContentViaExtension('RUN_EDIT_TEXT', {
-      selector: '#hero-title',
-      text: 'Edited In Real Chromium ',
-    });
-    expect(editTextRes.ok).toBe(true);
-    expect(await fixturePage.locator('#hero-title').innerHTML()).toContain(
-      'Edited In Real Chromium ',
+    await workspacePage.click('button[data-tool="responsive"]');
+    const pagesBeforeResponsive = context.pages().length;
+    await workspacePage.click('#open-responsive-btn');
+    await waitForWorkspaceStatus(workspacePage, 'Responsive preview windows opened', 20000);
+
+    const allPages = context.pages();
+    const responsivePages = allPages.filter(
+      (p) =>
+        p !== fixturePage && p !== workspacePage && p !== decoderPage && p.url() === fixtureUrl,
     );
-    expect(await fixturePage.locator('#hero-title strong').textContent()).toBe('Pro');
+    expect(responsivePages.length).toBeGreaterThanOrEqual(2);
+    expect(allPages.length).toBeGreaterThanOrEqual(pagesBeforeResponsive + 2);
 
-    const swapFontRes = await callContentViaExtension('RUN_SWAP_FONT', {
-      selector: '#hero-copy',
-      scope: 'element',
-      fontFamily: 'Courier New, monospace',
-    });
-    expect(swapFontRes.ok).toBe(true);
+    const respStatusText =
+      (await workspacePage.locator('#responsive-session-status').textContent()) ?? '';
+    expect(respStatusText).toContain('actual ');
 
-    const arrangeRes = await callContentViaExtension('RUN_ARRANGE', {
-      selector: '#primary-cta',
-      action: 'move',
-      dx: 20,
-      dy: 10,
-    });
-    expect(arrangeRes.ok).toBe(true);
+    const firstRespPage = responsivePages[0];
+    const secondRespPage = responsivePages[1];
+    if (firstRespPage && secondRespPage) {
+      await firstRespPage.evaluate(() => {
+        window.scrollTo(0, 600);
+        window.dispatchEvent(new Event('scroll'));
+      });
+      await secondRespPage.waitForFunction(() => window.scrollY > 100, undefined, {
+        polling: 100,
+        timeout: 5000,
+      });
+      const syncedY1 = await secondRespPage.evaluate(() => window.scrollY);
+      expect(syncedY1).toBeGreaterThan(100);
+      await new Promise((r) => setTimeout(r, 400));
+      const syncedY2 = await secondRespPage.evaluate(() => window.scrollY);
+      expect(Math.abs(syncedY2 - syncedY1)).toBeLessThan(20);
+    }
 
-    const resetRes = await callContentViaExtension('EDIT_RESET');
-    expect(resetRes.ok).toBe(true);
-    expect(await fixturePage.locator('#hero-title').textContent()).toBe(
-      'Visual Design Extraction Pro',
-    );
+    await workspacePage.click('#close-responsive-btn');
+    await waitForWorkspaceStatus(workspacePage, 'Closed ', 10000);
+    expect(fixturePage.isClosed()).toBe(false);
+    expect(workspacePage.isClosed()).toBe(false);
 
-    const capturePdfRes = await callBackgroundViaExtension('RUN_CAPTURE', {
-      exportMime: 'application/pdf',
-      width: 1280,
-      height: 800,
-      title: 'Chromium E2E Capture',
-      pageUrl: fixtureUrl,
-    });
-    expect(capturePdfRes.ok).toBe(true);
-
-    const responsiveRes = await callBackgroundViaExtension('RUN_RESPONSIVE_INSPECT', {
-      targetUrl: fixtureUrl,
-      openWindows: false,
-    });
-    expect(responsiveRes.ok).toBe(true);
-
-    const designReviewRes = await callContentViaExtension('RUN_DESIGN_REVIEW');
-    expect(designReviewRes.ok).toBe(true);
-
-    const techStackRes = await callContentViaExtension('RUN_TECH_STACK');
-    expect(techStackRes.ok).toBe(true);
-
+    await workspacePage.click('button[data-tool="design_md"]');
     await workspacePage.click('#run-tool-btn');
+    await waitForWorkspaceStatus(workspacePage, 'Completed ', 10000);
     await workspacePage.click('#save-artifact-btn');
+    await waitForWorkspaceStatus(workspacePage, 'Saved tool result to local IndexedDB', 10000);
 
     const optionsPage = await context.newPage();
     optionsPage.on('pageerror', (err) => {
@@ -433,24 +765,120 @@ describe('Real Chromium Manifest V3 Extension End-to-End Verification', () => {
     await optionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
       waitUntil: 'domcontentloaded',
     });
+    await optionsPage.fill('#nvidia-api-key-input', 'nvapi-session-only-secret-000000');
+    await optionsPage.click('#set-nvidia-key-btn');
+    await optionsPage.waitForFunction(
+      () =>
+        (document.getElementById('nvidia-key-status')?.textContent ?? '').includes(
+          'Active in session',
+        ),
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
 
-    const usageRes = await callBackgroundViaExtension('GET_STORAGE_USAGE');
-    expect(usageRes.ok).toBe(true);
-    if (usageRes.ok) {
-      const usage = (usageRes.data as { usage: { artifactCount: number; usedBytes: number } })
-        .usage;
+    const [backupDownload] = await Promise.all([
+      optionsPage.waitForEvent('download'),
+      optionsPage.click('#download-backup-btn'),
+    ]);
+    expect(backupDownload.suggestedFilename()).toMatch(/^pagesift-backup-.*\.json$/);
+    const backupText = strFromU8(await readDownloadedBytes(backupDownload));
+    expect(backupText).not.toContain('nvapi-session-only-secret-000000');
+    expect(backupText).toContain('DESIGN.md Generator');
+
+    const freshWorkspacePage = await context.newPage();
+    await freshWorkspacePage.goto(`chrome-extension://${extensionId}/workspace.html`, {
+      waitUntil: 'domcontentloaded',
+    });
+    const persistedCheck = await freshWorkspacePage.evaluate(async () => {
+      const chromeRuntime = (
+        globalThis as unknown as {
+          chrome: {
+            runtime: {
+              sendMessage: (msg: unknown) => Promise<ExtensionMessageResponse>;
+            };
+          };
+        }
+      ).chrome.runtime;
+      return chromeRuntime.sendMessage({
+        schemaVersion: 1,
+        requestId: 'verify-persisted-usage',
+        operation: 'GET_STORAGE_USAGE',
+        payload: {},
+      });
+    });
+    expect(persistedCheck.ok).toBe(true);
+    if (persistedCheck.ok) {
+      const usage = (persistedCheck.data as { usage: { artifactCount: number } }).usage;
       expect(usage.artifactCount).toBeGreaterThanOrEqual(1);
-      expect(usage.usedBytes).toBeGreaterThan(50);
     }
 
-    const hostStorageCount = await fixturePage.evaluate(() => {
-      return window.localStorage.length + window.sessionStorage.length;
-    });
+    const hostStorageCount = await fixturePage.evaluate(
+      () => window.localStorage.length + window.sessionStorage.length,
+    );
     expect(hostStorageCount).toBe(0);
     expect(runtimeErrors).toEqual([]);
 
+    await freshWorkspacePage.close();
     await optionsPage.close();
+    await decoderPage.close();
     await workspacePage.close();
     await fixturePage.close();
-  });
+
+    await context.close();
+    context = await chromium.launchPersistentContext(userDataDir, {
+      channel: 'chromium',
+      headless: true,
+      acceptDownloads: true,
+      args: [
+        `--disable-extensions-except=${EXTENSION_DIR}`,
+        `--load-extension=${EXTENSION_DIR}`,
+        '--no-sandbox',
+      ],
+    });
+    let restartedWorker = context.serviceWorkers()[0];
+    if (!restartedWorker) {
+      restartedWorker = await context.waitForEvent('serviceworker', { timeout: 15000 });
+    }
+    const restartedExtId = restartedWorker.url().split('/')[2] ?? extensionId;
+    const afterRestartPage = await context.newPage();
+    await afterRestartPage.goto(`chrome-extension://${restartedExtId}/workspace.html`, {
+      waitUntil: 'domcontentloaded',
+    });
+    const afterRestartCheck = await afterRestartPage.evaluate(async () => {
+      const chromeRuntime = (
+        globalThis as unknown as {
+          chrome: {
+            runtime: {
+              sendMessage: (msg: unknown) => Promise<ExtensionMessageResponse>;
+            };
+          };
+        }
+      ).chrome.runtime;
+      const usageRes = await chromeRuntime.sendMessage({
+        schemaVersion: 1,
+        requestId: 'verify-after-restart-usage',
+        operation: 'GET_STORAGE_USAGE',
+        payload: {},
+      });
+      const keyRes = await chromeRuntime.sendMessage({
+        schemaVersion: 1,
+        requestId: 'verify-after-restart-key',
+        operation: 'GET_NVIDIA_KEY_STATUS',
+        payload: {},
+      });
+      return { usageRes, keyRes };
+    });
+    expect(afterRestartCheck.usageRes.ok).toBe(true);
+    if (afterRestartCheck.usageRes.ok) {
+      const usage = (afterRestartCheck.usageRes.data as { usage: { artifactCount: number } }).usage;
+      expect(usage.artifactCount).toBeGreaterThanOrEqual(1);
+    }
+    expect(afterRestartCheck.keyRes.ok).toBe(true);
+    if (afterRestartCheck.keyRes.ok) {
+      const status = (afterRestartCheck.keyRes.data as { status: { hasSessionKey: boolean } })
+        .status;
+      expect(status.hasSessionKey).toBe(false);
+    }
+    await afterRestartPage.close();
+  }, 120000);
 });

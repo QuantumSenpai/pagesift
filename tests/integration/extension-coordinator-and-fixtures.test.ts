@@ -3,6 +3,10 @@ import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
 import { BackgroundCoordinator } from '../../src/extension/background/service-worker.js';
 import { ContentScriptRuntime } from '../../src/extension/content/content-script.js';
+import {
+  buildPdfDocumentFromCapture,
+  type CaptureTile,
+} from '../../src/extension/engines/capture-engine.js';
 import type {
   MessageOperation,
   RuntimeMessageEnvelope,
@@ -137,16 +141,82 @@ describe('Extension Coordinator, Content Script Runtime, Controlled Fixtures, an
       new InMemoryKeyValueArea(),
     );
 
+    const fixtureJpegBytes = new Uint8Array(20);
+    fixtureJpegBytes[0] = 0xff;
+    fixtureJpegBytes[1] = 0xd8;
+    fixtureJpegBytes[2] = 0xff;
+    fixtureJpegBytes[3] = 0xc0;
+    fixtureJpegBytes[4] = 0x00;
+    fixtureJpegBytes[5] = 0x0b;
+    fixtureJpegBytes[6] = 0x08;
+    const jpegView = new DataView(fixtureJpegBytes.buffer);
+    jpegView.setUint16(7, 800, false);
+    jpegView.setUint16(9, 1280, false);
+    fixtureJpegBytes[18] = 0xff;
+    fixtureJpegBytes[19] = 0xd9;
+    const fixtureJpegDataUrl = `data:image/jpeg;base64,${Buffer.from(fixtureJpegBytes).toString('base64')}`;
+
+    const fixturePngBytes = new Uint8Array(33);
+    fixturePngBytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    fixturePngBytes.set([0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52], 8);
+    const pngView = new DataView(fixturePngBytes.buffer);
+    pngView.setUint32(16, 1280, false);
+    pngView.setUint32(20, 800, false);
+    fixturePngBytes[24] = 8;
+    fixturePngBytes[25] = 6;
+    const fixturePngDataUrl = `data:image/png;base64,${Buffer.from(fixturePngBytes).toString('base64')}`;
+
     let aiFetchCallCount = 0;
     const coordinator = new BackgroundCoordinator({
       extensionId: TEST_EXT_ID,
       storage,
       settingsStore,
       sendToTab: (_tabId, message) => contentRuntime.handleMessage(message),
-      openResponsiveWindow: (_url, width, height) => Promise.resolve(width + height),
-      fetchImpl: () => {
-        aiFetchCallCount += 1;
-        return Promise.reject(new Error('Unexpected network call during local tool operation'));
+      getTabInfo: (tabId) =>
+        Promise.resolve({
+          id: tabId,
+          windowId: 1,
+          url: 'https://fixture.example.com/product?session_token=secret123',
+          active: true,
+        }),
+      captureVisibleTab: () => Promise.resolve(fixturePngDataUrl),
+      composeCaptureImpl: ({ tiles, exportMime, title, pageUrl }) => {
+        const first: CaptureTile | undefined = tiles[0];
+        if (!first) {
+          throw new Error('No tiles captured');
+        }
+        if (exportMime === 'application/pdf') {
+          return Promise.resolve({
+            dataUrl: buildPdfDocumentFromCapture({
+              width: 1280,
+              height: 800,
+              title,
+              pageUrl,
+              jpegDataUrl: fixtureJpegDataUrl,
+            }),
+            width: 1280,
+            height: 800,
+            mimeType: 'application/pdf',
+          });
+        }
+        return Promise.resolve({
+          dataUrl: fixturePngDataUrl,
+          width: 1280,
+          height: 800,
+          mimeType: 'image/png',
+        });
+      },
+      captureMinIntervalMs: 1,
+      openResponsiveWindow: (_url, width, height) =>
+        Promise.resolve({ windowId: width, tabId: width + height }),
+      fetchImpl: (input) => {
+        const urlStr =
+          typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+        if (urlStr.includes('integrate.api.nvidia.com')) {
+          aiFetchCallCount += 1;
+          return Promise.reject(new Error('Unexpected AI call during local tool operation'));
+        }
+        return Promise.resolve(new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 }));
       },
     });
 
@@ -228,9 +298,8 @@ describe('Extension Coordinator, Content Script Runtime, Controlled Fixtures, an
       expect(resetRes.ok).toBe(true);
 
       const capturePdfRes = await sendOp('RUN_CAPTURE', {
+        mode: 'visible',
         exportMime: 'application/pdf',
-        width: 1280,
-        height: 800,
         title: 'Fixture PDF',
       });
       expect(capturePdfRes.ok).toBe(true);

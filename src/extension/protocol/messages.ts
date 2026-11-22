@@ -37,7 +37,14 @@ export const messageOperationSchema = z.enum([
   'RUN_MEASURE',
   'RUN_EDIT_TEXT',
   'RUN_CAPTURE',
+  'CAPTURE_PREPARE',
+  'CAPTURE_SCROLL_TO',
+  'CAPTURE_RESTORE',
   'RUN_RESPONSIVE_INSPECT',
+  'SET_RESPONSIVE_SYNC',
+  'GET_VIEWPORT_METRICS',
+  'CLOSE_RESPONSIVE_SESSION',
+  'GET_RESPONSIVE_SESSION',
   'RUN_SWAP_FONT',
   'RUN_ARRANGE',
   'RUN_DESIGN_REVIEW',
@@ -48,7 +55,10 @@ export const messageOperationSchema = z.enum([
   'SYNC_SCROLL',
   'CANCEL_JOB',
   'JOB_PROGRESS',
+  'GET_JOB_STATUS',
+  'LIST_JOBS',
   'SAVE_ARTIFACT_TO_IDB',
+  'SAVE_CAPTURE_TO_IDB',
   'LIST_PROJECTS_FROM_IDB',
   'GET_STORAGE_USAGE',
   'EXPORT_DB_BACKUP',
@@ -74,6 +84,15 @@ const PRIVILEGED_EXTENSION_PAGE_OPERATIONS = new Set<MessageOperation>([
   'GET_NVIDIA_KEY_STATUS',
   'RUN_NVIDIA_ENHANCEMENT',
   'RUN_RESPONSIVE_INSPECT',
+  'CLOSE_RESPONSIVE_SESSION',
+  'GET_RESPONSIVE_SESSION',
+  'RUN_CAPTURE',
+  'SAVE_ARTIFACT_TO_IDB',
+  'SAVE_CAPTURE_TO_IDB',
+  'LIST_PROJECTS_FROM_IDB',
+  'GET_STORAGE_USAGE',
+  'GET_JOB_STATUS',
+  'LIST_JOBS',
 ]);
 
 export const runtimeMessageEnvelopeSchema = z.strictObject({
@@ -88,6 +107,145 @@ export const runtimeMessageEnvelopeSchema = z.strictObject({
 
 export type RuntimeMessageEnvelope = z.infer<typeof runtimeMessageEnvelopeSchema>;
 
+const httpUrlSchema = z
+  .string()
+  .trim()
+  .max(2048)
+  .refine((val) => {
+    try {
+      const parsed = new URL(val);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }, 'URL must use http:// or https://');
+
+const captureRectSchema = z.strictObject({
+  x: z.number().min(0).max(32768),
+  y: z.number().min(0).max(32768),
+  width: z.number().min(1).max(32768),
+  height: z.number().min(1).max(32768),
+});
+
+const captureAnnotationSchema = z.strictObject({
+  x: z.number().min(0).max(32768),
+  y: z.number().min(0).max(32768),
+  width: z.number().min(1).max(32768),
+  height: z.number().min(1).max(32768),
+  label: z.string().trim().max(200),
+  color: z
+    .string()
+    .trim()
+    .regex(/^#[0-9a-fA-F]{3,8}$/, 'Annotation color must be a valid hex color'),
+});
+
+const responsiveViewportSchema = z.strictObject({
+  id: z.string().trim().min(1).max(64),
+  label: z.string().trim().min(1).max(80),
+  width: z.number().int().min(240).max(3840),
+  height: z.number().int().min(320).max(2160),
+  category: z.enum(['mobile', 'tablet', 'laptop', 'desktop']),
+});
+
+const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = {
+  ACTIVATE_TOOL: z.strictObject({
+    tool: toolIdSchema.default('inspect'),
+  }),
+  RUN_INSPECT_ELEMENT: z.strictObject({
+    selector: z.string().trim().max(512).optional(),
+  }),
+  RUN_MEASURE: z.strictObject({
+    primarySelector: z.string().trim().max(512).optional(),
+    secondarySelector: z.string().trim().max(512).optional(),
+  }),
+  RUN_CLONE_PROMPT: z.strictObject({
+    targetFramework: z
+      .enum(['react_tailwind', 'html_css', 'vue_css', 'generic'])
+      .default('react_tailwind'),
+  }),
+  RUN_ASSETS_EXTRACT: z.strictObject({
+    includeZip: z.boolean().default(false),
+    maxAssetCount: z.number().int().min(1).max(200).optional(),
+  }),
+  RUN_CLONE_PAGE: z.strictObject({
+    prepareOnly: z.boolean().optional(),
+    maxAssetCount: z.number().int().min(1).max(150).optional(),
+  }),
+  RUN_EDIT_TEXT: z.strictObject({
+    selector: z.string().trim().max(512).optional(),
+    text: z.string().max(4000),
+  }),
+  RUN_SWAP_FONT: z.strictObject({
+    selector: z.string().trim().max(512).optional(),
+    scope: z.enum(['element', 'similar', 'page']).default('element'),
+    fontFamily: z.string().trim().min(1).max(200),
+    remoteFontCssUrl: httpUrlSchema.optional(),
+    allowRemoteFontLoad: z.boolean().default(false),
+  }),
+  RUN_ARRANGE: z.strictObject({
+    selector: z.string().trim().max(512).optional(),
+    action: z.enum(['move', 'hide', 'remove']).default('move'),
+    dx: z.number().min(-10000).max(10000).default(0),
+    dy: z.number().min(-10000).max(10000).default(0),
+  }),
+  RUN_CAPTURE: z.strictObject({
+    mode: z.enum(['visible', 'area', 'element', 'full_page']).default('visible'),
+    exportMime: z
+      .enum(['image/png', 'image/jpeg', 'image/webp', 'application/pdf'])
+      .default('image/png'),
+    selector: z.string().trim().max(512).optional(),
+    rect: captureRectSchema.optional(),
+    cropRect: captureRectSchema.optional(),
+    annotations: z.array(captureAnnotationSchema).max(25).optional(),
+    title: z.string().trim().max(300).optional(),
+    pageUrl: httpUrlSchema.optional(),
+    quality: z.number().min(0.1).max(1).optional(),
+    planOnly: z.boolean().optional(),
+  }),
+  CAPTURE_PREPARE: z.strictObject({
+    mode: z.enum(['visible', 'area', 'element', 'full_page']).default('visible'),
+    selector: z.string().trim().max(512).optional(),
+    rect: captureRectSchema.optional(),
+  }),
+  CAPTURE_SCROLL_TO: z.strictObject({
+    tileIndex: z.number().int().min(0).max(50),
+    scrollX: z.number().min(0).max(100000),
+    scrollY: z.number().min(0).max(100000),
+    hideFixed: z.boolean().default(false),
+    lazyWaitMs: z.number().int().min(0).max(400).default(50),
+  }),
+  CAPTURE_RESTORE: z.strictObject({}),
+  RUN_RESPONSIVE_INSPECT: z.strictObject({
+    targetUrl: httpUrlSchema,
+    openWindows: z.boolean().default(true),
+    syncEnabled: z.boolean().default(true),
+    customViewports: z.array(responsiveViewportSchema).min(1).max(6).optional(),
+  }),
+  SET_RESPONSIVE_SYNC: z.strictObject({
+    enabled: z.boolean(),
+  }),
+  SYNC_SCROLL: z.strictObject({
+    scrollXRatio: z.number().min(0).max(1),
+    scrollYRatio: z.number().min(0).max(1),
+  }),
+  CANCEL_JOB: z.strictObject({
+    jobId: z.string().trim().min(4).max(128),
+  }),
+  GET_JOB_STATUS: z.strictObject({
+    jobId: z.string().trim().min(4).max(128),
+  }),
+  RUN_NVIDIA_ENHANCEMENT: z.strictObject({
+    previewOnly: z.boolean().default(true),
+    taskType: z.enum(['enhance_clone_prompt', 'interpret_design_review']),
+    modelId: z.string().trim().max(160).optional(),
+    sourceTool: z
+      .enum(['clone_prompt', 'design_review', 'design_md', 'colors', 'fonts', 'inspect'])
+      .default('clone_prompt'),
+    toolOutput: z.record(z.string(), z.unknown()).default({}),
+    confirmedPayloadDigest: z.string().trim().min(16).max(128).optional(),
+  }),
+};
+
 export type ExtensionErrorCode =
   | 'INVALID_MESSAGE'
   | 'UNAUTHORIZED_SENDER'
@@ -97,7 +255,8 @@ export type ExtensionErrorCode =
   | 'TOOL_EXECUTION_ERROR'
   | 'AI_CONFIGURATION_ERROR'
   | 'AI_PROVIDER_ERROR'
-  | 'STORAGE_ERROR';
+  | 'STORAGE_ERROR'
+  | 'PERMISSION_DENIED';
 
 export interface ExtensionMessageSuccess<T = unknown> {
   ok: true;
@@ -139,6 +298,35 @@ export interface ValidatedSenderResult {
   reason?: string;
 }
 
+export function validateOperationPayload(
+  operation: MessageOperation,
+  payload: Record<string, unknown>,
+  requestId: string,
+):
+  | { valid: true; payload: Record<string, unknown> }
+  | { valid: false; response: ExtensionMessageFailure } {
+  const schema = OPERATION_PAYLOAD_SCHEMAS[operation];
+  if (!schema) {
+    return { valid: true, payload };
+  }
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) {
+    return {
+      valid: false,
+      response: createErrorResponse(
+        requestId,
+        'INVALID_MESSAGE',
+        `Payload validation failed for ${operation}`,
+        operation,
+        parsed.error.issues.map(
+          (i) => `${i.path.map(String).join('.') || 'payload'}: ${i.message}`,
+        ),
+      ),
+    };
+  }
+  return { valid: true, payload: parsed.data as Record<string, unknown> };
+}
+
 export function validateMessageEnvelope(
   raw: unknown,
 ):
@@ -171,9 +359,21 @@ export function validateMessageEnvelope(
     };
   }
 
+  const payloadCheck = validateOperationPayload(
+    parsed.data.operation,
+    parsed.data.payload,
+    parsed.data.requestId,
+  );
+  if (!payloadCheck.valid) {
+    return payloadCheck;
+  }
+
   return {
     valid: true,
-    message: parsed.data,
+    message: {
+      ...parsed.data,
+      payload: payloadCheck.payload,
+    },
   };
 }
 
@@ -228,9 +428,10 @@ export function validateSenderAuthorization(
 export function verifyDocumentBinding(
   requestDocumentId: string | undefined,
   currentDocumentId: string,
+  required = false,
 ): boolean {
   if (!requestDocumentId) {
-    return true;
+    return !required;
   }
   return requestDocumentId === currentDocumentId;
 }

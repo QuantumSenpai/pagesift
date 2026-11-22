@@ -1,3 +1,4 @@
+import createDOMPurify from 'dompurify';
 import { strToU8, zipSync } from 'fflate';
 import {
   collectDocumentElements,
@@ -49,18 +50,46 @@ export interface AssetBinaryFetchResult {
 
 export type AssetBinaryFetcher = (url: string) => Promise<AssetBinaryFetchResult>;
 
+const MIME_TO_EXTENSION: Record<string, string> = {
+  'image/svg+xml': 'svg',
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/avif': 'avif',
+  'image/x-icon': 'ico',
+  'image/vnd.microsoft.icon': 'ico',
+  'font/woff2': 'woff2',
+  'font/woff': 'woff',
+  'font/ttf': 'ttf',
+  'font/otf': 'otf',
+  'application/font-woff2': 'woff2',
+  'application/font-woff': 'woff',
+  'video/mp4': 'mp4',
+  'video/webm': 'webm',
+};
+
+export function extensionFromMimeType(mimeType: string | undefined, fallbackExt: string): string {
+  if (!mimeType) {
+    return fallbackExt;
+  }
+  const normalized = mimeType.split(';')[0]?.trim().toLowerCase() ?? '';
+  return MIME_TO_EXTENSION[normalized] ?? fallbackExt;
+}
+
 export function sanitizeArchiveFilename(
   rawInput: string,
   fallbackBase: string,
   defaultExt: string,
   usedNames: Set<string>,
+  mimeTypeOverride?: string,
 ): string {
   let candidateBase = rawInput.trim();
   try {
     if (candidateBase.startsWith('http://') || candidateBase.startsWith('https://')) {
       const parsed = new URL(candidateBase);
       const segments = parsed.pathname.split('/').filter((s) => s.length > 0);
-      candidateBase = segments[segments.length - 1] ?? fallbackBase;
+      candidateBase = decodeURIComponent(segments[segments.length - 1] ?? fallbackBase);
     }
   } catch {
     candidateBase = fallbackBase;
@@ -79,7 +108,7 @@ export function sanitizeArchiveFilename(
     candidateBase = fallbackBase;
   }
 
-  let ext = defaultExt;
+  let ext = extensionFromMimeType(mimeTypeOverride, defaultExt);
   let stem = candidateBase;
   const dotIdx = candidateBase.lastIndexOf('.');
   if (dotIdx > 0 && dotIdx < candidateBase.length - 1) {
@@ -102,8 +131,44 @@ export function sanitizeArchiveFilename(
 }
 
 export function sanitizeInlineSvgMarkup(svgEl: Element): string {
+  const ownerWin = svgEl.ownerDocument.defaultView;
+  if (ownerWin) {
+    const purify = createDOMPurify(ownerWin);
+    const cleaned = purify.sanitize(svgEl.outerHTML, {
+      USE_PROFILES: { svg: true, svgFilters: true },
+      FORBID_TAGS: [
+        'script',
+        'foreignObject',
+        'iframe',
+        'object',
+        'embed',
+        'animate',
+        'animateMotion',
+        'animateTransform',
+        'set',
+        'handler',
+        'listener',
+        'use',
+      ],
+      FORBID_ATTR: ['href', 'xlink:href', 'src', 'action', 'formaction'],
+      ALLOW_UNKNOWN_PROTOCOLS: false,
+      SAFE_FOR_XML: true,
+    });
+    const wrapper = svgEl.ownerDocument.createElement('div');
+    wrapper.innerHTML = cleaned;
+    const svgNode = wrapper.querySelector('svg');
+    if (svgNode) {
+      if (!svgNode.hasAttribute('xmlns')) {
+        svgNode.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      }
+      return svgNode.outerHTML;
+    }
+  }
+
   const clone = svgEl.cloneNode(true) as Element;
-  const dangerous = clone.querySelectorAll('script, foreignObject, iframe, object, embed');
+  const dangerous = clone.querySelectorAll(
+    'script, foreignObject, iframe, object, embed, animate, animateMotion, animateTransform, set, use',
+  );
   for (const node of Array.from(dangerous)) {
     node.remove();
   }
@@ -112,14 +177,11 @@ export function sanitizeInlineSvgMarkup(svgEl: Element): string {
   for (const node of allNodes) {
     for (const attr of Array.from(node.attributes)) {
       const nameLower = attr.name.toLowerCase();
-      const valLower = attr.value.trim().toLowerCase();
-      if (nameLower.startsWith('on')) {
-        node.removeAttribute(attr.name);
-      } else if (
-        (nameLower === 'href' || nameLower === 'xlink:href' || nameLower === 'src') &&
-        (valLower.startsWith('javascript:') ||
-          valLower.startsWith('vbscript:') ||
-          valLower.startsWith('data:text/html'))
+      if (
+        nameLower.startsWith('on') ||
+        nameLower === 'href' ||
+        nameLower === 'xlink:href' ||
+        nameLower === 'src'
       ) {
         node.removeAttribute(attr.name);
       }
@@ -186,7 +248,7 @@ function classifyUrlReference(
     return {
       resolvedUrl: resolved.toString(),
       availabilityStatus: 'http_reference',
-      statusNote: 'Discovered HTTP(S) reference; byte access depends on CORS/auth policy',
+      statusNote: 'Discovered HTTP(S) reference; byte access depends on permission/network status',
     };
   } catch {
     return {
@@ -197,7 +259,7 @@ function classifyUrlReference(
   }
 }
 
-function parseSrcsetUrls(srcsetValue: string): string[] {
+export function parseSrcsetUrls(srcsetValue: string): string[] {
   return srcsetValue
     .split(',')
     .map((part) => part.trim().split(/\s+/)[0] ?? '')
@@ -205,7 +267,7 @@ function parseSrcsetUrls(srcsetValue: string): string[] {
 }
 
 function inferMimeTypeHint(url: string, kind: AssetKind): string {
-  const lower = url.toLowerCase();
+  const lower = url.toLowerCase().split('?')[0]?.split('#')[0] ?? '';
   if (kind === 'svg' || lower.endsWith('.svg')) {
     return 'image/svg+xml';
   }
@@ -236,6 +298,9 @@ function inferMimeTypeHint(url: string, kind: AssetKind): string {
   if (lower.endsWith('.ttf')) {
     return 'font/ttf';
   }
+  if (lower.endsWith('.otf')) {
+    return 'font/otf';
+  }
   if (lower.endsWith('.mp4')) {
     return 'video/mp4';
   }
@@ -253,21 +318,7 @@ function inferMimeTypeHint(url: string, kind: AssetKind): string {
 
 function defaultExtForKind(kind: AssetKind, url: string): string {
   const mime = inferMimeTypeHint(url, kind);
-  const map: Record<string, string> = {
-    'image/svg+xml': 'svg',
-    'image/png': 'png',
-    'image/jpeg': 'jpg',
-    'image/webp': 'webp',
-    'image/gif': 'gif',
-    'image/avif': 'avif',
-    'image/x-icon': 'ico',
-    'font/woff2': 'woff2',
-    'font/woff': 'woff',
-    'font/ttf': 'ttf',
-    'video/mp4': 'mp4',
-    'video/webm': 'webm',
-  };
-  return map[mime] ?? 'bin';
+  return MIME_TO_EXTENSION[mime] ?? 'bin';
 }
 
 export function extractPageAssets(doc: Document, win: Window): AssetExtractionReport {
@@ -281,11 +332,12 @@ export function extractPageAssets(doc: Document, win: Window): AssetExtractionRe
   const addDiscoveredUrl = (params: {
     kind: AssetKind;
     rawUrl: string;
+    resolveBase?: string;
     width?: number | null;
     height?: number | null;
     altText?: string | null;
   }): void => {
-    const classified = classifyUrlReference(params.rawUrl, baseHref);
+    const classified = classifyUrlReference(params.rawUrl, params.resolveBase ?? baseHref);
     if (!classified.resolvedUrl) {
       return;
     }
@@ -337,16 +389,27 @@ export function extractPageAssets(doc: Document, win: Window): AssetExtractionRe
     if (tag === 'img') {
       const img = element as HTMLImageElement;
       const src =
-        img.getAttribute('src') ??
-        img.getAttribute('data-src') ??
+        img.currentSrc ||
+        img.getAttribute('src') ||
+        img.getAttribute('data-src') ||
         img.getAttribute('data-lazy-src');
       const width = img.naturalWidth || img.width || null;
       const height = img.naturalHeight || img.height || null;
       const alt = img.getAttribute('alt');
       if (src) {
         addDiscoveredUrl({
-          kind: src.toLowerCase().endsWith('.svg') ? 'svg' : 'image',
+          kind: src.toLowerCase().split('?')[0]?.endsWith('.svg') ? 'svg' : 'image',
           rawUrl: src,
+          width,
+          height,
+          altText: alt,
+        });
+      }
+      const attrSrc = img.getAttribute('src');
+      if (attrSrc && attrSrc !== src) {
+        addDiscoveredUrl({
+          kind: attrSrc.toLowerCase().split('?')[0]?.endsWith('.svg') ? 'svg' : 'image',
+          rawUrl: attrSrc,
           width,
           height,
           altText: alt,
@@ -436,6 +499,7 @@ export function extractPageAssets(doc: Document, win: Window): AssetExtractionRe
     } catch {
       continue;
     }
+    const sheetBase = sheet.href || baseHref;
     for (const rule of Array.from(rules)) {
       if (rule.cssText.trim().toLowerCase().startsWith('@font-face') && 'style' in rule) {
         const fontRule = rule as CSSFontFaceRule;
@@ -445,7 +509,7 @@ export function extractPageAssets(doc: Document, win: Window): AssetExtractionRe
         while (match) {
           const fontUrl = match[2]?.trim() ?? '';
           if (fontUrl) {
-            addDiscoveredUrl({ kind: 'font', rawUrl: fontUrl });
+            addDiscoveredUrl({ kind: 'font', rawUrl: fontUrl, resolveBase: sheetBase });
           }
           match = urlRegex.exec(src);
         }
@@ -479,26 +543,52 @@ export async function buildAssetsZipArchive(
   options?: {
     maxTotalBytes?: number;
     maxAssetCount?: number;
+    signal?: AbortSignal;
   },
 ): Promise<{
   zipBytes: Uint8Array;
   packagedFilesCount: number;
+  packagedAssets: Array<{ id: string; url: string; archivePath: string; byteLength: number }>;
   skippedOrUnavailable: Array<{ id: string; url: string; reason: string }>;
 }> {
   const maxTotalBytes = options?.maxTotalBytes ?? 25 * 1024 * 1024;
   const maxAssetCount = options?.maxAssetCount ?? 150;
   const zipEntries: Record<string, Uint8Array> = {};
+  const usedArchiveNames = new Set<string>();
+  const packagedAssets: Array<{
+    id: string;
+    url: string;
+    archivePath: string;
+    byteLength: number;
+  }> = [];
   const skippedOrUnavailable: Array<{ id: string; url: string; reason: string }> = [];
   let runningBytes = 0;
   let packagedFilesCount = 0;
 
   for (const asset of report.assets.slice(0, maxAssetCount)) {
+    if (options?.signal?.aborted) {
+      throw new Error('Asset archive export cancelled by user');
+    }
+
     if (asset.safeSvgPreview) {
       const svgBytes = strToU8(asset.safeSvgPreview);
       if (runningBytes + svgBytes.byteLength <= maxTotalBytes) {
-        zipEntries[`assets/${asset.safeFilename}`] = svgBytes;
+        const finalName = sanitizeArchiveFilename(
+          asset.safeFilename,
+          asset.id,
+          'svg',
+          usedArchiveNames,
+        );
+        const archivePath = `assets/${finalName}`;
+        zipEntries[archivePath] = svgBytes;
         runningBytes += svgBytes.byteLength;
         packagedFilesCount += 1;
+        packagedAssets.push({
+          id: asset.id,
+          url: asset.url,
+          archivePath,
+          byteLength: svgBytes.byteLength,
+        });
       } else {
         skippedOrUnavailable.push({
           id: asset.id,
@@ -546,15 +636,30 @@ export async function buildAssetsZipArchive(
       continue;
     }
 
-    zipEntries[`assets/${asset.safeFilename}`] = fetched.bytes;
+    const finalName = sanitizeArchiveFilename(
+      asset.url,
+      asset.id,
+      defaultExtForKind(asset.kind, asset.url),
+      usedArchiveNames,
+      fetched.mimeType,
+    );
+    const archivePath = `assets/${finalName}`;
+    zipEntries[archivePath] = fetched.bytes;
     runningBytes += fetched.bytes.byteLength;
     packagedFilesCount += 1;
+    packagedAssets.push({
+      id: asset.id,
+      url: asset.url,
+      archivePath,
+      byteLength: fetched.bytes.byteLength,
+    });
   }
 
   const manifestDoc = {
     generatedAt: new Date().toISOString(),
     summary: report.summary,
     packagedFilesCount,
+    packagedAssets,
     assets: report.assets.map((a) => ({
       id: a.id,
       kind: a.kind,
@@ -574,6 +679,7 @@ export async function buildAssetsZipArchive(
   return {
     zipBytes: zipSync(zipEntries, { level: 6 }),
     packagedFilesCount,
+    packagedAssets,
     skippedOrUnavailable,
   };
 }

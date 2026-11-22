@@ -158,6 +158,7 @@ describe('Slice 6 Engine: Capture planning, sticky/fixed suppression, scroll res
       height: 768,
       title: 'Home Page Capture',
       pageUrl: 'https://example.com',
+      jpegDataUrl: createValidJpegDataUrl(1024, 768),
     });
     const pdfInfo = verifyCaptureBinaryAndDimensions(pdfUrl);
     expect(pdfInfo).toMatchObject({ mimeType: 'application/pdf', width: 1024, height: 768 });

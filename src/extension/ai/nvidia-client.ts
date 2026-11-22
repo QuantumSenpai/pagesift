@@ -1,6 +1,13 @@
 import { ALLOWED_NVIDIA_ENDPOINTS } from '../storage/settings-storage.js';
 
 export type NvidiaTaskType = 'enhance_clone_prompt' | 'interpret_design_review';
+export type NvidiaSupportedSourceTool =
+  | 'clone_prompt'
+  | 'design_review'
+  | 'design_md'
+  | 'colors'
+  | 'fonts'
+  | 'inspect';
 
 export interface NvidiaEgressPreview {
   endpoint: string;
@@ -10,6 +17,7 @@ export interface NvidiaEgressPreview {
   excludedDataGuarantees: string[];
   serializedPayloadPreview: string;
   byteLength: number;
+  payloadDigest: string;
 }
 
 export interface NvidiaInvocationOptions {
@@ -32,47 +40,236 @@ export interface NvidiaInvocationResult {
   egressPreview: NvidiaEgressPreview;
 }
 
-const MAX_OUTPUT_CHARS = 16384;
+export const MAX_NVIDIA_OUTPUT_CHARS = 16384;
+export const MAX_NVIDIA_CONTEXT_DEPTH = 6;
+export const MAX_NVIDIA_ARRAY_LENGTH = 30;
+export const MAX_NVIDIA_OBJECT_KEYS = 40;
+export const MAX_NVIDIA_STRING_LENGTH = 1000;
+export const MAX_NVIDIA_PAYLOAD_BYTES = 16384;
 
-function stripSensitiveDataFromContext(input: Record<string, unknown>): Record<string, unknown> {
-  const clean: Record<string, unknown> = {};
-  const forbiddenKeys = new Set([
-    'apiKey',
-    'password',
-    'token',
-    'cookie',
-    'authorization',
-    'formValues',
-    'rawHtml',
-  ]);
+const SENSITIVE_KEY_TOKENS = [
+  'password',
+  'passwd',
+  'pwd',
+  'secret',
+  'token',
+  'apikey',
+  'authorization',
+  'authheader',
+  'cookie',
+  'session',
+  'credential',
+  'privatekey',
+  'formvalues',
+  'rawhtml',
+  'htmlcontent',
+  'htmlpreview',
+  'zipbase64',
+  'dataurl',
+  'backup',
+  'bearer',
+  'csrf',
+  'creditcard',
+  'cardnumber',
+  'cvv',
+  'ssn',
+];
 
-  for (const [key, value] of Object.entries(input)) {
-    if (forbiddenKeys.has(key)) {
-      continue;
-    }
-    if (typeof value === 'string') {
-      if (value.startsWith('http://') || value.startsWith('https://')) {
-        try {
-          const parsed = new URL(value);
-          parsed.search = '';
-          parsed.hash = '';
-          clean[key] = parsed.toString();
-          continue;
-        } catch {
-          clean[key] = value.slice(0, 500);
-          continue;
-        }
-      }
-      clean[key] = value.slice(0, 2000);
-    } else if (Array.isArray(value)) {
-      clean[key] = value.slice(0, 30);
-    } else if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
-      clean[key] = value;
-    } else if (typeof value === 'object') {
-      clean[key] = stripSensitiveDataFromContext(value as Record<string, unknown>);
+const ALLOWLIST_BY_TASK: Record<NvidiaTaskType, Set<string>> = {
+  enhance_clone_prompt: new Set([
+    'pageTitle',
+    'sourceUrl',
+    'targetFramework',
+    'observations',
+    'assumptions',
+    'prompt',
+    'colors',
+    'topColors',
+    'palette',
+    'typography',
+    'fonts',
+    'spacing',
+    'spacingScale',
+    'layout',
+    'components',
+    'sections',
+    'markdown',
+  ]),
+  interpret_design_review: new Set([
+    'pageTitle',
+    'sourceUrl',
+    'findings',
+    'findingsCount',
+    'summary',
+    'counts',
+    'remediationPrompt',
+    'colors',
+    'typography',
+    'spacing',
+    'layout',
+  ]),
+};
+
+function isSensitiveFieldName(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!normalized) {
+    return true;
+  }
+  for (const token of SENSITIVE_KEY_TOKENS) {
+    if (normalized === token || normalized.includes(token)) {
+      return true;
     }
   }
-  return clean;
+  return false;
+}
+
+function sanitizeUrlString(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return '[redacted-uri]';
+    }
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return rawUrl.slice(0, MAX_NVIDIA_STRING_LENGTH);
+  }
+}
+
+function sanitizeTextString(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return sanitizeUrlString(trimmed);
+  }
+  if (trimmed.startsWith('data:')) {
+    return '[omitted-data-uri]';
+  }
+  const scrubbed = raw.replace(/https?:\/\/[^\s"'<>]+/gi, (match) => sanitizeUrlString(match));
+  return scrubbed.slice(0, MAX_NVIDIA_STRING_LENGTH);
+}
+
+export function sanitizeValueRecursively(
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    return sanitizeTextString(value);
+  }
+  if (typeof value !== 'object') {
+    return undefined;
+  }
+  if (depth >= MAX_NVIDIA_CONTEXT_DEPTH) {
+    return '[truncated-max-depth]';
+  }
+  if (seen.has(value)) {
+    return '[circular-reference]';
+  }
+  seen.add(value);
+
+  try {
+    if (Array.isArray(value)) {
+      const cleanedItems: unknown[] = [];
+      for (const item of value.slice(0, MAX_NVIDIA_ARRAY_LENGTH)) {
+        const sanitizedItem = sanitizeValueRecursively(item, depth + 1, seen);
+        if (sanitizedItem !== undefined) {
+          cleanedItems.push(sanitizedItem);
+        }
+      }
+      return cleanedItems;
+    }
+
+    const cleanObj: Record<string, unknown> = {};
+    let keptKeys = 0;
+    for (const [key, entryVal] of Object.entries(value as Record<string, unknown>)) {
+      if (keptKeys >= MAX_NVIDIA_OBJECT_KEYS) {
+        break;
+      }
+      if (isSensitiveFieldName(key)) {
+        continue;
+      }
+      const sanitizedVal = sanitizeValueRecursively(entryVal, depth + 1, seen);
+      if (sanitizedVal !== undefined) {
+        cleanObj[key] = sanitizedVal;
+        keptKeys += 1;
+      }
+    }
+    return cleanObj;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+export function stripSensitiveDataFromContext(
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const result = sanitizeValueRecursively(input, 0);
+  return typeof result === 'object' && result !== null && !Array.isArray(result)
+    ? (result as Record<string, unknown>)
+    : {};
+}
+
+export function buildAllowlistedNvidiaContext(params: {
+  taskType: NvidiaTaskType;
+  sourceTool: NvidiaSupportedSourceTool;
+  toolOutput: Record<string, unknown>;
+}): Record<string, unknown> {
+  const allowedKeys = ALLOWLIST_BY_TASK[params.taskType];
+  const flattenedSource: Record<string, unknown> = { ...params.toolOutput };
+
+  if (
+    typeof params.toolOutput['report'] === 'object' &&
+    params.toolOutput['report'] !== null &&
+    !Array.isArray(params.toolOutput['report'])
+  ) {
+    Object.assign(flattenedSource, params.toolOutput['report'] as Record<string, unknown>);
+  }
+  if (
+    typeof params.toolOutput['result'] === 'object' &&
+    params.toolOutput['result'] !== null &&
+    !Array.isArray(params.toolOutput['result'])
+  ) {
+    Object.assign(flattenedSource, params.toolOutput['result'] as Record<string, unknown>);
+  }
+
+  const picked: Record<string, unknown> = {
+    sourceTool: params.sourceTool,
+  };
+  for (const [key, value] of Object.entries(flattenedSource)) {
+    if (!allowedKeys.has(key) || isSensitiveFieldName(key)) {
+      continue;
+    }
+    picked[key] = value;
+  }
+
+  return stripSensitiveDataFromContext(picked);
+}
+
+export function computePayloadDigest(serializedPayload: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < serializedPayload.length; i += 1) {
+    const ch = serializedPayload.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const partA = (h2 >>> 0).toString(16).padStart(8, '0');
+  const partB = (h1 >>> 0).toString(16).padStart(8, '0');
+  return `psv1-${partA}${partB}-${serializedPayload.length}`;
 }
 
 export function buildNvidiaEgressPreview(params: {
@@ -95,6 +292,13 @@ export function buildNvidiaEgressPreview(params: {
 
   const cleanedContext = stripSensitiveDataFromContext(params.sanitizedContext);
   const serializedPayloadPreview = JSON.stringify(cleanedContext, null, 2);
+  const byteLength = new TextEncoder().encode(serializedPayloadPreview).byteLength;
+
+  if (byteLength > MAX_NVIDIA_PAYLOAD_BYTES) {
+    throw new Error(
+      `Sanitized NVIDIA context payload (${byteLength} bytes) exceeds maximum limit (${MAX_NVIDIA_PAYLOAD_BYTES} bytes)`,
+    );
+  }
 
   return {
     endpoint,
@@ -102,12 +306,13 @@ export function buildNvidiaEgressPreview(params: {
     taskType: params.taskType,
     fieldsLeavingDevice: Object.keys(cleanedContext),
     excludedDataGuarantees: [
-      'Form input values and passwords are never included.',
-      'Cookies, Authorization headers, and session tokens from the inspected site are excluded.',
-      'URL query parameters and fragments are stripped before transmission.',
+      'Sensitive structural keys (passwords, tokens, secrets, cookies, authorization headers, form values, raw HTML, base64 archives, and data URIs) are removed recursively across objects and arrays.',
+      'URL credentials (user:pass), query parameters, and fragments are stripped from HTTP(S) URLs before transmission.',
+      'Only allowlisted design summary fields within depth (6), array (30), string (1,000 chars), and payload size (16 KiB) limits are transmitted. Arbitrary prose cannot be guaranteed secret-free; review the preview before confirming.',
     ],
     serializedPayloadPreview,
-    byteLength: new TextEncoder().encode(serializedPayloadPreview).byteLength,
+    byteLength,
+    payloadDigest: computePayloadDigest(serializedPayloadPreview),
   };
 }
 
@@ -183,7 +388,7 @@ export async function invokeNvidiaChatCompletion(
       }
       if (response.status === 404) {
         throw new Error(
-          `NVIDIA model not found (HTTP 404): verify model ID "${egressPreview.modelId}" in the NVIDIA API catalog`,
+          `NVIDIA model not found (HTTP ${response.status}): verify model ID "${egressPreview.modelId}" in the NVIDIA API catalog`,
         );
       }
       if (response.status === 429) {
@@ -203,16 +408,22 @@ export async function invokeNvidiaChatCompletion(
         throw new Error(`NVIDIA API request failed with HTTP ${response.status}`);
       }
 
-      const json = (await response.json()) as {
-        choices?: Array<{ message?: { content?: unknown } }>;
-      };
+      let json: { choices?: Array<{ message?: { content?: unknown } }> };
+      try {
+        json = (await response.json()) as {
+          choices?: Array<{ message?: { content?: unknown } }>;
+        };
+      } catch {
+        throw new Error('NVIDIA API returned malformed JSON response');
+      }
+
       const rawContent = json.choices?.[0]?.message?.content;
       if (typeof rawContent !== 'string' || rawContent.trim().length === 0) {
         throw new Error('NVIDIA API returned an empty completion response');
       }
 
-      const truncated = rawContent.length > MAX_OUTPUT_CHARS;
-      const outputText = truncated ? rawContent.slice(0, MAX_OUTPUT_CHARS) : rawContent;
+      const truncated = rawContent.length > MAX_NVIDIA_OUTPUT_CHARS;
+      const outputText = truncated ? rawContent.slice(0, MAX_NVIDIA_OUTPUT_CHARS) : rawContent;
 
       return {
         modelId: egressPreview.modelId,

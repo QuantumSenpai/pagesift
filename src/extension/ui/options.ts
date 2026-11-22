@@ -137,6 +137,42 @@ function initOptionsPage(): void {
     })();
   });
 
+  document.getElementById('download-backup-btn')?.addEventListener('click', () => {
+    void (async () => {
+      const res = await sendOptionsMessage('EXPORT_DB_BACKUP');
+      if (!res.ok) {
+        if (outputEl) {
+          outputEl.textContent = JSON.stringify(res, null, 2);
+        }
+        return;
+      }
+      const bundle = (res.data as { backup: unknown }).backup;
+      const jsonText = JSON.stringify(bundle, null, 2);
+      if (backupArea) {
+        backupArea.value = jsonText;
+      }
+      const blob = new Blob([jsonText], { type: 'application/json;charset=utf-8' });
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = `pagesift-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => {
+        URL.revokeObjectURL(objectUrl);
+      }, 30000);
+      if (outputEl) {
+        outputEl.textContent = JSON.stringify(
+          { event: 'backup_download_started', filename: anchor.download, byteLength: blob.size },
+          null,
+          2,
+        );
+      }
+    })();
+  });
+
   document.getElementById('import-backup-btn')?.addEventListener('click', () => {
     void (async () => {
       try {
