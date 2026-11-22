@@ -1109,7 +1109,7 @@ export class ContentScriptRuntime {
         };
       }
       if (tool === 'tech_stack') {
-        const report = detectPageTechStack(this.doc);
+        const report = detectPageTechStack(this.doc, this.win);
         const summaryText = report.organizedSummary.oneLiner;
         await this.recordOverlayActivity({
           activityId,
@@ -1124,7 +1124,8 @@ export class ContentScriptRuntime {
           title: `Tech Stack (${report.detections.length} Detected)`,
           summary: summaryText,
           techStackSummary: report.organizedSummary,
-          copyableText: JSON.stringify(report.organizedSummary, null, 2),
+          techStackDetections: report.detections,
+          copyableText: JSON.stringify(report, null, 2),
         };
       }
       if (tool === 'edit_text') {
@@ -1581,7 +1582,7 @@ export class ContentScriptRuntime {
         }
 
         case 'RUN_TECH_STACK': {
-          const report = detectPageTechStack(this.doc);
+          const report = detectPageTechStack(this.doc, this.win);
           return createSuccessResponse(msg, { report }, this.documentId);
         }
 

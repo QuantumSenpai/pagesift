@@ -303,6 +303,41 @@ describe('Slice 8, 9, and 10 Engines: Responsive, Design Review, Tech Stack, and
       expect.arrayContaining(['Next.js', 'React', 'Astro', 'Tailwind CSS', 'Webflow']),
     );
     expect(techStack.methodologyDisclosure).toContain('absence of a marker does not prove absence');
+
+    const ctaStyleDom = new JSDOM(
+      `<!doctype html><html><head>
+        <meta name="generator" content="Framer 1683339" />
+        <meta property="og:title" content="CTA.gallery" />
+        <meta property="og:type" content="website" />
+        <link rel="modulepreload" fetchpriority="low" href="https://framerusercontent.com/sites/rolldown-runtime.Bi-D.mjs" />
+        <link rel="modulepreload" fetchpriority="low" href="https://framerusercontent.com/sites/react.CrZlk.mjs" />
+        <link rel="modulepreload" fetchpriority="low" href="https://framerusercontent.com/sites/motion.DYek0.mjs" />
+        <script async src="https://www.googletagmanager.com/gtag/js?id=G-123"></script>
+      </head><body><main class="framer-abc123"></main></body></html>`,
+      { url: 'https://www.cta.gallery/' },
+    );
+    const mockWin = {
+      performance: {
+        getEntriesByType: (kind: string) =>
+          kind === 'navigation'
+            ? [{ name: 'https://www.cta.gallery/', nextHopProtocol: 'h3' }]
+            : [],
+      },
+    } as unknown as Window;
+    const ctaStack = detectPageTechStack(ctaStyleDom.window.document, mockWin);
+    const ctaNames = ctaStack.detections.map((d) => d.technology);
+    expect(ctaNames).toEqual(
+      expect.arrayContaining([
+        'Framer',
+        'React',
+        'Framer Motion / Motion',
+        'Rolldown',
+        'Open Graph',
+        'Priority Hints',
+        'HTTP/3',
+        'Google Tag Manager / GA4',
+      ]),
+    );
   });
 
   it('enforces NVIDIA endpoint allowlist, strips sensitive fields, and handles completion, retries, and errors', async () => {

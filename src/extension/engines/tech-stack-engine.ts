@@ -4,7 +4,8 @@ export type TechCategory =
   | 'ui_kit'
   | 'build_tool'
   | 'cms_or_platform'
-  | 'analytics_or_monitoring';
+  | 'analytics_or_monitoring'
+  | 'web_standards';
 
 export interface TechStackDetectionEntry {
   technology: string;
@@ -39,14 +40,18 @@ export interface TechStackReport {
 
 interface DetectorContext {
   doc: Document;
+  win?: Window | undefined;
   scriptUrls: string[];
   stylesheetUrls: string[];
+  modulepreloadUrls: string[];
   allResourceUrls: string[];
+  performanceProtocols: string[];
   inlineScriptSample: string;
   cssCustomPropNames: string[];
   metaGenerator: string;
   htmlAttrNames: string[];
   classSample: string;
+  winGlobals: Set<string>;
 }
 
 interface DetectorRule {
@@ -54,6 +59,7 @@ interface DetectorRule {
   category: TechCategory;
   shortReason: string;
   uncertaintyNote: string;
+  implies?: string[];
   evaluate: (ctx: DetectorContext) => string[];
 }
 
@@ -64,6 +70,7 @@ const CATEGORY_ORDER: Array<{ category: TechCategory; label: string }> = [
   { category: 'cms_or_platform', label: 'Platform, CMS & Commerce' },
   { category: 'build_tool', label: 'Build & Bundlers' },
   { category: 'analytics_or_monitoring', label: 'Analytics, Payments & Infra' },
+  { category: 'web_standards', label: 'Web Standards, SEO & Protocols' },
 ];
 
 const DETECTOR_RULES: DetectorRule[] = [
@@ -72,13 +79,14 @@ const DETECTOR_RULES: DetectorRule[] = [
     category: 'framework',
     shortReason: 'App / Pages router runtime markers',
     uncertaintyNote: 'App Router pages without #__next are detected via /_next/ asset paths.',
-    evaluate: ({ doc, allResourceUrls, inlineScriptSample }) => {
+    implies: ['React'],
+    evaluate: ({ doc, allResourceUrls, inlineScriptSample, winGlobals }) => {
       const ev: string[] = [];
       if (doc.getElementById('__next')) {
         ev.push('DOM root #__next present');
       }
-      if (doc.querySelector('script#__NEXT_DATA__')) {
-        ev.push('script#__NEXT_DATA__ hydration state present');
+      if (doc.querySelector('script#__NEXT_DATA__') || winGlobals.has('__NEXT_DATA__')) {
+        ev.push('__NEXT_DATA__ hydration state present');
       }
       if (allResourceUrls.some((u) => u.includes('/_next/'))) {
         ev.push('Assets served from /_next/ prefix');
@@ -92,9 +100,9 @@ const DETECTOR_RULES: DetectorRule[] = [
   {
     technology: 'React',
     category: 'framework',
-    shortReason: 'React component / root markers',
-    uncertaintyNote: 'Production builds without data-reactroot may bundle React silently.',
-    evaluate: ({ doc, scriptUrls, inlineScriptSample }) => {
+    shortReason: 'React runtime / ESM chunk or root markers',
+    uncertaintyNote: 'Production bundles with mangled module names rely on framework implications.',
+    evaluate: ({ doc, allResourceUrls, inlineScriptSample, winGlobals }) => {
       const ev: string[] = [];
       if (doc.querySelector('[data-reactroot], [data-reactid]')) {
         ev.push('data-reactroot / data-reactid attribute present');
@@ -102,12 +110,18 @@ const DETECTOR_RULES: DetectorRule[] = [
       if (doc.getElementById('__next') || doc.getElementById('___gatsby')) {
         ev.push('React framework mount container detected');
       }
-      if (scriptUrls.some((u) => /react(?:\.production\.min|-dom)?\.js/i.test(u))) {
-        ev.push('Script references react / react-dom');
+      const reactRes = allResourceUrls.find((u) =>
+        /(?:^|\/)react(?:[-.](?:dom|production|development))?(?:\.[a-z0-9_-]+)?\.(?:m?js|cjs)(?:$|\?)/i.test(
+          u,
+        ),
+      );
+      if (reactRes) {
+        ev.push(`Module/script bundle references React (${reactRes.split('/').pop() ?? 'react'})`);
       }
       if (
         inlineScriptSample.includes('__reactContainer') ||
-        inlineScriptSample.includes('__NEXT_DATA__')
+        inlineScriptSample.includes('__NEXT_DATA__') ||
+        winGlobals.has('React')
       ) {
         ev.push('React runtime initialization signature');
       }
@@ -120,15 +134,17 @@ const DETECTOR_RULES: DetectorRule[] = [
     shortReason: 'Remix hydration / build path',
     uncertaintyNote:
       'Bundled Remix apps without window.__remixContext may resemble React SPA builds.',
-    evaluate: ({ inlineScriptSample, scriptUrls }) => {
+    implies: ['React'],
+    evaluate: ({ inlineScriptSample, allResourceUrls, winGlobals }) => {
       const ev: string[] = [];
       if (
         inlineScriptSample.includes('__remixContext') ||
-        inlineScriptSample.includes('__remixManifest')
+        inlineScriptSample.includes('__remixManifest') ||
+        winGlobals.has('__remixContext')
       ) {
         ev.push('Remix client hydration context detected');
       }
-      if (scriptUrls.some((u) => /\/build\/_shared\/|\/assets\/root-/i.test(u))) {
+      if (allResourceUrls.some((u) => /\/build\/_shared\/|\/assets\/root-/i.test(u))) {
         ev.push('Remix asset path signature');
       }
       return ev;
@@ -139,6 +155,7 @@ const DETECTOR_RULES: DetectorRule[] = [
     category: 'framework',
     shortReason: 'Gatsby mount container or generator',
     uncertaintyNote: 'Removed ___gatsby IDs hide static Gatsby output.',
+    implies: ['React'],
     evaluate: ({ doc, metaGenerator }) => {
       const ev: string[] = [];
       if (doc.getElementById('___gatsby')) {
@@ -492,12 +509,34 @@ const DETECTOR_RULES: DetectorRule[] = [
   {
     technology: 'Framer Motion / Motion',
     category: 'ui_kit',
-    shortReason: 'Motion projection / inline transform style signatures',
-    uncertaintyNote: 'Static motion elements without projection attributes look like standard DOM.',
-    evaluate: ({ doc }) => {
+    shortReason: 'Motion ESM modules or projection attributes',
+    uncertaintyNote: 'Static motion elements without module hints look like standard DOM.',
+    evaluate: ({ doc, allResourceUrls }) => {
       const ev: string[] = [];
-      if (doc.querySelector('[data-projection-id]')) {
-        ev.push('Framer Motion data-projection-id attributes present');
+      if (doc.querySelector('[data-projection-id], [data-framer-appear-animation]')) {
+        ev.push('Motion DOM attributes ([data-projection-id] / appear animation)');
+      }
+      const motionRes = allResourceUrls.find((u) =>
+        /(?:^|\/)(?:framer-)?motion(?:\.[a-z0-9_-]+)?\.(?:m?js|js)(?:$|\?)/i.test(u),
+      );
+      if (motionRes) {
+        ev.push(`Motion ESM bundle loaded (${motionRes.split('/').pop() ?? 'motion'})`);
+      }
+      return ev;
+    },
+  },
+  {
+    technology: 'Lucide Icons',
+    category: 'ui_kit',
+    shortReason: 'Lucide SVG icon class or package reference',
+    uncertaintyNote: 'Inlined Lucide paths without class="lucide" are generic SVGs.',
+    evaluate: ({ doc, allResourceUrls }) => {
+      const ev: string[] = [];
+      if (doc.querySelector('svg.lucide, [class*="lucide-"]')) {
+        ev.push('DOM contains svg.lucide icon elements');
+      }
+      if (allResourceUrls.some((u) => /lucide(?:-react|-vue)?/i.test(u))) {
+        ev.push('Lucide script/CDN asset referenced');
       }
       return ev;
     },
@@ -507,9 +546,11 @@ const DETECTOR_RULES: DetectorRule[] = [
     category: 'ui_kit',
     shortReason: 'GSAP script bundle reference',
     uncertaintyNote: 'Private bundled GSAP imports may not expose script URL names.',
-    evaluate: ({ scriptUrls }) => {
+    evaluate: ({ allResourceUrls }) => {
       const ev: string[] = [];
-      if (scriptUrls.some((u) => /\bgsap(?:\.min)?\.js|ScrollTrigger(?:\.min)?\.js/i.test(u))) {
+      if (
+        allResourceUrls.some((u) => /\bgsap(?:\.min)?\.m?js|ScrollTrigger(?:\.min)?\.m?js/i.test(u))
+      ) {
         ev.push('GSAP / ScrollTrigger script URL present');
       }
       return ev;
@@ -518,9 +559,10 @@ const DETECTOR_RULES: DetectorRule[] = [
   {
     technology: 'Framer',
     category: 'cms_or_platform',
-    shortReason: 'framer-* classes & framerusercontent CDN',
+    shortReason: 'Framer Sites meta generator, CDN & hydration markers',
     uncertaintyNote: 'Custom proxied Framer builds may mask framerusercontent URLs.',
-    evaluate: ({ allResourceUrls, metaGenerator, classSample }) => {
+    implies: ['React', 'Framer Motion / Motion'],
+    evaluate: ({ doc, allResourceUrls, metaGenerator, classSample }) => {
       const ev: string[] = [];
       if (metaGenerator.toLowerCase().includes('framer')) {
         ev.push(`meta generator declares "${metaGenerator}"`);
@@ -531,6 +573,9 @@ const DETECTOR_RULES: DetectorRule[] = [
         )
       ) {
         ev.push('Resources loaded from framerusercontent.com / framer.com');
+      }
+      if (doc.querySelector('[data-framer-hydrate-v2], [data-framer-name]')) {
+        ev.push('Framer hydration attributes ([data-framer-name] / hydrate-v2)');
       }
       if (/\bframer-[A-Za-z0-9]{4,}\b/.test(classSample)) {
         ev.push('Framer-generated .framer-* layout classes');
@@ -668,16 +713,30 @@ const DETECTOR_RULES: DetectorRule[] = [
     },
   },
   {
+    technology: 'Rolldown',
+    category: 'build_tool',
+    shortReason: 'Rolldown ESM runtime bundle',
+    uncertaintyNote: 'Only visible when rolldown runtime chunk filenames are retained.',
+    evaluate: ({ allResourceUrls }) => {
+      const ev: string[] = [];
+      const hit = allResourceUrls.find((u) => /rolldown[-_.]/i.test(u));
+      if (hit) {
+        ev.push(`Rolldown bundler runtime chunk (${hit.split('/').pop() ?? 'rolldown'})`);
+      }
+      return ev;
+    },
+  },
+  {
     technology: 'Vite',
     category: 'build_tool',
     shortReason: '/@vite/client or /assets/index-[hash] module pattern',
     uncertaintyNote: 'Custom Rollup output paths hide standard Vite filenames.',
-    evaluate: ({ scriptUrls, doc }) => {
+    evaluate: ({ allResourceUrls, doc }) => {
       const ev: string[] = [];
-      if (scriptUrls.some((u) => u.includes('/@vite/client') || u.includes('/assets/'))) {
+      if (allResourceUrls.some((u) => u.includes('/@vite/client') || u.includes('/assets/'))) {
         if (doc.querySelector('script[type="module"][src*="/assets/"]')) {
           ev.push('Vite module bundle pattern (/assets/*.js)');
-        } else if (scriptUrls.some((u) => u.includes('/@vite/client'))) {
+        } else if (allResourceUrls.some((u) => u.includes('/@vite/client'))) {
           ev.push('Vite dev client script');
         }
       }
@@ -689,7 +748,7 @@ const DETECTOR_RULES: DetectorRule[] = [
     category: 'build_tool',
     shortReason: 'webpackChunk runtime signature',
     uncertaintyNote: 'Renamed JSONP globals prevent detection.',
-    evaluate: ({ inlineScriptSample }) => {
+    evaluate: ({ inlineScriptSample, allResourceUrls }) => {
       const ev: string[] = [];
       if (
         inlineScriptSample.includes('webpackChunk') ||
@@ -697,7 +756,117 @@ const DETECTOR_RULES: DetectorRule[] = [
       ) {
         ev.push('Webpack chunk loader runtime reference');
       }
+      if (allResourceUrls.some((u) => /webpack[-.]runtime/i.test(u))) {
+        ev.push('Webpack runtime asset filename');
+      }
       return ev;
+    },
+  },
+  {
+    technology: 'Google Fonts',
+    category: 'css_library',
+    shortReason: 'fonts.googleapis.com / fonts.gstatic.com stylesheet or font',
+    uncertaintyNote: 'Self-hosted variable fonts from Google Fonts omit googleapis.com hosts.',
+    evaluate: ({ allResourceUrls }) => {
+      const ev: string[] = [];
+      if (
+        allResourceUrls.some(
+          (u) => u.includes('fonts.googleapis.com') || u.includes('fonts.gstatic.com'),
+        )
+      ) {
+        ev.push('Font assets loaded from Google Fonts CDN');
+      }
+      return ev;
+    },
+  },
+  {
+    technology: 'Open Graph',
+    category: 'web_standards',
+    shortReason: 'Open Graph social metadata tags (og:*)',
+    uncertaintyNote: 'Only pages declaring meta[property^="og:"] emit Open Graph metadata.',
+    evaluate: ({ doc }) => {
+      const tags = Array.from(doc.querySelectorAll('meta[property^="og:" i]'));
+      if (tags.length === 0) {
+        return [];
+      }
+      const props = tags
+        .slice(0, 4)
+        .map((t) => t.getAttribute('property') ?? '')
+        .filter(Boolean)
+        .join(', ');
+      return [`Open Graph meta tags present (${props})`];
+    },
+  },
+  {
+    technology: 'Twitter Cards',
+    category: 'web_standards',
+    shortReason: 'Twitter Card meta tags (twitter:*)',
+    uncertaintyNote: 'Relies on <meta name="twitter:*"> tags in document head.',
+    evaluate: ({ doc }) => {
+      const card = doc.querySelector('meta[name^="twitter:" i]');
+      if (!card) {
+        return [];
+      }
+      return [`Twitter card meta tag (${card.getAttribute('name') ?? 'twitter:card'})`];
+    },
+  },
+  {
+    technology: 'Schema.org / JSON-LD',
+    category: 'web_standards',
+    shortReason: 'Structured data script[type="application/ld+json"]',
+    uncertaintyNote: 'Microdata-only pages without JSON-LD blocks are not counted.',
+    evaluate: ({ doc }) => {
+      const count = doc.querySelectorAll('script[type="application/ld+json" i]').length;
+      return count > 0 ? [`${count} JSON-LD structured data block(s) in DOM`] : [];
+    },
+  },
+  {
+    technology: 'Priority Hints',
+    category: 'web_standards',
+    shortReason: 'Resource fetchpriority hint attributes',
+    uncertaintyNote: 'Only visible when elements set fetchpriority="high|low|auto".',
+    evaluate: ({ doc }) => {
+      const hints = doc.querySelectorAll('[fetchpriority]');
+      return hints.length > 0
+        ? [`${hints.length} element(s) declare fetchpriority loading hints`]
+        : [];
+    },
+  },
+  {
+    technology: 'PWA / Web App Manifest',
+    category: 'web_standards',
+    shortReason: 'link[rel="manifest"] web application manifest',
+    uncertaintyNote: 'Manifest presence does not confirm active Service Worker caching.',
+    evaluate: ({ doc }) => {
+      const manifest = doc.querySelector('link[rel="manifest" i][href]');
+      return manifest
+        ? [`Web App Manifest linked (${manifest.getAttribute('href') ?? 'manifest.json'})`]
+        : [];
+    },
+  },
+  {
+    technology: 'HTTP/3',
+    category: 'web_standards',
+    shortReason: 'Negotiated QUIC / h3 browser transport protocol',
+    uncertaintyNote: 'Requires browser PerformanceNavigationTiming / resource timing access.',
+    evaluate: ({ performanceProtocols }) => {
+      const h3Count = performanceProtocols.filter((p) => /^h3/i.test(p)).length;
+      return h3Count > 0
+        ? [`Browser negotiated HTTP/3 (nextHopProtocol="h3") on ${h3Count} resource(s)`]
+        : [];
+    },
+  },
+  {
+    technology: 'HTTP/2',
+    category: 'web_standards',
+    shortReason: 'Negotiated h2 multiplexed transport protocol',
+    uncertaintyNote: 'Superseded when HTTP/3 is negotiated on the primary session.',
+    evaluate: ({ performanceProtocols }) => {
+      const hasH3 = performanceProtocols.some((p) => /^h3/i.test(p));
+      const h2Count = performanceProtocols.filter((p) => p.toLowerCase() === 'h2').length;
+      return !hasH3 && h2Count > 0
+        ? [`Browser negotiated HTTP/2 (nextHopProtocol="h2") on ${h2Count} resource(s)`]
+        : [];
     },
   },
   {
@@ -888,17 +1057,100 @@ function collectCssCustomPropertyNames(doc: Document): string[] {
   return Array.from(names);
 }
 
-export function detectPageTechStack(doc: Document): TechStackReport {
+function collectPerformanceSnapshot(win?: Window): {
+  resourceUrls: string[];
+  protocols: string[];
+} {
+  const perfApi = (win as { performance?: Performance } | undefined)?.performance;
+  if (!perfApi || typeof perfApi.getEntriesByType !== 'function') {
+    return { resourceUrls: [], protocols: [] };
+  }
+  const urls: string[] = [];
+  const protocols = new Set<string>();
+  try {
+    const navEntries = perfApi.getEntriesByType('navigation') as Array<
+      PerformanceEntry & { nextHopProtocol?: string }
+    >;
+    for (const entry of navEntries.slice(0, 4)) {
+      if (typeof entry.nextHopProtocol === 'string' && entry.nextHopProtocol.length > 0) {
+        protocols.add(entry.nextHopProtocol);
+      }
+    }
+    const resEntries = perfApi.getEntriesByType('resource') as Array<
+      PerformanceEntry & { nextHopProtocol?: string }
+    >;
+    for (const entry of resEntries.slice(0, 220)) {
+      if (typeof entry.name === 'string' && entry.name.length > 0) {
+        urls.push(entry.name);
+      }
+      if (typeof entry.nextHopProtocol === 'string' && entry.nextHopProtocol.length > 0) {
+        protocols.add(entry.nextHopProtocol);
+      }
+    }
+  } catch {
+    return { resourceUrls: urls, protocols: Array.from(protocols) };
+  }
+  return { resourceUrls: urls, protocols: Array.from(protocols) };
+}
+
+function collectPublicWindowGlobals(win?: Window): Set<string> {
+  const found = new Set<string>();
+  if (!win) {
+    return found;
+  }
+  const keys = [
+    '__NEXT_DATA__',
+    '__NUXT__',
+    '__remixContext',
+    'React',
+    'Shopify',
+    'dataLayer',
+    'gtag',
+    'posthog',
+    'Stripe',
+    'Sentry',
+    'Alpine',
+    'htmx',
+  ];
+  const record = win as unknown as Record<string, unknown>;
+  for (const key of keys) {
+    try {
+      if (record[key] !== undefined && record[key] !== null) {
+        found.add(key);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return found;
+}
+
+export function detectPageTechStack(doc: Document, win?: Window): TechStackReport {
   const scriptUrls = Array.from(doc.querySelectorAll('script[src]'))
     .map((s) => s.getAttribute('src') ?? '')
     .filter((u) => u.length > 0);
   const stylesheetUrls = Array.from(doc.querySelectorAll('link[rel="stylesheet"][href]'))
     .map((l) => l.getAttribute('href') ?? '')
     .filter((u) => u.length > 0);
+  const modulepreloadUrls = Array.from(
+    doc.querySelectorAll('link[rel="modulepreload" i][href], script[type="module"][src]'),
+  )
+    .map((l) => l.getAttribute('href') ?? l.getAttribute('src') ?? '')
+    .filter((u) => u.length > 0);
   const linkHints = Array.from(doc.querySelectorAll('link[href]'))
     .map((l) => l.getAttribute('href') ?? '')
     .filter((u) => u.length > 0);
-  const allResourceUrls = Array.from(new Set([...scriptUrls, ...stylesheetUrls, ...linkHints]));
+
+  const perf = collectPerformanceSnapshot(win);
+  const allResourceUrls = Array.from(
+    new Set([
+      ...scriptUrls,
+      ...stylesheetUrls,
+      ...modulepreloadUrls,
+      ...linkHints,
+      ...perf.resourceUrls,
+    ]),
+  );
 
   const inlineScriptSample = Array.from(doc.querySelectorAll('script:not([src])'))
     .slice(0, 25)
@@ -909,6 +1161,7 @@ export function detectPageTechStack(doc: Document): TechStackReport {
   const metaGenerator =
     doc.querySelector('meta[name="generator" i]')?.getAttribute('content')?.trim() ?? '';
   const htmlAttrNames = Array.from(doc.documentElement.attributes).map((a) => a.name);
+  const winGlobals = collectPublicWindowGlobals(win);
 
   const classListSample: string[] = [];
   for (const el of Array.from(doc.querySelectorAll('[class]')).slice(0, 450)) {
@@ -919,21 +1172,27 @@ export function detectPageTechStack(doc: Document): TechStackReport {
   }
   const classSample = classListSample.join(' ');
 
-  const detections: TechStackDetectionEntry[] = [];
+  const detectedMap = new Map<string, TechStackDetectionEntry>();
+  const ruleByTech = new Map(DETECTOR_RULES.map((r) => [r.technology, r]));
+
   for (const rule of DETECTOR_RULES) {
     const evidence = rule.evaluate({
       doc,
+      win,
       scriptUrls,
       stylesheetUrls,
+      modulepreloadUrls,
       allResourceUrls,
+      performanceProtocols: perf.protocols,
       inlineScriptSample,
       cssCustomPropNames,
       metaGenerator,
       htmlAttrNames,
       classSample,
+      winGlobals,
     });
     if (evidence.length > 0) {
-      detections.push({
+      detectedMap.set(rule.technology, {
         technology: rule.technology,
         category: rule.category,
         shortReason: rule.shortReason,
@@ -943,6 +1202,45 @@ export function detectPageTechStack(doc: Document): TechStackReport {
       });
     }
   }
+
+  let addedImplication = true;
+  for (let hop = 0; hop < 3 && addedImplication; hop += 1) {
+    addedImplication = false;
+    for (const [techName, entry] of Array.from(detectedMap.entries())) {
+      const sourceRule = ruleByTech.get(techName);
+      if (!sourceRule?.implies) {
+        continue;
+      }
+      for (const impliedTech of sourceRule.implies) {
+        const impliedNote = `Implied by ${entry.technology} platform runtime`;
+        const existing = detectedMap.get(impliedTech);
+        if (existing) {
+          if (!existing.evidence.includes(impliedNote)) {
+            existing.evidence.push(impliedNote);
+            if (existing.evidence.length >= 2) {
+              existing.confidence = 'high';
+            }
+          }
+          continue;
+        }
+        const targetRule = ruleByTech.get(impliedTech);
+        if (!targetRule) {
+          continue;
+        }
+        detectedMap.set(impliedTech, {
+          technology: targetRule.technology,
+          category: targetRule.category,
+          shortReason: targetRule.shortReason,
+          evidence: [impliedNote],
+          confidence: 'medium',
+          uncertaintyNote: targetRule.uncertaintyNote,
+        });
+        addedImplication = true;
+      }
+    }
+  }
+
+  const detections = Array.from(detectedMap.values());
 
   const groups: TechStackOrganizedGroup[] = [];
   for (const catMeta of CATEGORY_ORDER) {
@@ -974,6 +1272,6 @@ export function detectPageTechStack(doc: Document): TechStackReport {
       groups,
     },
     methodologyDisclosure:
-      'Tech stack detection inspects public client-side DOM markers, script/stylesheet/link URLs, CSS custom properties, and meta tags only. Server-side runtimes, private headers, and stripped build markers cannot be observed; absence of a marker does not prove absence of a technology.',
+      'Tech stack detection inspects public DOM nodes, script/stylesheet/modulepreload URLs, browser performance timing entries (HTTP/2 & HTTP/3 nextHopProtocol), meta tags, CSS variables, and documented platform implications. Server-only runtimes and private origin headers cannot be observed; absence of a marker does not prove absence of a technology.',
   };
 }

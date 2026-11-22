@@ -986,19 +986,45 @@ function renderTechStackView(data: Record<string, unknown>): HTMLElement {
   }
 
   const groups = summary.groups;
-  if (groups.length > 0) {
-    const orgGrid = el('div', 'kv-grid');
+  const detByTech = new Map(report.detections.map((d) => [d.technology, d]));
+  const searchInput = document.createElement('input');
+  searchInput.type = 'search';
+  searchInput.id = 'tech-stack-search-input';
+  searchInput.placeholder = 'Search technologies, categories, or evidence traces...';
+  searchInput.setAttribute('aria-label', 'Search detected tech stack and evidence');
+  searchInput.style.width = '100%';
+  wrap.appendChild(searchInput);
+
+  const orgGrid = el('div', 'kv-grid');
+  wrap.appendChild(orgGrid);
+
+  const drawOrganized = (rawQuery: string): void => {
+    orgGrid.textContent = '';
+    const q = rawQuery.trim().toLowerCase();
     for (const grp of groups) {
+      const matched = grp.items.filter((item) => {
+        if (!q) return true;
+        const det = detByTech.get(item.technology);
+        const evJoin = det ? det.evidence.join(' ').toLowerCase() : '';
+        return (
+          item.technology.toLowerCase().includes(q) ||
+          grp.label.toLowerCase().includes(q) ||
+          item.shortReason.toLowerCase().includes(q) ||
+          evJoin.includes(q)
+        );
+      });
+      if (matched.length === 0) continue;
+
       const box = el('div', 'kv-section');
       const hdr = el('div', 'block-heading');
       const catHead = el('div', 'tech-cat-heading');
       catHead.appendChild(createTechCategoryIcon(grp.category));
       catHead.appendChild(el('h3', 'block-title', grp.label));
       hdr.appendChild(catHead);
-      hdr.appendChild(el('span', 'tag', String(grp.items.length)));
+      hdr.appendChild(el('span', 'tag', String(matched.length)));
       box.appendChild(hdr);
 
-      for (const item of grp.items) {
+      for (const item of matched) {
         const row = el('div', 'tech-short-row');
         const rowLeft = el('div', 'tech-row-left');
         rowLeft.appendChild(createTechIconElement(item.technology));
@@ -1008,7 +1034,9 @@ function renderTechStackView(data: Record<string, unknown>): HTMLElement {
         left.style.gap = '2px';
         left.style.minWidth = '0';
         left.appendChild(el('strong', undefined, item.technology));
-        left.appendChild(el('span', 'muted mono break-all', item.shortReason));
+        const det = detByTech.get(item.technology);
+        const matchedEv = q && det ? det.evidence.find((e) => e.toLowerCase().includes(q)) : null;
+        left.appendChild(el('span', 'muted mono break-all', matchedEv ?? item.shortReason));
         rowLeft.appendChild(left);
         row.appendChild(rowLeft);
         row.appendChild(
@@ -1018,8 +1046,16 @@ function renderTechStackView(data: Record<string, unknown>): HTMLElement {
       }
       orgGrid.appendChild(box);
     }
-    wrap.appendChild(orgGrid);
-  }
+    if (orgGrid.childNodes.length === 0) {
+      orgGrid.appendChild(
+        el('div', 'empty-state', 'No detected technology or evidence matched your query.'),
+      );
+    }
+  };
+  searchInput.addEventListener('input', () => {
+    drawOrganized(searchInput.value);
+  });
+  drawOrganized('');
 
   const details = el('details', 'raw-disclosure');
   details.appendChild(

@@ -287,6 +287,27 @@ const TECH_GLYPH_PATHS: Record<string, { paths: string[]; color: string }> = {
     ],
     color: '#3B82F6',
   },
+  framer: { paths: ['M6 4h12v6h-6l6 6H6v-6h6L6 4z', 'M6 16h6v5l-6-5z'], color: '#0EA5E9' },
+  rolldown: { paths: ['M4 7h12', 'M4 12h16l-4 5', 'M4 17h8'], color: '#F97316' },
+  opengraph: {
+    paths: ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z', 'M2 12h20', 'M12 2a15 15 0 0 1 0 20'],
+    color: '#38BDF8',
+  },
+  priorityhints: { paths: ['M13 2L4 14h7l-1 8 9-12h-7l1-8z'], color: '#F59E0B' },
+  http3: {
+    paths: ['M4 8l8-4 8 4v8l-8 4-8-4V8z', 'M9 12h6', 'M12 9v6'],
+    color: '#10B981',
+  },
+  schema: { paths: ['M7 8l-4 4 4 4', 'M17 8l4 4-4 4', 'M14 5l-4 14'], color: '#A855F7' },
+  pwa: {
+    paths: ['M3 16l4-10 4 10', 'M5 13h4', 'M13 6l2.5 10L18 6l2.5 10L22 6'],
+    color: '#6366F1',
+  },
+  lucide: {
+    paths: ['M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3z'],
+    color: '#F43F5E',
+  },
+  gsap: { paths: ['M12 4a8 8 0 1 0 8 8h-8'], color: '#22C55E' },
 };
 
 const CATEGORY_ICON_MAP: Record<string, string> = {
@@ -296,6 +317,7 @@ const CATEGORY_ICON_MAP: Record<string, string> = {
   cms_or_platform: 'folder',
   build_tool: 'settings',
   analytics_or_monitoring: 'sparkles',
+  web_standards: 'tools',
 };
 
 function resolveTechGlyphKey(technology: string): string | null {
@@ -308,6 +330,7 @@ function resolveTechGlyphKey(technology: string): string | null {
   if (norm.includes('svelte')) return 'svelte';
   if (norm.includes('astro')) return 'astro';
   if (norm.includes('tailwind')) return 'tailwind';
+  if (norm.includes('rolldown')) return 'rolldown';
   if (norm.includes('vite')) return 'vite';
   if (norm.includes('webpack')) return 'webpack';
   if (norm.includes('bootstrap')) return 'bootstrap';
@@ -317,6 +340,15 @@ function resolveTechGlyphKey(technology: string): string | null {
   if (norm.includes('stripe')) return 'stripe';
   if (norm.includes('shopify')) return 'shopify';
   if (norm.includes('wordpress')) return 'wordpress';
+  if (norm.includes('framer')) return 'framer';
+  if (norm.includes('opengraph')) return 'opengraph';
+  if (norm.includes('priorityhints')) return 'priorityhints';
+  if (norm.includes('http3') || norm.includes('http2')) return 'http3';
+  if (norm.includes('schema') || norm.includes('jsonld') || norm.includes('twitter'))
+    return 'schema';
+  if (norm.includes('pwa') || norm.includes('manifest')) return 'pwa';
+  if (norm.includes('lucide')) return 'lucide';
+  if (norm.includes('gsap')) return 'gsap';
   if (norm.includes('google')) return 'google';
   if (norm.includes('sentry') || norm.includes('posthog') || norm.includes('plausible'))
     return 'sentry';

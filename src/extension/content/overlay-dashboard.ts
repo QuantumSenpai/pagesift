@@ -1,4 +1,7 @@
-import type { TechStackOrganizedSummary } from '../engines/tech-stack-engine.js';
+import type {
+  TechStackDetectionEntry,
+  TechStackOrganizedSummary,
+} from '../engines/tech-stack-engine.js';
 import type { ToolId } from '../protocol/messages.js';
 import type { ActivityQueryItem } from '../storage/activity-history.js';
 import type { ExtensionSettings } from '../storage/settings-storage.js';
@@ -19,6 +22,7 @@ export interface OverlayToolSummary {
   title: string;
   summary: string;
   techStackSummary?: TechStackOrganizedSummary;
+  techStackDetections?: TechStackDetectionEntry[];
   imageDataUrl?: string;
   copyableText?: string;
   downloadFilename?: string;
@@ -1849,50 +1853,99 @@ export class OnPageOverlayDashboard {
       }
 
       if (s.techStackSummary && s.techStackSummary.groups.length > 0) {
+        const searchBox = this.doc.createElement('input');
+        searchBox.type = 'search';
+        searchBox.className = 'ps-search';
+        searchBox.style.marginTop = '8px';
+        searchBox.placeholder = 'Search detected stack or evidence (e.g. React, HTTP/3, og:)...';
+        searchBox.setAttribute('aria-label', 'Filter detected technologies and evidence');
+        searchBox.setAttribute('data-ps-tech-search', 'true');
+        searchBox.addEventListener('keydown', (ev) => {
+          ev.stopPropagation();
+        });
+
         const stackGrid = this.doc.createElement('div');
         stackGrid.className = 'ps-stack-grid';
-        for (const grp of s.techStackSummary.groups) {
-          const card = this.doc.createElement('div');
-          card.className = 'ps-stack-card';
+        const detectionsByTech = new Map(
+          (s.techStackDetections ?? []).map((d) => [d.technology, d]),
+        );
 
-          const cardHead = this.doc.createElement('div');
-          cardHead.className = 'ps-stack-card-head';
-          const catTitle = this.doc.createElement('span');
-          catTitle.className = 'tech-cat-heading';
-          catTitle.appendChild(createTechCategoryIcon(grp.category, this.doc));
-          catTitle.appendChild(this.doc.createTextNode(grp.label));
-          const countTag = this.createEl('span', 'ps-tag', String(grp.items.length));
-          cardHead.append(catTitle, countTag);
-          card.appendChild(cardHead);
+        const renderFilteredStack = (queryRaw: string): void => {
+          stackGrid.textContent = '';
+          const query = queryRaw.trim().toLowerCase();
+          for (const grp of s.techStackSummary?.groups ?? []) {
+            const matchedItems = grp.items.filter((item) => {
+              if (!query) return true;
+              const det = detectionsByTech.get(item.technology);
+              const evidenceText = det ? det.evidence.join(' ').toLowerCase() : '';
+              return (
+                item.technology.toLowerCase().includes(query) ||
+                grp.label.toLowerCase().includes(query) ||
+                item.shortReason.toLowerCase().includes(query) ||
+                evidenceText.includes(query)
+              );
+            });
+            if (matchedItems.length === 0) {
+              continue;
+            }
+            const card = this.doc.createElement('div');
+            card.className = 'ps-stack-card';
 
-          for (const item of grp.items) {
-            const line = this.doc.createElement('div');
-            line.className = 'ps-stack-item';
-            const left = this.doc.createElement('div');
-            left.className = 'tech-row-left';
-            left.appendChild(createTechIconElement(item.technology, this.doc));
-            const meta = this.doc.createElement('div');
-            meta.style.display = 'flex';
-            meta.style.flexDirection = 'column';
-            meta.style.minWidth = '0';
-            const nameEl = this.doc.createElement('strong');
-            nameEl.textContent = item.technology;
-            const reasonEl = this.doc.createElement('span');
-            reasonEl.textContent = item.shortReason;
-            reasonEl.style.fontSize = '11px';
-            reasonEl.style.color = 'var(--muted)';
-            meta.append(nameEl, reasonEl);
-            left.appendChild(meta);
+            const cardHead = this.doc.createElement('div');
+            cardHead.className = 'ps-stack-card-head';
+            const catTitle = this.doc.createElement('span');
+            catTitle.className = 'tech-cat-heading';
+            catTitle.appendChild(createTechCategoryIcon(grp.category, this.doc));
+            catTitle.appendChild(this.doc.createTextNode(grp.label));
+            const countTag = this.createEl('span', 'ps-tag', String(matchedItems.length));
+            cardHead.append(catTitle, countTag);
+            card.appendChild(cardHead);
 
-            const right = this.doc.createElement('span');
-            right.className = item.confidence === 'high' ? 'ps-tag positive' : 'ps-tag accent';
-            right.textContent = item.confidence;
-            line.append(left, right);
-            card.appendChild(line);
+            for (const item of matchedItems) {
+              const line = this.doc.createElement('div');
+              line.className = 'ps-stack-item';
+              const left = this.doc.createElement('div');
+              left.className = 'tech-row-left';
+              left.appendChild(createTechIconElement(item.technology, this.doc));
+              const meta = this.doc.createElement('div');
+              meta.style.display = 'flex';
+              meta.style.flexDirection = 'column';
+              meta.style.minWidth = '0';
+              const nameEl = this.doc.createElement('strong');
+              nameEl.textContent = item.technology;
+              const det = detectionsByTech.get(item.technology);
+              const detailLine =
+                query && det
+                  ? (det.evidence.find((ev) => ev.toLowerCase().includes(query)) ??
+                    item.shortReason)
+                  : item.shortReason;
+              const reasonEl = this.doc.createElement('span');
+              reasonEl.textContent = detailLine;
+              reasonEl.style.fontSize = '11px';
+              reasonEl.style.color = 'var(--muted)';
+              meta.append(nameEl, reasonEl);
+              left.appendChild(meta);
+
+              const right = this.doc.createElement('span');
+              right.className = item.confidence === 'high' ? 'ps-tag positive' : 'ps-tag accent';
+              right.textContent = item.confidence;
+              line.append(left, right);
+              card.appendChild(line);
+            }
+            stackGrid.appendChild(card);
           }
-          stackGrid.appendChild(card);
-        }
-        this.drawerContent.appendChild(stackGrid);
+          if (stackGrid.childNodes.length === 0) {
+            stackGrid.appendChild(
+              this.createEl('span', 'muted', 'No detected technology or evidence matched query.'),
+            );
+          }
+        };
+
+        searchBox.addEventListener('input', () => {
+          renderFilteredStack(searchBox.value);
+        });
+        renderFilteredStack('');
+        this.drawerContent.append(searchBox, stackGrid);
       }
       return;
     }

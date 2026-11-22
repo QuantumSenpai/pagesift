@@ -67,6 +67,13 @@ describe('Overlay edit controls', () => {
     });
     expect(shadow.querySelectorAll('.tech-badge-icon svg').length).toBe(2);
     expect(shadow.querySelectorAll('.tech-cat-icon').length).toBe(1);
+    const techSearch = shadow.querySelector<HTMLInputElement>('input[data-ps-tech-search]');
+    expect(techSearch).not.toBeNull();
+    if (techSearch) {
+      techSearch.value = 'React';
+      techSearch.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      expect(shadow.querySelectorAll('.ps-stack-item').length).toBe(1);
+    }
 
     overlay.showEditor('edit_text', 'h1', 'Original heading');
     expect(calls).toEqual([]);
