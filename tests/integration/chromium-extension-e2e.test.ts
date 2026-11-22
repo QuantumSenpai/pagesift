@@ -783,7 +783,9 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
     expect(backupDownload.suggestedFilename()).toMatch(/^pagesift-backup-.*\.json$/);
     const backupText = strFromU8(await readDownloadedBytes(backupDownload));
     expect(backupText).not.toContain('nvapi-session-only-secret-000000');
-    expect(backupText).toContain('DESIGN.md Generator');
+    expect(backupText).toContain('Design MD');
+    expect(backupText).toContain('"schemaVersion": 2');
+    expect(backupText).toContain('"activities"');
 
     const freshWorkspacePage = await context.newPage();
     await freshWorkspacePage.goto(`chrome-extension://${extensionId}/workspace.html`, {
@@ -871,8 +873,13 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
     });
     expect(afterRestartCheck.usageRes.ok).toBe(true);
     if (afterRestartCheck.usageRes.ok) {
-      const usage = (afterRestartCheck.usageRes.data as { usage: { artifactCount: number } }).usage;
+      const usage = (
+        afterRestartCheck.usageRes.data as {
+          usage: { artifactCount: number; activityCount: number };
+        }
+      ).usage;
       expect(usage.artifactCount).toBeGreaterThanOrEqual(1);
+      expect(usage.activityCount).toBeGreaterThanOrEqual(1);
     }
     expect(afterRestartCheck.keyRes.ok).toBe(true);
     if (afterRestartCheck.keyRes.ok) {
@@ -935,13 +942,13 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
         });
 
         await new Promise<void>((resolve, reject) => {
-          const openReq = indexedDB.open('pagesift_local_db', 2);
+          const openReq = indexedDB.open('pagesift_local_db', 3);
           openReq.onerror = () => {
             reject(new Error('Failed to open pagesift_local_db'));
           };
           openReq.onsuccess = () => {
             const db = openReq.result;
-            const tx = db.transaction('jobs', 'readwrite');
+            const tx = db.transaction(['jobs', 'activities'], 'readwrite');
             const nowIso = new Date().toISOString();
             tx.objectStore('jobs').put({
               id: 'job-running-before-sw-stop',
@@ -954,13 +961,32 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
               createdAt: nowIso,
               updatedAt: nowIso,
             });
+            tx.objectStore('activities').put({
+              id: 'act-running-before-sw-stop',
+              sessionId: `rsess-${nowIso.slice(0, 10)}-127.0.0.1`,
+              tool: 'clone_page',
+              actionLabel: 'Clone Page',
+              sourceUrl: 'http://127.0.0.1/fixture',
+              sourceOrigin: 'http://127.0.0.1',
+              sourceDomain: '127.0.0.1',
+              pageTitle: 'Fixture',
+              startedAt: nowIso,
+              completedAt: null,
+              durationMs: null,
+              status: 'running',
+              optionsSummary: {},
+              resultSummary: 'In flight before worker stop',
+              linkedArtifactId: null,
+              linkedCaptureId: null,
+              errorCategory: null,
+            });
             tx.oncomplete = () => {
               db.close();
               resolve();
             };
             tx.onerror = () => {
               db.close();
-              reject(new Error('Failed to seed running job'));
+              reject(new Error('Failed to seed running job and activity'));
             };
           };
         });
@@ -1032,6 +1058,12 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
         operation: 'GET_JOB_STATUS',
         payload: { jobId: 'job-running-before-sw-stop' },
       });
+      const actRes = await chromeRuntime.sendMessage({
+        schemaVersion: 1,
+        requestId: 'wake-check-activity-status',
+        operation: 'QUERY_ACTIVITY_HISTORY',
+        payload: { status: 'interrupted', limit: 20, offset: 0 },
+      });
       const respRes = await chromeRuntime.sendMessage({
         schemaVersion: 1,
         requestId: 'wake-check-responsive',
@@ -1050,13 +1082,21 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
         operation: 'CLOSE_RESPONSIVE_SESSION',
         payload: {},
       });
-      return { jobRes, respRes, usageRes, closeRes };
+      return { jobRes, actRes, respRes, usageRes, closeRes };
     });
 
     expect(wakeResult.jobRes.ok).toBe(true);
     if (wakeResult.jobRes.ok) {
       const job = (wakeResult.jobRes.data as { job: { status: string } | null }).job;
       expect(job?.status).toBe('interrupted');
+    }
+    expect(wakeResult.actRes.ok).toBe(true);
+    if (wakeResult.actRes.ok) {
+      const items = (wakeResult.actRes.data as { items: Array<{ id: string; status: string }> })
+        .items;
+      expect(
+        items.some((a) => a.id === 'act-running-before-sw-stop' && a.status === 'interrupted'),
+      ).toBe(true);
     }
     expect(wakeResult.respRes.ok).toBe(true);
     if (wakeResult.respRes.ok) {
@@ -1078,13 +1118,18 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
     await adminPage.close();
   }, 60000);
 
-  it('verifies redesigned popup-to-workspace handoff, structured views, theme persistence, dialog accessibility, on-page dock, and responsive layouts', async () => {
+  it('verifies on-page overlay dashboard, picker auto-minimize/restore, activity history timeline, sidebar collapse, theme persistence, dialog accessibility, responsive layouts, and genuine 200% browser zoom', async () => {
     if (!context) {
       throw new Error('BrowserContext not initialized');
     }
 
     const fixturePage = await context.newPage();
-    await fixturePage.goto(fixtureUrl, { waitUntil: 'networkidle' });
+    fixturePage.on('pageerror', (err) => {
+      runtimeErrors.push(`overlay-fixture-page: ${err.message}`);
+    });
+    await fixturePage.goto(`${fixtureUrl}?secret_token=NEVER_STORE_IN_HISTORY#private-hash`, {
+      waitUntil: 'networkidle',
+    });
 
     const probePage = await context.newPage();
     await probePage.goto(`chrome-extension://${extensionId}/workspace.html`, {
@@ -1121,44 +1166,136 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       }
       return null;
     });
-    await probePage.close();
     expect(typeof tabId).toBe('number');
     const targetTabId = tabId as number;
 
-    const popupPage = await context.newPage();
-    await popupPage.setViewportSize({ width: 380, height: 560 });
-    await popupPage.goto(
-      `chrome-extension://${extensionId}/popup.html?tabId=${targetTabId}&targetUrl=${encodeURIComponent(fixtureUrl)}`,
-      { waitUntil: 'domcontentloaded' },
-    );
-    await popupPage.waitForFunction(
-      () =>
-        (document.getElementById('popup-page-status-text')?.textContent ?? '').includes(
-          'Ready to inspect',
-        ),
+    await probePage.evaluate(async (tid: number) => {
+      const chromeTabs = (
+        globalThis as unknown as {
+          chrome: {
+            tabs: { sendMessage: (id: number, msg: unknown) => Promise<unknown> };
+          };
+        }
+      ).chrome.tabs;
+      await chromeTabs.sendMessage(tid, {
+        schemaVersion: 1,
+        requestId: 'open-overlay-dashboard-1',
+        operation: 'TOGGLE_OVERLAY_DASHBOARD',
+        tabId: tid,
+        payload: { mode: 'open' },
+      });
+    }, targetTabId);
+
+    await fixturePage.waitForFunction(
+      () => {
+        const host = document.getElementById('pagesift-root-host');
+        return Boolean(
+          host &&
+          host.getAttribute('data-pagesift-root') === 'true' &&
+          host.shadowRoot?.querySelector('.ps-panel'),
+        );
+      },
       undefined,
       { polling: 100, timeout: 10000 },
     );
-    const popupCheck = await popupPage.evaluate(() => {
-      const iconImg = document.querySelector<HTMLImageElement>('img.brand-icon');
+
+    const overlayState1 = await fixturePage.evaluate(() => {
+      const host = document.getElementById('pagesift-root-host');
+      const sr = host?.shadowRoot;
+      const iconImg = sr?.querySelector<HTMLImageElement>('.ps-brand img');
+      const toolsCount = sr?.querySelectorAll('button[data-overlay-tool]').length ?? 0;
+      const panelVisible = Boolean(
+        sr?.querySelector('.ps-panel') &&
+        getComputedStyle(sr.querySelector('.ps-panel') as HTMLElement).display !== 'none',
+      );
       return {
-        overflowX: document.documentElement.scrollWidth > window.innerWidth + 1,
+        toolsCount,
+        panelVisible,
         iconLoaded: Boolean(iconImg && iconImg.complete && iconImg.naturalWidth > 0),
       };
     });
-    expect(popupCheck.overflowX).toBe(false);
-    expect(popupCheck.iconLoaded).toBe(true);
+    expect(overlayState1.toolsCount).toBe(15);
+    expect(overlayState1.panelVisible).toBe(true);
+    expect(overlayState1.iconLoaded).toBe(true);
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const minBtn = sr?.querySelector<HTMLButtonElement>('button[data-ps-action="minimize"]');
+      minBtn?.click();
+    });
+    const minimizedCheck = await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const pill = sr?.querySelector<HTMLElement>('.ps-minbar');
+      return Boolean(pill && getComputedStyle(pill).display !== 'none');
+    });
+    expect(minimizedCheck).toBe(true);
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const expandBtn = sr?.querySelector<HTMLButtonElement>('button[data-ps-action="expand"]');
+      expandBtn?.click();
+    });
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const colorsBtn = sr?.querySelector<HTMLButtonElement>('button[data-overlay-tool="colors"]');
+      colorsBtn?.click();
+    });
+    await fixturePage.waitForFunction(
+      () => {
+        const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        return (sr?.querySelector('.ps-result')?.textContent ?? '').includes('Color Palette');
+      },
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const inspectBtn = sr?.querySelector<HTMLButtonElement>(
+        'button[data-overlay-tool="inspect"]',
+      );
+      inspectBtn?.click();
+    });
+    const minimizedForPick = await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const pill = sr?.querySelector<HTMLElement>('.ps-minbar');
+      return Boolean(pill && getComputedStyle(pill).display !== 'none');
+    });
+    expect(minimizedForPick).toBe(true);
+
+    await fixturePage.locator('#hero-title').click();
+    await fixturePage.waitForFunction(
+      () => {
+        const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        const panel = sr?.querySelector<HTMLElement>('.ps-panel');
+        const resText = sr?.querySelector('.ps-result')?.textContent ?? '';
+        return (
+          Boolean(panel && getComputedStyle(panel).display !== 'none') &&
+          resText.includes('hero-title')
+        );
+      },
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
 
     const [handedOffWorkspace] = await Promise.all([
       context.waitForEvent('page'),
-      popupPage.click('button[data-quick-tool="colors"]'),
+      fixturePage.evaluate(() => {
+        const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        const openBtn = sr?.querySelector<HTMLButtonElement>(
+          'button[data-ps-action="open-dashboard"]',
+        );
+        openBtn?.click();
+      }),
     ]);
-    await popupPage.close();
+    await probePage.close();
     await handedOffWorkspace.waitForLoadState('domcontentloaded');
-    await waitForWorkspaceStatus(handedOffWorkspace, 'Completed ', 15000);
 
-    const swatchesCount = await handedOffWorkspace.locator('.swatch-card').count();
-    expect(swatchesCount).toBeGreaterThan(0);
+    await handedOffWorkspace.click('button[data-tool="colors"]');
+    await handedOffWorkspace.click('#run-tool-btn');
+    await waitForWorkspaceStatus(handedOffWorkspace, 'Completed ', 15000);
+    expect(await handedOffWorkspace.locator('.swatch-card').count()).toBeGreaterThan(0);
 
     await handedOffWorkspace.selectOption('#colors-export-format', 'tailwindV4');
     const twPreview =
@@ -1173,22 +1310,73 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
     await waitForWorkspaceStatus(handedOffWorkspace, 'Completed ', 10000);
     expect(await handedOffWorkspace.locator('.box-model').count()).toBe(1);
 
-    await handedOffWorkspace.click('#toggle-picker-btn');
-    await waitForWorkspaceStatus(handedOffWorkspace, 'On-page picker', 10000);
-    const dockPresent = await fixturePage.evaluate(() => {
-      const host = document.getElementById('pagesift-root-host');
-      return Boolean(
-        host &&
-        host.getAttribute('data-pagesift-root') === 'true' &&
-        host.shadowRoot?.querySelector('[role="toolbar"]'),
-      );
-    });
-    expect(dockPresent).toBe(true);
+    await handedOffWorkspace.click('#nav-history-btn');
+    await handedOffWorkspace.waitForFunction(
+      () => document.querySelectorAll('.timeline-row').length >= 2,
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
+
+    const historyText =
+      (await handedOffWorkspace.locator('#history-timeline-list').textContent()) ?? '';
+    expect(historyText).toContain('Action duration:');
+    expect(historyText).not.toContain('NEVER_STORE_IN_HISTORY');
+    expect(historyText).not.toContain('private-hash');
+
+    await handedOffWorkspace.selectOption('#history-group-mode', 'session');
+    expect(
+      await handedOffWorkspace.locator('.timeline-group-header button').count(),
+    ).toBeGreaterThan(0);
+    await handedOffWorkspace.selectOption('#history-group-mode', 'day');
+
+    const countBeforePause = await handedOffWorkspace.locator('.timeline-row').count();
+    await handedOffWorkspace.uncheck('#history-recording-toggle');
+    await handedOffWorkspace.click('button[data-tool="fonts"]');
+    await handedOffWorkspace.click('#run-tool-btn');
+    await waitForWorkspaceStatus(handedOffWorkspace, 'Completed ', 10000);
+    await handedOffWorkspace.click('#nav-history-btn');
+    await handedOffWorkspace.waitForTimeout(250);
+    const countAfterPause = await handedOffWorkspace.locator('.timeline-row').count();
+    expect(countAfterPause).toBe(countBeforePause);
+    await handedOffWorkspace.check('#history-recording-toggle');
+
+    await handedOffWorkspace.click('#history-clear-btn');
+    expect(
+      await handedOffWorkspace.evaluate(
+        () => document.getElementById('clear-history-modal')?.classList.contains('open') === true,
+      ),
+    ).toBe(true);
+    await handedOffWorkspace.keyboard.press('Escape');
+    const clearModalClosed = await handedOffWorkspace.evaluate(() => ({
+      closed: document.getElementById('clear-history-modal')?.classList.contains('open') === false,
+      focusedId: document.activeElement?.id ?? '',
+    }));
+    expect(clearModalClosed.closed).toBe(true);
+    expect(clearModalClosed.focusedId).toBe('history-clear-btn');
+
+    await handedOffWorkspace.click('#nav-tools-btn');
+    await handedOffWorkspace.click('#toggle-sidebar-btn');
+    expect(
+      await handedOffWorkspace.evaluate(
+        () =>
+          document.getElementById('workspace-body')?.classList.contains('rail-collapsed') === true,
+      ),
+    ).toBe(true);
+    await handedOffWorkspace.reload({ waitUntil: 'domcontentloaded' });
+    await handedOffWorkspace.waitForFunction(
+      () =>
+        document.getElementById('workspace-body')?.classList.contains('rail-collapsed') === true,
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
+    await handedOffWorkspace.click('#toggle-sidebar-btn');
+
+    await fixturePage.bringToFront();
     await fixturePage.keyboard.press('Escape');
-    const dockDismissed = await fixturePage.evaluate(
+    const overlayDismissed = await fixturePage.evaluate(
       () => document.getElementById('pagesift-root-host') === null,
     );
-    expect(dockDismissed).toBe(true);
+    expect(overlayDismissed).toBe(true);
 
     const optionsPage = await context.newPage();
     await optionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
@@ -1204,6 +1392,8 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       undefined,
       { polling: 100, timeout: 10000 },
     );
+    const activityStat = (await optionsPage.locator('#stat-activities').textContent()) ?? '0';
+    expect(Number.parseInt(activityStat, 10)).toBeGreaterThanOrEqual(1);
     await optionsPage.click('#clear-all-data-btn');
     expect(
       await optionsPage.evaluate(
@@ -1261,7 +1451,6 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       { width: 768, height: 1024 },
       { width: 1280, height: 800 },
       { width: 1440, height: 900 },
-      { width: 640, height: 400 },
     ];
     for (const vp of viewports) {
       await handedOffWorkspace.setViewportSize(vp);
@@ -1277,6 +1466,39 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
         expect(layoutMetrics.menuVisible).toBe(true);
       }
     }
+
+    await handedOffWorkspace.setViewportSize({ width: 1280, height: 800 });
+    const zoomMetrics = await handedOffWorkspace.evaluate(async () => {
+      const chromeTabs = (
+        globalThis as unknown as {
+          chrome: {
+            tabs: {
+              getCurrent: () => Promise<{ id?: number } | undefined>;
+              setZoom: (tabId: number, zoomFactor: number) => Promise<void>;
+              getZoom: (tabId: number) => Promise<number>;
+            };
+          };
+        }
+      ).chrome.tabs;
+      const current = await chromeTabs.getCurrent();
+      if (!current || typeof current.id !== 'number') {
+        throw new Error('Could not resolve current workspace tab for 200% browser zoom check');
+      }
+      await chromeTabs.setZoom(current.id, 2.0);
+      await new Promise((r) => setTimeout(r, 150));
+      const actualZoom = await chromeTabs.getZoom(current.id);
+      const scrollWidth = document.documentElement.scrollWidth;
+      const innerWidth = window.innerWidth;
+      const menuVisible =
+        getComputedStyle(document.getElementById('mobile-menu-btn') as HTMLElement).display !==
+        'none';
+      await chromeTabs.setZoom(current.id, 1.0);
+      return { actualZoom, scrollWidth, innerWidth, menuVisible };
+    });
+    expect(zoomMetrics.actualZoom).toBeCloseTo(2.0, 1);
+    expect(zoomMetrics.innerWidth).toBeLessThanOrEqual(700);
+    expect(zoomMetrics.scrollWidth).toBeLessThanOrEqual(zoomMetrics.innerWidth + 2);
+    expect(zoomMetrics.menuVisible).toBe(true);
 
     await handedOffWorkspace.setViewportSize({ width: 360, height: 740 });
     await handedOffWorkspace.click('#mobile-menu-btn');

@@ -29,11 +29,11 @@ export function resolveEffectiveTheme(pref: ThemePreference): 'light' | 'dark' {
   if (
     typeof window !== 'undefined' &&
     typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-color-scheme: dark)').matches
+    window.matchMedia('(prefers-color-scheme: light)').matches
   ) {
-    return 'dark';
+    return 'light';
   }
-  return 'light';
+  return 'dark';
 }
 
 export function applyThemePreference(pref: ThemePreference): 'light' | 'dark' {
@@ -58,12 +58,12 @@ export function nextThemePreference(current: ThemePreference): ThemePreference {
 
 export function formatThemeLabel(pref: ThemePreference): string {
   if (pref === 'dark') {
-    return 'Theme: Dark';
+    return 'Dark';
   }
   if (pref === 'light') {
-    return 'Theme: Light';
+    return 'Light';
   }
-  return 'Theme: System';
+  return 'System';
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -118,20 +118,11 @@ const ICON_PATHS: Record<string, string[]> = {
   download: ['M12 3v12', 'M7 10l5 5 5-5', 'M4 20h16'],
   copy: ['M9 9h10v10H9z', 'M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1'],
   menu: ['M4 6h16', 'M4 12h16', 'M4 18h16'],
-  sun: [
-    'M12 4V2',
-    'M12 22v-2',
-    'M4.9 4.9L3.5 3.5',
-    'M20.5 20.5l-1.4-1.4',
-    'M2 12h2',
-    'M20 12h2',
-    'M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
-  ],
-  external: [
-    'M14 4h6v6',
-    'M10 14L20 4',
-    'M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5',
-  ],
+  history: ['M3 12a9 9 0 1 0 3-6.7L3 8', 'M3 3v5h5', 'M12 7v5l3 2'],
+  folder: ['M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z'],
+  settings: ['M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M4 12h2', 'M18 12h2', 'M12 4v2', 'M12 18v2'],
+  sidebar: ['M4 4h16v16H4V4z', 'M9 4v16'],
+  tools: ['M4 6h7', 'M4 12h16', 'M4 18h11'],
 };
 
 export function createSvgIcon(name: string, className = 'icon'): SVGSVGElement {
@@ -139,7 +130,7 @@ export function createSvgIcon(name: string, className = 'icon'): SVGSVGElement {
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('fill', 'none');
   svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '1.85');
+  svg.setAttribute('stroke-width', '1.8');
   svg.setAttribute('stroke-linecap', 'round');
   svg.setAttribute('stroke-linejoin', 'round');
   svg.setAttribute('aria-hidden', 'true');

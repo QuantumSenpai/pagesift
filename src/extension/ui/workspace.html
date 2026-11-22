@@ -1,261 +1,611 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PageSift Workspace — Local Web Inspection &amp; Design Toolkit</title>
+    <title>PageSift — Web Research &amp; Inspection Dashboard</title>
     <link rel="stylesheet" href="design-system.css" />
   </head>
   <body>
-    <a class="skip-link" href="#workspace-main">Skip to tool workspace</a>
+    <a class="skip-link" href="#workspace-main">Skip to workspace</a>
     <div class="workspace-shell">
       <header class="workspace-header">
         <div class="workspace-header-left">
           <button
             id="mobile-menu-btn"
-            class="secondary icon-btn mobile-menu-btn"
+            class="secondary sm mobile-menu-btn"
             type="button"
-            aria-label="Open tool navigation"
+            aria-label="Open navigation"
             aria-expanded="false"
             aria-controls="tool-dock"
           >
-            Tools
+            Menu
           </button>
+          <button
+            id="toggle-sidebar-btn"
+            class="ghost sm"
+            type="button"
+            aria-label="Collapse or expand navigation sidebar"
+            aria-expanded="true"
+          ></button>
           <div class="brand-lockup">
-            <img class="brand-icon" src="icons/icon-32.png" alt="PageSift icon" width="24" height="24" />
+            <img
+              class="brand-icon"
+              src="icons/icon-32.png"
+              alt="PageSift icon"
+              width="24"
+              height="24"
+            />
             <span class="brand-name">PageSift</span>
           </div>
-          <div class="target-pill" id="target-page-pill" title="Active inspected tab">
-            <span class="status-dot" style="color: var(--success);" aria-hidden="true"></span>
-            <span id="target-page-label" class="truncate">Connecting to target tab...</span>
+          <span class="header-divider" aria-hidden="true"></span>
+          <div class="target-context" id="target-page-pill" title="Active target page">
+            <span class="status-dot positive" id="target-status-dot" aria-hidden="true"></span>
+            <span id="target-page-label" class="truncate">Connecting to page...</span>
           </div>
         </div>
 
         <div class="workspace-header-right">
           <label class="sr-only" for="project-select">Active Project</label>
           <select id="project-select" aria-label="Active Project"></select>
-          <button id="toggle-projects-btn" class="secondary sm" type="button" aria-expanded="false">
-            Saved Work
-          </button>
           <button id="save-artifact-btn" class="secondary sm" type="button">Save Result</button>
-          <button id="theme-toggle-btn" class="ghost sm" type="button" aria-label="Switch color theme">
-            Theme: System
+          <button
+            id="theme-toggle-btn"
+            class="ghost sm"
+            type="button"
+            aria-label="Switch color theme"
+          >
+            System
           </button>
-          <button id="open-tab-workspace-btn" class="ghost sm" type="button">Open Full Tab</button>
-          <a class="btn-link sm" href="options.html" target="_blank" rel="noopener">Options</a>
+          <a class="btn-link sm" href="options.html" target="_blank" rel="noopener">Settings</a>
         </div>
       </header>
 
-      <div class="workspace-body">
+      <div id="workspace-body" class="workspace-body">
         <div id="rail-backdrop" class="rail-backdrop" aria-hidden="true"></div>
-        <nav id="tool-dock" class="tool-rail" aria-label="PageSift 15 Tools">
-          <div class="rail-group">
-            <div class="rail-group-label">Inspect &amp; Measure</div>
-            <button type="button" data-tool="inspect" class="active">Inspect</button>
-            <button type="button" data-tool="measure">Measure</button>
-            <button type="button" data-tool="colors">Colors</button>
-            <button type="button" data-tool="fonts">Fonts</button>
-            <button type="button" data-tool="tech_stack">Tech Stack</button>
+        <nav id="tool-dock" class="tool-rail" aria-label="PageSift Navigation">
+          <div class="rail-section-tabs" role="tablist" aria-label="Dashboard sections">
+            <button
+              id="nav-tools-btn"
+              type="button"
+              class="rail-section-btn active"
+              data-section="tools"
+            >
+              <span class="rail-hide-collapsed">Tools</span>
+            </button>
+            <button
+              id="nav-history-btn"
+              type="button"
+              class="rail-section-btn"
+              data-section="history"
+            >
+              <span class="rail-hide-collapsed">Activity History</span>
+            </button>
+            <button id="nav-saved-btn" type="button" class="rail-section-btn" data-section="saved">
+              <span class="rail-hide-collapsed">Saved Work</span>
+            </button>
           </div>
-          <div class="rail-group">
-            <div class="rail-group-label">Extract &amp; Export</div>
-            <button type="button" data-tool="clone_page">Clone Page</button>
-            <button type="button" data-tool="assets">Assets</button>
-            <button type="button" data-tool="design_md">Design MD</button>
-            <button type="button" data-tool="clone_prompt">Clone Prompt</button>
+
+          <div class="rail-hide-collapsed">
+            <label class="sr-only" for="tool-search-input">Search tools</label>
+            <input
+              id="tool-search-input"
+              class="rail-search"
+              type="search"
+              placeholder="Filter 15 tools..."
+            />
           </div>
+
           <div class="rail-group">
-            <div class="rail-group-label">Capture &amp; Viewports</div>
-            <button type="button" data-tool="capture">Capture</button>
-            <button type="button" data-tool="responsive">Responsive</button>
+            <div class="rail-group-label rail-hide-collapsed">Inspect &amp; Measure</div>
+            <button type="button" data-tool="inspect" class="active">
+              <span class="rail-hide-collapsed">Inspect</span>
+            </button>
+            <button type="button" data-tool="measure">
+              <span class="rail-hide-collapsed">Measure</span>
+            </button>
+            <button type="button" data-tool="colors">
+              <span class="rail-hide-collapsed">Colors</span>
+            </button>
+            <button type="button" data-tool="fonts">
+              <span class="rail-hide-collapsed">Fonts</span>
+            </button>
+            <button type="button" data-tool="tech_stack">
+              <span class="rail-hide-collapsed">Tech Stack</span>
+            </button>
           </div>
+
           <div class="rail-group">
-            <div class="rail-group-label">Live Preview &amp; Audit</div>
-            <button type="button" data-tool="edit_text">Edit Text</button>
-            <button type="button" data-tool="swap_font">Swap Font</button>
-            <button type="button" data-tool="arrange">Arrange</button>
-            <button type="button" data-tool="design_review">Design Review</button>
+            <div class="rail-group-label rail-hide-collapsed">Extract &amp; Export</div>
+            <button type="button" data-tool="clone_page">
+              <span class="rail-hide-collapsed">Clone Page</span>
+            </button>
+            <button type="button" data-tool="assets">
+              <span class="rail-hide-collapsed">Assets</span>
+            </button>
+            <button type="button" data-tool="design_md">
+              <span class="rail-hide-collapsed">Design MD</span>
+            </button>
+            <button type="button" data-tool="clone_prompt">
+              <span class="rail-hide-collapsed">Clone Prompt</span>
+            </button>
+          </div>
+
+          <div class="rail-group">
+            <div class="rail-group-label rail-hide-collapsed">Capture &amp; Viewports</div>
+            <button type="button" data-tool="capture">
+              <span class="rail-hide-collapsed">Capture</span>
+            </button>
+            <button type="button" data-tool="responsive">
+              <span class="rail-hide-collapsed">Responsive</span>
+            </button>
+          </div>
+
+          <div class="rail-group">
+            <div class="rail-group-label rail-hide-collapsed">Live Preview &amp; Audit</div>
+            <button type="button" data-tool="edit_text">
+              <span class="rail-hide-collapsed">Edit Text</span>
+            </button>
+            <button type="button" data-tool="swap_font">
+              <span class="rail-hide-collapsed">Swap Font</span>
+            </button>
+            <button type="button" data-tool="arrange">
+              <span class="rail-hide-collapsed">Arrange</span>
+            </button>
+            <button type="button" data-tool="design_review">
+              <span class="rail-hide-collapsed">Design Review</span>
+            </button>
           </div>
         </nav>
 
         <main id="workspace-main" class="workspace-main">
-          <section id="projects-drawer" class="drawer-panel" aria-label="Local projects and saved artifacts">
-            <div class="card-header" style="margin-bottom: 0;">
-              <h2 class="card-title">Local Projects, Saved Artifacts &amp; Jobs</h2>
-              <button id="close-projects-btn" class="ghost sm" type="button">Close</button>
+          <div
+            id="unsupported-page-notice"
+            class="status-line warning"
+            style="display: none"
+            role="alert"
+          ></div>
+
+          <section id="view-tools" class="view-panel active" aria-label="Inspection Tools">
+            <div class="section-header">
+              <div>
+                <h1 id="active-tool-title" class="section-title">
+                  1. Inspect Element &amp; Computed Styles
+                </h1>
+                <p id="active-tool-subtitle" class="section-subtitle">
+                  Examine dimensions, box model, computed styles, and accessibility attributes
+                  locally.
+                </p>
+              </div>
+              <div class="control-row">
+                <button id="toggle-picker-btn" class="secondary" type="button">
+                  On-Page Picker
+                </button>
+                <button id="run-tool-btn" type="button">Run Tool</button>
+                <button id="cancel-job-btn" class="danger" type="button" disabled>Cancel</button>
+              </div>
             </div>
-            <div class="control-row">
-              <label class="sr-only" for="new-project-name">New project name</label>
-              <input id="new-project-name" type="text" placeholder="New project name" style="flex: 1 1 180px;" />
-              <button id="create-project-btn" class="secondary sm" type="button">Create Project</button>
-              <button id="refresh-projects-btn" class="ghost sm" type="button">Refresh</button>
+
+            <div id="tool-params-card" class="flat-block" aria-label="Tool options">
+              <div id="selector-controls-row" class="control-row">
+                <label class="sr-only" for="target-selector-input">Target CSS selector</label>
+                <input
+                  id="target-selector-input"
+                  type="text"
+                  placeholder="CSS selector (e.g. h1, #hero, .card)"
+                  style="flex: 1 1 220px"
+                />
+                <label class="sr-only" for="secondary-input">Secondary value</label>
+                <input
+                  id="secondary-input"
+                  type="text"
+                  placeholder="Secondary selector / text / font family"
+                  style="flex: 1 1 220px"
+                />
+                <label class="sr-only" for="mode-select">Tool mode</label>
+                <select id="mode-select" aria-label="Tool mode">
+                  <option value="default">Default Mode</option>
+                  <option value="react_tailwind">Prompt: React + Tailwind</option>
+                  <option value="html_css">Prompt: HTML + CSS</option>
+                  <option value="vue_css">Prompt: Vue 3 + CSS</option>
+                  <option value="generic">Prompt: Generic</option>
+                  <option value="move">Arrange: Move (+16px)</option>
+                  <option value="hide">Arrange: Hide Element</option>
+                  <option value="remove">Arrange: Remove Element</option>
+                </select>
+              </div>
+
+              <div id="capture-controls" class="sub-panel">
+                <div class="control-row">
+                  <label for="capture-mode-select">Mode</label>
+                  <select id="capture-mode-select">
+                    <option value="visible">Visible Viewport</option>
+                    <option value="full_page">Full Page (Stitched)</option>
+                    <option value="element">Selected Element</option>
+                    <option value="area">Selected Area</option>
+                  </select>
+                  <label for="capture-format-select">Format</label>
+                  <select id="capture-format-select">
+                    <option value="image/png">PNG</option>
+                    <option value="image/jpeg">JPEG</option>
+                    <option value="image/webp">WebP</option>
+                    <option value="application/pdf">PDF (Embedded Image)</option>
+                  </select>
+                </div>
+                <div class="control-row">
+                  <span class="muted">Crop (px)</span>
+                  <input
+                    id="crop-x"
+                    class="small-num"
+                    type="number"
+                    min="0"
+                    value="0"
+                    aria-label="Crop X"
+                  />
+                  <input
+                    id="crop-y"
+                    class="small-num"
+                    type="number"
+                    min="0"
+                    value="0"
+                    aria-label="Crop Y"
+                  />
+                  <input
+                    id="crop-w"
+                    class="small-num"
+                    type="number"
+                    min="1"
+                    value="400"
+                    aria-label="Crop Width"
+                  />
+                  <input
+                    id="crop-h"
+                    class="small-num"
+                    type="number"
+                    min="1"
+                    value="300"
+                    aria-label="Crop Height"
+                  />
+                  <button id="apply-crop-btn" class="secondary sm" type="button" disabled>
+                    Apply Crop
+                  </button>
+                </div>
+                <div class="control-row">
+                  <span class="muted">Callout</span>
+                  <input
+                    id="ann-x"
+                    class="small-num"
+                    type="number"
+                    min="0"
+                    value="16"
+                    aria-label="Annotation X"
+                  />
+                  <input
+                    id="ann-y"
+                    class="small-num"
+                    type="number"
+                    min="0"
+                    value="16"
+                    aria-label="Annotation Y"
+                  />
+                  <input
+                    id="ann-w"
+                    class="small-num"
+                    type="number"
+                    min="1"
+                    value="160"
+                    aria-label="Annotation Width"
+                  />
+                  <input
+                    id="ann-h"
+                    class="small-num"
+                    type="number"
+                    min="1"
+                    value="60"
+                    aria-label="Annotation Height"
+                  />
+                  <input
+                    id="ann-label"
+                    type="text"
+                    placeholder="Callout label"
+                    style="width: 140px"
+                    aria-label="Callout label"
+                  />
+                  <input
+                    id="ann-color"
+                    type="color"
+                    value="#0057ff"
+                    aria-label="Annotation color"
+                  />
+                  <button id="add-annotation-btn" class="secondary sm" type="button" disabled>
+                    Add Callout
+                  </button>
+                </div>
+              </div>
+
+              <div id="responsive-controls" class="sub-panel">
+                <div class="control-row">
+                  <label class="inline-check"
+                    ><input type="checkbox" name="resp-preset" value="mobile-sm" checked /> Mobile
+                    375×812</label
+                  >
+                  <label class="inline-check"
+                    ><input type="checkbox" name="resp-preset" value="tablet-md" checked /> Tablet
+                    768×1024</label
+                  >
+                  <label class="inline-check"
+                    ><input type="checkbox" name="resp-preset" value="laptop-lg" /> Laptop
+                    1280×800</label
+                  >
+                  <label class="inline-check"
+                    ><input type="checkbox" name="resp-preset" value="desktop-xl" /> Desktop
+                    1440×900</label
+                  >
+                </div>
+                <div class="control-row">
+                  <span class="muted">Custom</span>
+                  <input
+                    id="resp-custom-w"
+                    class="small-num"
+                    type="number"
+                    min="240"
+                    max="3840"
+                    placeholder="Width"
+                    aria-label="Custom viewport width"
+                  />
+                  <input
+                    id="resp-custom-h"
+                    class="small-num"
+                    type="number"
+                    min="320"
+                    max="2160"
+                    placeholder="Height"
+                    aria-label="Custom viewport height"
+                  />
+                  <label class="inline-check"
+                    ><input id="responsive-sync-toggle" type="checkbox" checked /> Synchronize
+                    Scroll</label
+                  >
+                  <button id="open-responsive-btn" type="button">Open Responsive Windows</button>
+                  <button id="close-responsive-btn" class="danger-outline" type="button">
+                    Close Preview Windows
+                  </button>
+                </div>
+                <div id="responsive-session-status" class="muted" style="font-size: 12.5px">
+                  No active responsive preview session.
+                </div>
+              </div>
+
+              <div id="colors-controls" class="sub-panel">
+                <div class="control-row">
+                  <label for="colors-export-format">Export Format</label>
+                  <select id="colors-export-format">
+                    <option value="cssVariables">CSS Variables (.css)</option>
+                    <option value="tailwindV4">Tailwind v4 @theme (.css)</option>
+                    <option value="tailwindV3">Tailwind v3 Config (.js)</option>
+                    <option value="scss">SCSS Variables (.scss)</option>
+                    <option value="json">JSON Tokens (.json)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div id="edit-history-controls" class="sub-panel">
+                <div class="control-row">
+                  <span class="tag warning">Local preview only — reloads reset changes</span>
+                  <button id="undo-edit-btn" class="secondary sm" type="button">Undo</button>
+                  <button id="redo-edit-btn" class="secondary sm" type="button">Redo</button>
+                  <button id="reset-edit-btn" class="danger-outline sm" type="button">
+                    Reset All
+                  </button>
+                </div>
+              </div>
+
+              <div id="ai-controls" class="sub-panel">
+                <div class="control-row">
+                  <span class="muted"
+                    >Optional NVIDIA AI enhancement (exact redacted preview required):</span
+                  >
+                  <button id="preview-nvidia-btn" class="secondary sm" type="button">
+                    Preview Data Egress
+                  </button>
+                  <button id="run-nvidia-btn" class="secondary sm" type="button" disabled>
+                    Confirm &amp; Enhance
+                  </button>
+                </div>
+              </div>
             </div>
-            <div id="saved-work-list" class="kv-grid"></div>
+
+            <div
+              id="job-progress-track"
+              class="progress-track"
+              role="progressbar"
+              aria-label="Action progress"
+            >
+              <div class="progress-fill"></div>
+            </div>
+
+            <div id="status-message" class="status-line" role="status" aria-live="polite">
+              Ready — all 15 tools run locally in your browser.
+            </div>
+
+            <div id="result-actions" class="result-toolbar">
+              <div class="control-row">
+                <button id="download-result-btn" type="button" disabled>Download File</button>
+                <button id="copy-result-btn" class="secondary" type="button" disabled>
+                  Copy Output
+                </button>
+              </div>
+              <span id="download-meta" class="muted" style="font-size: 12.5px">
+                Run a tool to generate downloadable or copyable output.
+              </span>
+            </div>
+
+            <div id="capture-preview-wrap" class="capture-preview-wrap">
+              <div id="capture-meta" class="muted" style="font-size: 12.5px"></div>
+              <img id="capture-preview-img" alt="Captured screenshot preview" />
+            </div>
+
+            <section id="structured-result-container" aria-label="Tool result">
+              <div class="empty-state">
+                <strong>Choose any tool and click Run Tool</strong>
+                <span
+                  >Structured inspection results, downloads, and local save controls appear
+                  here.</span
+                >
+              </div>
+            </section>
+
+            <details class="raw-disclosure" id="raw-output-disclosure">
+              <summary>Raw Output (Advanced JSON / Text)</summary>
+              <pre id="tool-output" aria-live="polite">Select a tool and run it locally.</pre>
+            </details>
           </section>
 
-          <div class="tool-header-bar">
-            <div class="tool-title-block">
-              <h1 id="active-tool-title" class="tool-title">1. Inspect Element &amp; Computed Styles</h1>
-              <p id="active-tool-subtitle" class="tool-subtitle">
-                Examine dimensions, box model, computed styles, and accessibility attributes locally.
-              </p>
+          <section
+            id="view-history"
+            class="view-panel"
+            aria-label="Local Research Activity History"
+          >
+            <div class="section-header">
+              <div>
+                <h1 class="section-title">Activity History</h1>
+                <p class="section-subtitle">
+                  Local timeline of explicit PageSift tool actions — never ordinary browsing
+                  history. Action duration measures tool execution time, not time spent reading a
+                  page.
+                </p>
+              </div>
+              <div class="control-row">
+                <label class="inline-check">
+                  <input id="history-recording-toggle" type="checkbox" checked />
+                  Record new actions
+                </label>
+                <button id="history-refresh-btn" class="secondary sm" type="button">Refresh</button>
+                <button id="history-clear-btn" class="danger-outline sm" type="button">
+                  Clear History
+                </button>
+              </div>
             </div>
-            <div class="control-row">
-              <button id="toggle-picker-btn" class="secondary" type="button">On-Page Picker</button>
-              <button id="run-tool-btn" type="button">Run Locally</button>
-              <button id="cancel-job-btn" class="danger" type="button" disabled>Cancel</button>
-            </div>
-          </div>
 
-          <section id="tool-params-card" class="card" aria-label="Tool parameters">
-            <div id="selector-controls-row" class="control-row">
-              <label class="sr-only" for="target-selector-input">Target CSS selector</label>
-              <input
-                id="target-selector-input"
-                type="text"
-                placeholder="CSS selector (e.g. h1, #hero, .card)"
-                style="flex: 1 1 200px;"
-              />
-              <label class="sr-only" for="secondary-input">Secondary value</label>
-              <input
-                id="secondary-input"
-                type="text"
-                placeholder="Secondary selector / replacement text / font family"
-                style="flex: 1 1 200px;"
-              />
-              <label class="sr-only" for="mode-select">Tool mode</label>
-              <select id="mode-select" aria-label="Tool mode">
-                <option value="default">Default Mode</option>
-                <option value="react_tailwind">Prompt: React + Tailwind</option>
-                <option value="html_css">Prompt: HTML + CSS</option>
-                <option value="vue_css">Prompt: Vue 3 + CSS</option>
-                <option value="generic">Prompt: Generic</option>
-                <option value="move">Arrange: Move (+16px)</option>
-                <option value="hide">Arrange: Hide Element</option>
-                <option value="remove">Arrange: Remove Element</option>
+            <div id="history-first-use-notice" class="notice-bar" style="display: none">
+              <div class="block-heading">
+                <span>
+                  PageSift saves explicit tool actions (site path, tool, safe options, execution
+                  duration, and result summary) locally in your browser. Passwords, tokens, query
+                  strings, and full HTML are excluded.
+                </span>
+                <button id="dismiss-history-notice-btn" class="secondary sm" type="button">
+                  Got it
+                </button>
+              </div>
+            </div>
+
+            <div class="control-row" aria-label="Filter activity history">
+              <label class="inline-check">
+                <input id="history-current-site-only" type="checkbox" />
+                Current site only
+              </label>
+              <label class="sr-only" for="history-group-mode">Grouping</label>
+              <select id="history-group-mode" aria-label="Group timeline by">
+                <option value="day">Group by Day</option>
+                <option value="session">Group by Session</option>
               </select>
+              <label class="sr-only" for="history-domain-filter">Website filter</label>
+              <select id="history-domain-filter" aria-label="Filter by website">
+                <option value="">All websites</option>
+              </select>
+              <label class="sr-only" for="history-tool-filter">Tool filter</label>
+              <select id="history-tool-filter" aria-label="Filter by tool">
+                <option value="">All tools</option>
+                <option value="inspect">Inspect</option>
+                <option value="clone_page">Clone Page</option>
+                <option value="clone_prompt">Clone Prompt</option>
+                <option value="design_md">Design MD</option>
+                <option value="assets">Assets</option>
+                <option value="colors">Colors</option>
+                <option value="fonts">Fonts</option>
+                <option value="measure">Measure</option>
+                <option value="edit_text">Edit Text</option>
+                <option value="capture">Capture</option>
+                <option value="responsive">Responsive</option>
+                <option value="swap_font">Swap Font</option>
+                <option value="arrange">Arrange</option>
+                <option value="design_review">Design Review</option>
+                <option value="tech_stack">Tech Stack</option>
+              </select>
+              <label class="sr-only" for="history-status-filter">Status filter</label>
+              <select id="history-status-filter" aria-label="Filter by status">
+                <option value="">All statuses</option>
+                <option value="completed">Completed</option>
+                <option value="running">Running</option>
+                <option value="interrupted">Interrupted</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="failed">Failed</option>
+              </select>
+              <label class="sr-only" for="history-date-range">Date range</label>
+              <select id="history-date-range" aria-label="Filter by date range">
+                <option value="all">All dates</option>
+                <option value="today">Today</option>
+                <option value="7d">Last 7 days</option>
+                <option value="30d">Last 30 days</option>
+              </select>
+              <label class="sr-only" for="history-search-input">Search activity history</label>
+              <input
+                id="history-search-input"
+                type="search"
+                placeholder="Search title, URL, summary..."
+                style="flex: 1 1 200px"
+              />
             </div>
 
-            <div id="capture-controls" class="sub-panel">
-              <div class="control-row">
-                <label for="capture-mode-select">Mode:</label>
-                <select id="capture-mode-select">
-                  <option value="visible">Visible Viewport</option>
-                  <option value="full_page">Full Page (Stitched)</option>
-                  <option value="element">Selected Element (CSS Selector)</option>
-                  <option value="area">Selected Area (Crop Rect)</option>
-                </select>
-                <label for="capture-format-select">Format:</label>
-                <select id="capture-format-select">
-                  <option value="image/png">PNG</option>
-                  <option value="image/jpeg">JPEG</option>
-                  <option value="image/webp">WebP</option>
-                  <option value="application/pdf">PDF (Embedded Screenshot)</option>
-                </select>
-              </div>
-              <div class="control-row">
-                <span class="muted">Crop (px):</span>
-                <input id="crop-x" class="small-num" type="number" min="0" value="0" aria-label="Crop X" placeholder="X" />
-                <input id="crop-y" class="small-num" type="number" min="0" value="0" aria-label="Crop Y" placeholder="Y" />
-                <input id="crop-w" class="small-num" type="number" min="1" value="400" aria-label="Crop Width" placeholder="W" />
-                <input id="crop-h" class="small-num" type="number" min="1" value="300" aria-label="Crop Height" placeholder="H" />
-                <button id="apply-crop-btn" class="secondary sm" type="button" disabled>Apply Crop</button>
-              </div>
-              <div class="control-row">
-                <span class="muted">Callout:</span>
-                <input id="ann-x" class="small-num" type="number" min="0" value="16" aria-label="Annotation X" />
-                <input id="ann-y" class="small-num" type="number" min="0" value="16" aria-label="Annotation Y" />
-                <input id="ann-w" class="small-num" type="number" min="1" value="160" aria-label="Annotation Width" />
-                <input id="ann-h" class="small-num" type="number" min="1" value="60" aria-label="Annotation Height" />
-                <input id="ann-label" type="text" placeholder="Callout label" style="width: 130px;" aria-label="Callout label" />
-                <input id="ann-color" type="color" value="#0f766e" aria-label="Annotation color" />
-                <button id="add-annotation-btn" class="secondary sm" type="button" disabled>Add Callout</button>
-              </div>
+            <div id="history-summary-line" class="muted" style="font-size: 12.5px">
+              Loading activity timeline...
             </div>
+            <div
+              id="history-timeline-list"
+              style="display: flex; flex-direction: column; gap: 14px"
+            ></div>
 
-            <div id="responsive-controls" class="sub-panel">
-              <div class="control-row">
-                <label class="inline-check"><input type="checkbox" name="resp-preset" value="mobile-sm" checked /> Mobile 375×812</label>
-                <label class="inline-check"><input type="checkbox" name="resp-preset" value="tablet-md" checked /> Tablet 768×1024</label>
-                <label class="inline-check"><input type="checkbox" name="resp-preset" value="laptop-lg" /> Laptop 1280×800</label>
-                <label class="inline-check"><input type="checkbox" name="resp-preset" value="desktop-xl" /> Desktop 1440×900</label>
-              </div>
-              <div class="control-row">
-                <span class="muted">Custom:</span>
-                <input id="resp-custom-w" class="small-num" type="number" min="240" max="3840" placeholder="Width" aria-label="Custom viewport width" />
-                <input id="resp-custom-h" class="small-num" type="number" min="320" max="2160" placeholder="Height" aria-label="Custom viewport height" />
-                <label class="inline-check"><input id="responsive-sync-toggle" type="checkbox" checked /> Synchronize Scroll</label>
-                <button id="open-responsive-btn" type="button">Open Responsive Windows</button>
-                <button id="close-responsive-btn" class="danger-outline" type="button">Close Preview Windows</button>
-              </div>
-              <div id="responsive-session-status" class="muted" style="font-size: 12px;">No active responsive preview session.</div>
-            </div>
-
-            <div id="colors-controls" class="sub-panel">
-              <div class="control-row">
-                <label for="colors-export-format">Export Format:</label>
-                <select id="colors-export-format">
-                  <option value="cssVariables">CSS Variables (.css)</option>
-                  <option value="tailwindV4">Tailwind v4 @theme (.css)</option>
-                  <option value="tailwindV3">Tailwind v3 Config (.js)</option>
-                  <option value="scss">SCSS Variables (.scss)</option>
-                  <option value="json">JSON Tokens (.json)</option>
-                </select>
-              </div>
-            </div>
-
-            <div id="edit-history-controls" class="sub-panel">
-              <div class="control-row">
-                <span class="pill warning">Local preview only — reload clears edits</span>
-                <button id="undo-edit-btn" class="secondary sm" type="button">Undo</button>
-                <button id="redo-edit-btn" class="secondary sm" type="button">Redo</button>
-                <button id="reset-edit-btn" class="danger-outline sm" type="button">Reset All Edits</button>
-              </div>
-            </div>
-
-            <div id="ai-controls" class="sub-panel">
-              <div class="control-row">
-                <span class="muted" style="font-size: 12px;">Optional BYOK NVIDIA NIM enhancement (exact redacted preview required):</span>
-                <button id="preview-nvidia-btn" class="secondary sm" type="button">Preview NVIDIA Data Egress</button>
-                <button id="run-nvidia-btn" class="secondary sm" type="button" disabled>Confirm &amp; Enhance</button>
-              </div>
+            <div class="control-row" style="justify-content: center">
+              <button
+                id="history-load-more-btn"
+                class="secondary"
+                type="button"
+                style="display: none"
+              >
+                Load More Entries
+              </button>
             </div>
           </section>
 
-          <div id="job-progress-track" class="progress-track" role="progressbar" aria-label="Tool progress">
-            <div class="progress-fill"></div>
-          </div>
-
-          <div id="status-message" class="status-banner" role="status" aria-live="polite">
-            Ready — 100% local execution (no login or backend required).
-          </div>
-
-          <div id="result-actions" class="result-toolbar">
-            <div class="control-row">
-              <button id="download-result-btn" type="button" disabled>Download File</button>
-              <button id="copy-result-btn" class="secondary" type="button" disabled>Copy Output</button>
+          <section id="view-saved" class="view-panel" aria-label="Saved Work">
+            <div class="section-header">
+              <div>
+                <h1 class="section-title">Saved Work</h1>
+                <p class="section-subtitle">
+                  Local projects, saved artifacts, and captures stored in extension-owned storage
+                  (kept separate from recorded activity history).
+                </p>
+              </div>
+              <div class="control-row">
+                <label class="sr-only" for="new-project-name">New project name</label>
+                <input
+                  id="new-project-name"
+                  type="text"
+                  placeholder="New project name"
+                  style="width: 200px"
+                />
+                <button id="create-project-btn" class="secondary sm" type="button">
+                  Create Project
+                </button>
+                <button id="refresh-projects-btn" class="ghost sm" type="button">Refresh</button>
+              </div>
             </div>
-            <span id="download-meta" class="muted" style="font-size: 12px;">
-              Run a tool to generate downloadable or copyable output.
-            </span>
-          </div>
-
-          <div id="capture-preview-wrap" class="capture-preview-wrap">
-            <div id="capture-meta" class="muted" style="font-size: 12px;"></div>
-            <img id="capture-preview-img" alt="Captured screenshot preview" />
-          </div>
-
-          <section id="structured-result-container" aria-label="Structured tool result">
-            <div class="empty-state">
-              <strong>Select any of the 15 tools and click Run Locally</strong>
-              <span>Structured views appear here with copy, download, and local IndexedDB save actions.</span>
-            </div>
+            <div
+              id="saved-work-list"
+              style="display: flex; flex-direction: column; gap: 16px"
+            ></div>
           </section>
-
-          <details class="raw-disclosure" id="raw-output-disclosure">
-            <summary>Raw Output (JSON / Text)</summary>
-            <pre id="tool-output" aria-live="polite">Select any of the 15 tools and click "Run Locally".</pre>
-          </details>
         </main>
       </div>
     </div>
@@ -267,22 +617,49 @@
         aria-modal="true"
         aria-labelledby="nvidia-modal-title"
       >
-        <div class="card-header" style="margin-bottom: 0;">
-          <h2 id="nvidia-modal-title" class="card-title" style="font-size: 15px;">
-            Optional NVIDIA AI — Exact Data Egress Preview
+        <div class="block-heading">
+          <h2 id="nvidia-modal-title" class="section-title" style="font-size: 16px">
+            Optional NVIDIA AI — Data Egress Preview
           </h2>
-          <button id="nvidia-modal-close-btn" class="ghost sm" type="button" aria-label="Close preview dialog">
+          <button
+            id="nvidia-modal-close-btn"
+            class="ghost sm"
+            type="button"
+            aria-label="Close preview dialog"
+          >
             Close
           </button>
         </div>
-        <p class="muted" style="margin: 0;">
-          Only the allowlisted, recursively sanitized JSON below will be sent to your configured NVIDIA NIM endpoint using your session-only API key. Passwords, tokens, cookies, and URL query strings are stripped.
+        <p class="muted" style="margin: 0">
+          Only the allowlisted, recursively sanitized JSON below is sent to NVIDIA NIM with your
+          session-only API key. Passwords, tokens, cookies, and URL query strings are stripped.
         </p>
-        <div id="nvidia-modal-digest" class="pill mono">Digest: pending</div>
+        <div id="nvidia-modal-digest" class="tag mono">Digest: pending</div>
         <pre id="nvidia-modal-payload" class="code-box"></pre>
-        <div class="control-row" style="justify-content: flex-end;">
+        <div class="control-row" style="justify-content: flex-end">
           <button id="nvidia-modal-cancel-btn" class="secondary" type="button">Cancel</button>
-          <button id="nvidia-modal-confirm-btn" type="button">Confirm &amp; Send to NVIDIA</button>
+          <button id="nvidia-modal-confirm-btn" type="button">Confirm &amp; Send</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="clear-history-modal" class="modal-backdrop" role="presentation">
+      <div
+        class="modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="clear-history-title"
+      >
+        <h2 id="clear-history-title" class="section-title" style="font-size: 16px">
+          Clear all local activity history?
+        </h2>
+        <p class="muted" style="margin: 0">
+          This removes all recorded PageSift action entries. Your saved projects, artifacts, and
+          captures will remain untouched.
+        </p>
+        <div class="control-row" style="justify-content: flex-end">
+          <button id="clear-history-cancel-btn" class="secondary" type="button">Cancel</button>
+          <button id="clear-history-confirm-btn" class="danger" type="button">Clear History</button>
         </div>
       </div>
     </div>

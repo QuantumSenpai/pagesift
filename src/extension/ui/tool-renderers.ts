@@ -32,26 +32,24 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-function createStatStrip(items: Array<{ label: string; value: string }>): HTMLElement {
-  const grid = el('div', 'stat-grid');
+function createMetricsStrip(items: Array<{ label: string; value: string }>): HTMLElement {
+  const strip = el('div', 'metrics-strip');
   for (const item of items) {
-    const tile = el('div', 'stat-tile');
-    tile.appendChild(el('span', 'stat-label', item.label));
-    tile.appendChild(el('span', 'stat-value', item.value));
-    grid.appendChild(tile);
+    const cell = el('div', 'metric-cell');
+    cell.appendChild(el('span', 'metric-label', item.label));
+    cell.appendChild(el('span', 'metric-value', item.value));
+    strip.appendChild(cell);
   }
-  return grid;
+  return strip;
 }
 
-function createKvTableCard(
+function createKvSection(
   title: string,
   rows: Array<[string, string]>,
   colorColumn = false,
 ): HTMLElement {
-  const card = el('div', 'card');
-  const header = el('div', 'card-header');
-  header.appendChild(el('h3', 'card-title', title));
-  card.appendChild(header);
+  const box = el('div', 'kv-section');
+  box.appendChild(el('h3', 'block-title', title));
 
   const table = el('table', 'kv-table');
   const tbody = el('tbody');
@@ -68,7 +66,7 @@ function createKvTableCard(
       chip.style.display = 'inline-block';
       chip.style.width = '11px';
       chip.style.height = '11px';
-      chip.style.borderRadius = '3px';
+      chip.style.borderRadius = '2px';
       chip.style.border = '1px solid var(--border-strong)';
       chip.style.backgroundColor = v;
       chip.style.marginRight = '6px';
@@ -80,8 +78,8 @@ function createKvTableCard(
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
-  card.appendChild(table);
-  return card;
+  box.appendChild(table);
+  return box;
 }
 
 function renderSafeMarkdownPreview(markdown: string): HTMLElement {
@@ -140,19 +138,19 @@ function renderInspectView(
     return wrap;
   }
 
-  const headCard = el('div', 'card');
-  const topRow = el('div', 'card-header');
+  const headBlock = el('div', 'flat-block');
+  const topRow = el('div', 'block-heading');
   const idWrap = el('div', 'control-row');
-  idWrap.appendChild(el('span', 'pill accent mono', report.selector));
+  idWrap.appendChild(el('span', 'tag accent mono', report.selector));
   idWrap.appendChild(
     el(
       'span',
-      'pill',
+      'tag mono',
       `${Math.round(report.boundingBox.width)} × ${Math.round(report.boundingBox.height)} px`,
     ),
   );
   if (report.insideOpenShadowRoot) {
-    idWrap.appendChild(el('span', 'pill warning', 'Open Shadow DOM'));
+    idWrap.appendChild(el('span', 'tag warning', 'Open Shadow DOM'));
   }
   topRow.appendChild(idWrap);
 
@@ -187,7 +185,7 @@ function renderInspectView(
   });
   actions.append(copySelBtn, copyHtmlBtn, copyCssBtn);
   topRow.appendChild(actions);
-  headCard.appendChild(topRow);
+  headBlock.appendChild(topRow);
 
   const bm = el('div', 'box-model');
   bm.appendChild(
@@ -213,12 +211,12 @@ function renderInspectView(
     ),
   );
   bm.appendChild(bmInner);
-  headCard.appendChild(bm);
-  wrap.appendChild(headCard);
+  headBlock.appendChild(bm);
+  wrap.appendChild(headBlock);
 
   const grid = el('div', 'kv-grid');
   grid.appendChild(
-    createKvTableCard('Layout', [
+    createKvSection('Layout', [
       ['display', report.layout.display],
       ['position', report.layout.position],
       ['flex / align', `${report.layout.flexDirection} · ${report.layout.alignItems}`],
@@ -228,7 +226,7 @@ function renderInspectView(
     ]),
   );
   grid.appendChild(
-    createKvTableCard('Typography', [
+    createKvSection('Typography', [
       ['font-family', report.typography.fontFamily],
       ['size / weight', `${report.typography.fontSize} · ${report.typography.fontWeight}`],
       ['line-height', report.typography.lineHeight],
@@ -237,7 +235,7 @@ function renderInspectView(
     ]),
   );
   grid.appendChild(
-    createKvTableCard(
+    createKvSection(
       'Colors & Effects',
       [
         ['text', report.colors.textColor],
@@ -251,7 +249,7 @@ function renderInspectView(
     ),
   );
   grid.appendChild(
-    createKvTableCard('Accessibility', [
+    createKvSection('Accessibility', [
       ['tag', report.tagName],
       ['role', report.accessibility.role ?? 'implicit'],
       ['accessible name', report.accessibility.accessibleName ?? 'none'],
@@ -262,7 +260,6 @@ function renderInspectView(
     ]),
   );
   wrap.appendChild(grid);
-
   wrap.appendChild(el('div', 'notice-bar', report.diagnostics.computedStyleNotice));
   return wrap;
 }
@@ -278,7 +275,7 @@ function renderClonePageView(data: Record<string, unknown>): HTMLElement {
   }
 
   wrap.appendChild(
-    createStatStrip([
+    createMetricsStrip([
       { label: 'Bundled Assets', value: String(manifest.rewrittenAssets.length) },
       { label: 'Archive Files', value: String(manifest.files.length) },
       {
@@ -289,33 +286,33 @@ function renderClonePageView(data: Record<string, unknown>): HTMLElement {
     ]),
   );
 
-  const policyCard = el('div', 'card');
-  const ph = el('div', 'card-header');
-  ph.appendChild(el('h3', 'card-title', 'Snapshot Scope & Sanitization Policy'));
+  const policy = el('div', 'flat-block');
+  const ph = el('div', 'block-heading');
+  ph.appendChild(el('h3', 'block-title', 'Snapshot Scope & Sanitization'));
   ph.appendChild(
     el(
       'span',
-      manifest.isSelfContained ? 'pill success' : 'pill warning',
-      manifest.isSelfContained ? 'Self-Contained Archive' : 'Partial — Remote/Missing Items Listed',
+      manifest.isSelfContained ? 'tag positive' : 'tag warning',
+      manifest.isSelfContained ? 'Self-Contained Archive' : 'Partial — Missing Resources Listed',
     ),
   );
-  policyCard.appendChild(ph);
-  policyCard.appendChild(
+  policy.appendChild(ph);
+  policy.appendChild(
     el(
-      'p',
+      'div',
       'muted',
-      `${manifest.scopeDisclaimer} Sanitizer: ${manifest.sanitizationPolicy.sanitizer}. Defensive CSP injected: ${manifest.sanitizationPolicy.defensiveCspApplied ? 'Yes' : 'No'}.`,
+      `${manifest.scopeDisclaimer} Sanitizer: ${manifest.sanitizationPolicy.sanitizer}. Defensive CSP applied: ${manifest.sanitizationPolicy.defensiveCspApplied ? 'Yes' : 'No'}.`,
     ),
   );
-  policyCard.appendChild(el('p', 'muted', manifest.cssFidelity.fidelityNote));
-  wrap.appendChild(policyCard);
+  policy.appendChild(el('div', 'muted', manifest.cssFidelity.fidelityNote));
+  wrap.appendChild(policy);
 
   if (manifest.missingResources.length > 0) {
-    const missCard = el('div', 'card');
-    missCard.appendChild(
+    const missBlock = el('div', 'flat-block');
+    missBlock.appendChild(
       el(
         'h3',
-        'card-title',
+        'block-title',
         `Missing or Unbundled Resources (${manifest.missingResources.length})`,
       ),
     );
@@ -340,10 +337,9 @@ function renderClonePageView(data: Record<string, unknown>): HTMLElement {
     }
     table.appendChild(tbody);
     scroll.appendChild(table);
-    missCard.appendChild(scroll);
-    wrap.appendChild(missCard);
+    missBlock.appendChild(scroll);
+    wrap.appendChild(missBlock);
   }
-
   return wrap;
 }
 
@@ -393,7 +389,7 @@ function renderAssetsView(
   const skippedByUrl = new Map(skipped.map((s) => [s.url, s.reason]));
 
   wrap.appendChild(
-    createStatStrip([
+    createMetricsStrip([
       { label: 'Discovered', value: String(report.summary.totalDiscovered) },
       { label: 'Bundled in ZIP', value: String(packagedAssets.length) },
       { label: 'Inline SVGs', value: String(report.summary.inlineAvailableCount) },
@@ -470,32 +466,26 @@ function renderAssetsView(
         });
         thumb.appendChild(img);
       } else {
-        thumb.appendChild(el('span', 'pill mono', asset.kind.toUpperCase()));
+        thumb.appendChild(el('span', 'tag mono', asset.kind));
       }
       card.appendChild(thumb);
 
-      const nameRow = el('div', 'card-header');
-      nameRow.style.marginBottom = '0';
-      nameRow.appendChild(
-        el(
-          'span',
-          'mono truncate',
-          pkg
-            ? pkg.archivePath.startsWith('assets/')
-              ? pkg.archivePath.slice(7)
-              : pkg.archivePath
-            : asset.safeFilename,
-        ),
-      );
+      const nameRow = el('div', 'block-heading');
+      const fileLabel = pkg
+        ? pkg.archivePath.startsWith('assets/')
+          ? pkg.archivePath.slice(7)
+          : pkg.archivePath
+        : asset.safeFilename;
+      nameRow.appendChild(el('span', 'mono truncate', fileLabel));
       const skipReason = skippedByUrl.get(asset.url);
       if (pkg) {
-        nameRow.appendChild(el('span', 'pill success', 'Bundled'));
+        nameRow.appendChild(el('span', 'tag positive', 'Bundled'));
       } else if (asset.availabilityStatus === 'inline_available') {
-        nameRow.appendChild(el('span', 'pill accent', 'Inline'));
+        nameRow.appendChild(el('span', 'tag accent', 'Inline'));
       } else if (skipReason) {
-        nameRow.appendChild(el('span', 'pill warning', 'Skipped'));
+        nameRow.appendChild(el('span', 'tag warning', 'Skipped'));
       } else {
-        nameRow.appendChild(el('span', 'pill danger', 'Unavailable'));
+        nameRow.appendChild(el('span', 'tag danger', 'Unavailable'));
       }
       card.appendChild(nameRow);
 
@@ -520,7 +510,7 @@ function renderAssetsView(
         dlBtn.type = 'button';
         dlBtn.addEventListener('click', () => {
           callbacks.onDownloadSingleAsset(
-            pkg.archivePath.startsWith('assets/') ? pkg.archivePath.slice(7) : pkg.archivePath,
+            fileLabel,
             pkg.mimeType || asset.mimeTypeHint || 'application/octet-stream',
             pkgBytes,
           );
@@ -588,7 +578,7 @@ function renderColorsView(
   }
 
   wrap.appendChild(
-    createStatStrip([
+    createMetricsStrip([
       { label: 'Unique Colors', value: String(report.colors.length) },
       { label: 'Gradients', value: String(report.gradients.length) },
       { label: 'CSS Variables', value: String(report.customProperties.length) },
@@ -611,10 +601,9 @@ function renderColorsView(
       card.appendChild(preview);
 
       const meta = el('div', 'swatch-meta');
-      const top = el('div', 'card-header');
-      top.style.marginBottom = '0';
+      const top = el('div', 'block-heading');
       top.appendChild(el('span', 'mono', token.hex));
-      top.appendChild(el('span', 'pill', `${token.usageCount}×`));
+      top.appendChild(el('span', 'muted mono', `${token.usageCount}×`));
       meta.appendChild(top);
       meta.appendChild(el('div', 'muted mono truncate', token.rgbString));
       meta.appendChild(el('div', 'muted mono truncate', token.hslString));
@@ -640,10 +629,10 @@ function renderColorsView(
     json: report.exports.json,
   };
   const activeExportText = exportMap[fmt] ?? report.exports.cssVariables;
-  const exportCard = el('div', 'card');
-  exportCard.appendChild(el('h3', 'card-title', `Token Export Preview (${fmt})`));
-  exportCard.appendChild(el('pre', 'code-box', activeExportText));
-  wrap.appendChild(exportCard);
+  const exportBlock = el('div', 'flat-block');
+  exportBlock.appendChild(el('h3', 'block-title', `Token Export (${fmt})`));
+  exportBlock.appendChild(el('pre', 'code-box', activeExportText));
+  wrap.appendChild(exportBlock);
 
   return wrap;
 }
@@ -660,7 +649,7 @@ function renderFontsView(data: Record<string, unknown>): HTMLElement {
 
   wrap.appendChild(el('div', 'notice-bar', report.diagnostics.renderedFontIdentityDisclosure));
   wrap.appendChild(
-    createStatStrip([
+    createMetricsStrip([
       { label: 'Font Families', value: String(report.families.length) },
       { label: '@font-face Rules', value: String(report.fontFaceDeclarations.length) },
       { label: 'Scanned Nodes', value: String(report.diagnostics.scannedElementsCount) },
@@ -668,30 +657,30 @@ function renderFontsView(data: Record<string, unknown>): HTMLElement {
   );
 
   for (const family of report.families.slice(0, 12)) {
-    const card = el('div', 'card');
-    const hdr = el('div', 'card-header');
+    const block = el('div', 'flat-block');
+    const hdr = el('div', 'block-heading');
     const titleWrap = el('div');
-    titleWrap.appendChild(el('h3', 'card-title', family.primaryFamily));
+    titleWrap.appendChild(el('h3', 'block-title', family.primaryFamily));
     titleWrap.appendChild(el('div', 'muted mono break-all', family.declaredStack));
     hdr.appendChild(titleWrap);
 
-    const pills = el('div', 'control-row');
-    pills.appendChild(el('span', 'pill', `${family.totalUsageCount} elements`));
+    const tags = el('div', 'control-row');
+    tags.appendChild(el('span', 'tag', `${family.totalUsageCount} elements`));
     const loadedLabel =
       family.verifiedLoadedInFontFaceSet === true
         ? 'Loaded (FontFaceSet)'
         : family.verifiedLoadedInFontFaceSet === 'unsupported'
           ? 'System / Unchecked'
           : 'Fallback / Not Loaded';
-    pills.appendChild(
+    tags.appendChild(
       el(
         'span',
-        family.verifiedLoadedInFontFaceSet === true ? 'pill success' : 'pill warning',
+        family.verifiedLoadedInFontFaceSet === true ? 'tag positive' : 'tag warning',
         loadedLabel,
       ),
     );
-    hdr.appendChild(pills);
-    card.appendChild(hdr);
+    hdr.appendChild(tags);
+    block.appendChild(hdr);
 
     const scroll = el('div', 'table-scroll');
     const table = el('table', 'kv-table');
@@ -720,8 +709,8 @@ function renderFontsView(data: Record<string, unknown>): HTMLElement {
     }
     table.appendChild(tbody);
     scroll.appendChild(table);
-    card.appendChild(scroll);
-    wrap.appendChild(card);
+    block.appendChild(scroll);
+    wrap.appendChild(block);
   }
   return wrap;
 }
@@ -736,7 +725,7 @@ function renderMeasureView(data: Record<string, unknown>): HTMLElement {
 
   const stats: Array<{ label: string; value: string }> = [
     { label: 'Primary Size', value: `${report.primary.width} × ${report.primary.height} px` },
-    { label: 'DPR', value: `${report.viewport.devicePixelRatio}x` },
+    { label: 'Device Scale', value: `${report.viewport.devicePixelRatio}x` },
   ];
   if (report.distance) {
     stats.push(
@@ -746,11 +735,11 @@ function renderMeasureView(data: Record<string, unknown>): HTMLElement {
       { label: 'Overlap', value: report.distance.isOverlapping ? 'Yes' : 'No' },
     );
   }
-  wrap.appendChild(createStatStrip(stats));
+  wrap.appendChild(createMetricsStrip(stats));
 
   const grid = el('div', 'kv-grid');
   grid.appendChild(
-    createKvTableCard(`Primary: ${report.primary.selector}`, [
+    createKvSection(`Primary: ${report.primary.selector}`, [
       [
         'viewport rect',
         `${report.primary.left}, ${report.primary.top} (${report.primary.width}×${report.primary.height})`,
@@ -768,7 +757,7 @@ function renderMeasureView(data: Record<string, unknown>): HTMLElement {
   );
   if (report.secondary) {
     grid.appendChild(
-      createKvTableCard(`Secondary: ${report.secondary.selector}`, [
+      createKvSection(`Secondary: ${report.secondary.selector}`, [
         [
           'viewport rect',
           `${report.secondary.left}, ${report.secondary.top} (${report.secondary.width}×${report.secondary.height})`,
@@ -797,23 +786,25 @@ function renderResponsiveView(data: Record<string, unknown>): HTMLElement {
       el(
         'div',
         'empty-state',
-        'Select presets or a custom viewport size and click Open Responsive Windows to launch measured preview windows.',
+        'Select presets or a custom viewport size and open preview windows to compare layouts and synchronize scrolling.',
       ),
     );
     return wrap;
   }
 
-  const card = el('div', 'card');
-  const hdr = el('div', 'card-header');
-  hdr.appendChild(el('h3', 'card-title', `Managed Responsive Windows (${session.windows.length})`));
+  const block = el('div', 'flat-block');
+  const hdr = el('div', 'block-heading');
+  hdr.appendChild(
+    el('h3', 'block-title', `Managed Responsive Windows (${session.windows.length})`),
+  );
   hdr.appendChild(
     el(
       'span',
-      session.syncEnabled ? 'pill success' : 'pill',
+      session.syncEnabled ? 'tag positive' : 'tag',
       session.syncEnabled ? 'Scroll Sync Active' : 'Scroll Sync Off',
     ),
   );
-  card.appendChild(hdr);
+  block.appendChild(hdr);
 
   const scroll = el('div', 'table-scroll');
   const table = el('table', 'kv-table');
@@ -855,7 +846,7 @@ function renderResponsiveView(data: Record<string, unknown>): HTMLElement {
     stTd.appendChild(
       el(
         'span',
-        w.sizeConstrainedByBrowser ? 'pill warning' : 'pill success',
+        w.sizeConstrainedByBrowser ? 'tag warning' : 'tag positive',
         w.sizeConstrainedByBrowser ? 'OS Min-Width Constrained' : 'Exact Match',
       ),
     );
@@ -864,8 +855,8 @@ function renderResponsiveView(data: Record<string, unknown>): HTMLElement {
   }
   table.appendChild(tbody);
   scroll.appendChild(table);
-  card.appendChild(scroll);
-  wrap.appendChild(card);
+  block.appendChild(scroll);
+  wrap.appendChild(block);
   return wrap;
 }
 
@@ -877,18 +868,14 @@ function renderDesignReviewView(
   const report = data['report'] as DesignReviewReport | undefined;
   if (!report) {
     wrap.appendChild(
-      el(
-        'div',
-        'empty-state',
-        'Run Design Review to audit hierarchy, spacing, and WCAG contrast locally.',
-      ),
+      el('div', 'empty-state', 'Run Design Review to audit hierarchy, spacing, and WCAG contrast.'),
     );
     return wrap;
   }
 
   wrap.appendChild(el('div', 'notice-bar', report.methodologyDisclaimer));
   wrap.appendChild(
-    createStatStrip([
+    createMetricsStrip([
       { label: 'Total Findings', value: String(report.findings.length) },
       { label: 'Contrast Failures', value: String(report.metrics.contrastFailuresCount) },
       { label: 'Heading Scale', value: `${report.metrics.headingScaleRatio}x` },
@@ -911,29 +898,30 @@ function renderDesignReviewView(
         continue;
       }
       wrap.appendChild(
-        el('div', 'rail-group-label', `${severity.toUpperCase()} IMPACT (${grouped.length})`),
+        el(
+          'div',
+          'rail-group-label',
+          `${severity[0]?.toUpperCase() ?? ''}${severity.slice(1)} impact (${grouped.length})`,
+        ),
       );
       for (const f of grouped) {
-        const card = el('div', `finding-card sev-${f.severity}`);
-        const hdr = el('div', 'card-header');
-        hdr.style.marginBottom = '0';
+        const card = el('div', `finding-row sev-${f.severity}`);
+        const hdr = el('div', 'block-heading');
         hdr.appendChild(el('strong', undefined, f.title));
-        const pillClass =
+        const tagClass =
           f.severity === 'high'
-            ? 'pill danger'
+            ? 'tag danger'
             : f.severity === 'medium'
-              ? 'pill warning'
-              : 'pill accent';
-        hdr.appendChild(
-          el('span', pillClass, `${f.severity.toUpperCase()} · ${f.category.replace('_', ' ')}`),
-        );
+              ? 'tag warning'
+              : 'tag accent';
+        hdr.appendChild(el('span', tagClass, `${f.severity} · ${f.category.replace(/_/g, ' ')}`));
         card.appendChild(hdr);
         card.appendChild(el('div', 'muted', `Evidence: ${f.evidence}`));
         card.appendChild(el('div', undefined, `Suggested fix: ${f.suggestion}`));
         if (f.affectedSelectors.length > 0) {
           const selRow = el('div', 'control-row');
           for (const s of f.affectedSelectors.slice(0, 6)) {
-            selRow.appendChild(el('span', 'pill mono', s));
+            selRow.appendChild(el('span', 'tag mono', s));
           }
           card.appendChild(selRow);
         }
@@ -943,7 +931,7 @@ function renderDesignReviewView(
   }
 
   if (report.localFixPrompt) {
-    const promptBtn = el('button', 'secondary sm', 'Copy Local Remediation Prompt');
+    const promptBtn = el('button', 'secondary sm', 'Copy Remediation Prompt');
     promptBtn.type = 'button';
     promptBtn.addEventListener('click', () => {
       callbacks.onCopyText(report.localFixPrompt, 'remediation prompt');
@@ -972,7 +960,7 @@ function renderTechStackView(data: Record<string, unknown>): HTMLElement {
       el(
         'div',
         'empty-state',
-        'No public framework, CSS library, CMS, or analytics markers were detected on this page. Custom or stripped production bundles often leave no detectable client-side markers.',
+        'No public framework, CSS library, CMS, or analytics markers were detected on this page.',
       ),
     );
     return wrap;
@@ -980,34 +968,34 @@ function renderTechStackView(data: Record<string, unknown>): HTMLElement {
 
   const grid = el('div', 'kv-grid');
   for (const det of report.detections) {
-    const card = el('div', 'card');
-    const hdr = el('div', 'card-header');
-    hdr.appendChild(el('h3', 'card-title', det.technology));
-    const pills = el('div', 'control-row');
-    pills.appendChild(el('span', 'pill', det.category.replace(/_/g, ' ')));
-    pills.appendChild(
+    const box = el('div', 'kv-section');
+    const hdr = el('div', 'block-heading');
+    hdr.appendChild(el('h3', 'block-title', det.technology));
+    const tags = el('div', 'control-row');
+    tags.appendChild(el('span', 'tag', det.category.replace(/_/g, ' ')));
+    tags.appendChild(
       el(
         'span',
         det.confidence === 'high'
-          ? 'pill success'
+          ? 'tag positive'
           : det.confidence === 'medium'
-            ? 'pill accent'
-            : 'pill warning',
+            ? 'tag accent'
+            : 'tag warning',
         `${det.confidence} confidence`,
       ),
     );
-    hdr.appendChild(pills);
-    card.appendChild(hdr);
+    hdr.appendChild(tags);
+    box.appendChild(hdr);
 
     const list = el('ul');
-    list.style.margin = '0 0 8px';
+    list.style.margin = '0 0 6px';
     list.style.paddingLeft = '18px';
     for (const ev of det.evidence) {
       list.appendChild(el('li', 'mono', ev));
     }
-    card.appendChild(list);
-    card.appendChild(el('div', 'muted', `Uncertainty: ${det.uncertaintyNote}`));
-    grid.appendChild(card);
+    box.appendChild(list);
+    box.appendChild(el('div', 'muted', `Uncertainty: ${det.uncertaintyNote}`));
+    grid.appendChild(box);
   }
   wrap.appendChild(grid);
   return wrap;
@@ -1024,7 +1012,7 @@ function renderEditPreviewView(tool: ToolId, data: Record<string, unknown>): HTM
     ),
   );
   wrap.appendChild(
-    createStatStrip([
+    createMetricsStrip([
       { label: 'Preview Action', value: tool.replace('_', ' ') },
       { label: 'Undo Steps', value: String(history?.undoCount ?? 0) },
       { label: 'Redo Steps', value: String(history?.redoCount ?? 0) },
@@ -1046,14 +1034,14 @@ function renderCaptureSummaryView(data: Record<string, unknown>): HTMLElement {
       el(
         'div',
         'notice-bar',
-        'Supported capture limits: up to 32,768px canvas height/width (16,383px max for WebP), 40 full-page tiles, and 550ms inter-tile pacing.',
+        'Capture limits: up to 32,768px canvas dimensions (16,383px max for WebP), 40 full-page tiles, and 550ms inter-tile pacing.',
       ),
     );
     return wrap;
   }
 
   wrap.appendChild(
-    createStatStrip([
+    createMetricsStrip([
       { label: 'Resolution', value: `${verified.width} × ${verified.height} px` },
       { label: 'Format', value: verified.mimeType },
       { label: 'File Size', value: `${(verified.byteLength / 1024).toFixed(1)} KiB` },
@@ -1064,8 +1052,8 @@ function renderCaptureSummaryView(data: Record<string, unknown>): HTMLElement {
     wrap.appendChild(
       el(
         'div',
-        'status-banner warning',
-        'Nested scroll container detected — full-page scrolling stopped early at the document scroll boundary.',
+        'status-line warning',
+        'Nested scroll container detected — full-page scrolling stopped at the document scroll boundary.',
       ),
     );
   }
@@ -1088,11 +1076,7 @@ export function renderStructuredToolResult(
       wrap.appendChild(
         md
           ? renderSafeMarkdownPreview(md)
-          : el(
-              'div',
-              'empty-state',
-              'Run Design MD to generate a structured design-system specification.',
-            ),
+          : el('div', 'empty-state', 'Run Design MD to generate a structured design-system file.'),
       );
       return wrap;
     }
@@ -1105,7 +1089,7 @@ export function renderStructuredToolResult(
           : el(
               'div',
               'empty-state',
-              'Run Clone Prompt to generate a structured local implementation prompt.',
+              'Run Clone Prompt to generate a structured implementation brief.',
             ),
       );
       return wrap;

@@ -35,7 +35,7 @@ function setBanner(message: string, tone: 'neutral' | 'success' | 'error' = 'neu
     return;
   }
   el.textContent = message;
-  el.className = tone === 'neutral' ? 'status-banner' : `status-banner ${tone}`;
+  el.className = tone === 'neutral' ? 'status-line' : `status-line ${tone}`;
 }
 
 function formatBytes(bytes: number): string {
@@ -78,13 +78,15 @@ async function loadOptionsState(): Promise<void> {
   ]);
 
   if (settingsRes.ok) {
-    const s = (settingsRes.data as { settings: Record<string, string> }).settings;
+    const s = (settingsRes.data as { settings: Record<string, unknown> }).settings;
     const themeSel = document.getElementById('opt-theme') as HTMLSelectElement | null;
     const exportSel = document.getElementById('opt-export-format') as HTMLSelectElement | null;
     const colorSel = document.getElementById('opt-color-format') as HTMLSelectElement | null;
     const twSel = document.getElementById('opt-tailwind-version') as HTMLSelectElement | null;
     const promptSel = document.getElementById('opt-prompt-target') as HTMLSelectElement | null;
     const modelInput = document.getElementById('opt-nvidia-model') as HTMLInputElement | null;
+    const recordCheck = document.getElementById('opt-record-history') as HTMLInputElement | null;
+    const retentionSel = document.getElementById('opt-retention-days') as HTMLSelectElement | null;
 
     const themePref: ThemePreference =
       s['theme'] === 'light' || s['theme'] === 'dark' || s['theme'] === 'system'
@@ -94,20 +96,26 @@ async function loadOptionsState(): Promise<void> {
     if (themeSel) {
       themeSel.value = themePref;
     }
-    if (exportSel && s['defaultExportFormat']) {
+    if (exportSel && typeof s['defaultExportFormat'] === 'string') {
       exportSel.value = s['defaultExportFormat'];
     }
-    if (colorSel && s['colorFormat']) {
+    if (colorSel && typeof s['colorFormat'] === 'string') {
       colorSel.value = s['colorFormat'];
     }
-    if (twSel && s['tailwindVersion']) {
+    if (twSel && typeof s['tailwindVersion'] === 'string') {
       twSel.value = s['tailwindVersion'];
     }
-    if (promptSel && s['defaultPromptTarget']) {
+    if (promptSel && typeof s['defaultPromptTarget'] === 'string') {
       promptSel.value = s['defaultPromptTarget'];
     }
     if (modelInput && typeof s['nvidiaModelId'] === 'string') {
       modelInput.value = s['nvidiaModelId'];
+    }
+    if (recordCheck && typeof s['recordActivityHistory'] === 'boolean') {
+      recordCheck.checked = s['recordActivityHistory'];
+    }
+    if (retentionSel && typeof s['activityRetentionDays'] === 'number') {
+      retentionSel.value = String(s['activityRetentionDays']);
     }
   }
 
@@ -117,7 +125,7 @@ async function loadOptionsState(): Promise<void> {
     keyStatusEl.textContent = st.hasSessionKey
       ? `Status: Active in session (${st.maskedPreview ?? 'masked'})`
       : 'Status: No API key set';
-    keyStatusEl.className = st.hasSessionKey ? 'pill success' : 'pill';
+    keyStatusEl.className = st.hasSessionKey ? 'tag positive' : 'tag';
   }
 
   if (usageRes.ok) {
@@ -127,18 +135,21 @@ async function loadOptionsState(): Promise<void> {
           projectCount: number;
           artifactCount: number;
           captureCount: number;
-          estimatedBytes: number;
+          activityCount?: number;
+          usedBytes: number;
         };
       }
     ).usage;
     const projEl = document.getElementById('stat-projects');
     const artEl = document.getElementById('stat-artifacts');
     const capEl = document.getElementById('stat-captures');
+    const actEl = document.getElementById('stat-activities');
     const bytesEl = document.getElementById('stat-bytes');
     if (projEl) projEl.textContent = String(usage.projectCount);
     if (artEl) artEl.textContent = String(usage.artifactCount);
     if (capEl) capEl.textContent = String(usage.captureCount);
-    if (bytesEl) bytesEl.textContent = formatBytes(usage.estimatedBytes);
+    if (actEl) actEl.textContent = String(usage.activityCount ?? 0);
+    if (bytesEl) bytesEl.textContent = formatBytes(usage.usedBytes);
     if (outputEl) {
       outputEl.textContent = JSON.stringify(usageRes.data, null, 2);
     }
@@ -161,6 +172,70 @@ function initOptionsPage(): void {
     });
   });
 
+  document.getElementById('opt-record-history')?.addEventListener('change', (event) => {
+    const enabled = (event.target as HTMLInputElement).checked;
+    void sendOptionsMessage('UPDATE_SETTINGS', {
+      settings: { recordActivityHistory: enabled },
+    }).then((res) => {
+      if (res.ok) {
+        setBanner(
+          enabled
+            ? 'Local PageSift activity recording enabled.'
+            : 'Local PageSift activity recording paused. Future actions will not be recorded.',
+          'success',
+        );
+      }
+    });
+  });
+
+  document.getElementById('opt-retention-days')?.addEventListener('change', (event) => {
+    const days = Number.parseInt((event.target as HTMLSelectElement).value, 10);
+    if (!Number.isFinite(days)) {
+      return;
+    }
+    void sendOptionsMessage('UPDATE_SETTINGS', {
+      settings: { activityRetentionDays: days },
+    }).then((res) => {
+      if (res.ok) {
+        setBanner(`Activity history retention updated to ${days} days.`, 'success');
+      }
+    });
+  });
+
+  document.getElementById('prune-history-btn')?.addEventListener('click', () => {
+    void (async () => {
+      const res = await sendOptionsMessage('PRUNE_ACTIVITY_HISTORY');
+      if (outputEl) {
+        outputEl.textContent = JSON.stringify(res, null, 2);
+      }
+      if (res.ok) {
+        const count = (res.data as { deletedCount: number }).deletedCount;
+        setBanner(`Retention cleanup removed ${count} older activity entries.`, 'success');
+        await loadOptionsState();
+      } else {
+        setBanner(`Cleanup failed: ${res.error.message}`, 'error');
+      }
+    })();
+  });
+
+  document.getElementById('clear-history-btn')?.addEventListener('click', () => {
+    void (async () => {
+      const res = await sendOptionsMessage('CLEAR_ACTIVITY_HISTORY');
+      if (outputEl) {
+        outputEl.textContent = JSON.stringify(res, null, 2);
+      }
+      if (res.ok) {
+        setBanner(
+          'Cleared local activity history. Saved projects and artifacts were kept.',
+          'success',
+        );
+        await loadOptionsState();
+      } else {
+        setBanner(`Clear history failed: ${res.error.message}`, 'error');
+      }
+    })();
+  });
+
   document.getElementById('save-settings-btn')?.addEventListener('click', () => {
     void (async () => {
       const themeSel = document.getElementById('opt-theme') as HTMLSelectElement | null;
@@ -169,6 +244,10 @@ function initOptionsPage(): void {
       const twSel = document.getElementById('opt-tailwind-version') as HTMLSelectElement | null;
       const promptSel = document.getElementById('opt-prompt-target') as HTMLSelectElement | null;
       const modelInput = document.getElementById('opt-nvidia-model') as HTMLInputElement | null;
+      const recordCheck = document.getElementById('opt-record-history') as HTMLInputElement | null;
+      const retentionSel = document.getElementById(
+        'opt-retention-days',
+      ) as HTMLSelectElement | null;
 
       const theme = (themeSel?.value as ThemePreference | undefined) ?? 'system';
       applyThemePreference(theme);
@@ -181,6 +260,8 @@ function initOptionsPage(): void {
           tailwindVersion: twSel?.value ?? 'v4',
           defaultPromptTarget: promptSel?.value ?? 'react_tailwind',
           nvidiaModelId: modelInput?.value.trim() ?? '',
+          recordActivityHistory: recordCheck?.checked ?? true,
+          activityRetentionDays: Number.parseInt(retentionSel?.value ?? '90', 10) || 90,
         },
       });
       if (outputEl) {
@@ -293,7 +374,7 @@ function initOptionsPage(): void {
     }
     void file.text().then((text) => {
       backupArea.value = text;
-      setBanner(`Loaded ${file.name} into backup editor. Click Import JSON Backup to restore.`);
+      setBanner(`Loaded ${file.name} into backup editor. Click Import Backup to restore.`);
     });
   });
 

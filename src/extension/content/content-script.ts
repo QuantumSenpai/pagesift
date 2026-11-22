@@ -37,9 +37,15 @@ import {
   type RuntimeMessageEnvelope,
   type ToolId,
 } from '../protocol/messages.js';
+import {
+  OnPageOverlayDashboard,
+  type OverlaySiteActivityItem,
+  type OverlayToolSummary,
+} from './overlay-dashboard.js';
 
 interface ChromeRuntimeLike {
   id?: string;
+  getURL?: (path: string) => string;
   onMessage?: {
     addListener: (
       cb: (
@@ -73,6 +79,7 @@ const UNBOUND_CONTENT_OPERATIONS = new Set<MessageOperation>([
   'SYNC_SCROLL',
   'CANCEL_JOB',
   'CAPTURE_RESTORE',
+  'TOGGLE_OVERLAY_DASHBOARD',
 ]);
 
 function uint8ToBase64(bytes: Uint8Array): string {
@@ -102,6 +109,8 @@ export class ContentScriptRuntime {
   private selectedElement: Element | null = null;
   private secondaryElement: Element | null = null;
   private overlayHost: HTMLElement | null = null;
+  private overlayShadow: ShadowRoot | null = null;
+  private overlayDashboard: OnPageOverlayDashboard | null = null;
   private hoverBox: HTMLElement | null = null;
   private hoverBadge: HTMLElement | null = null;
   private selectedBox: HTMLElement | null = null;
@@ -110,6 +119,7 @@ export class ContentScriptRuntime {
   private measureBadge: HTMLElement | null = null;
   private onPageDock: HTMLElement | null = null;
   private dockStatusEl: HTMLElement | null = null;
+  private restoreOverlayAfterPick = false;
   private rafPending = false;
   private lastPointerTarget: Element | null = null;
   private readonly activeAbortControllers = new Map<string, AbortController>();
@@ -154,8 +164,22 @@ export class ContentScriptRuntime {
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape' && this.activeTool !== null) {
-      this.deactivateInteractiveTools();
+    if (event.key !== 'Escape') {
+      return;
+    }
+    if (this.activeTool !== null) {
+      const shouldRestore = this.restoreOverlayAfterPick;
+      this.restoreOverlayAfterPick = false;
+      this.stopInteractivePickerOnly();
+      if (shouldRestore && this.overlayDashboard) {
+        this.overlayDashboard.openExpanded();
+      } else if (!this.overlayDashboard || this.overlayDashboard.getMode() === 'closed') {
+        this.deactivateInteractiveTools();
+      }
+      return;
+    }
+    if (this.overlayDashboard && this.overlayDashboard.getMode() !== 'closed') {
+      this.closeOverlayAndHost();
     }
   };
 
@@ -249,6 +273,25 @@ export class ContentScriptRuntime {
       this.selectedElement = target;
     }
     this.scheduleOverlayUpdate(target);
+
+    if (this.restoreOverlayAfterPick && this.overlayDashboard) {
+      const pickedTool = this.activeTool;
+      const shouldCompleteMeasure = pickedTool !== 'measure' || this.secondaryElement !== null;
+      if (shouldCompleteMeasure) {
+        this.restoreOverlayAfterPick = false;
+        this.stopInteractivePickerOnly();
+        void this.executeOverlayTool(pickedTool).then((summary) => {
+          this.overlayDashboard?.openExpanded();
+          if (summary) {
+            this.overlayDashboard?.showResultSummary(summary);
+          }
+        });
+      } else {
+        this.overlayDashboard.setMinimizedStatus(
+          `1st: ${buildShortSelector(target)} · Click 2nd element`,
+        );
+      }
+    }
   };
 
   private scheduleOverlayUpdate(target: Element): void {
@@ -366,8 +409,8 @@ export class ContentScriptRuntime {
     hoverBox.style.position = 'fixed';
     hoverBox.style.top = '0';
     hoverBox.style.left = '0';
-    hoverBox.style.border = '1.5px dashed #14b8a6';
-    hoverBox.style.backgroundColor = 'rgba(20, 184, 166, 0.1)';
+    hoverBox.style.border = '1.5px dashed #2972ff';
+    hoverBox.style.backgroundColor = 'rgba(0, 87, 255, 0.1)';
     hoverBox.style.pointerEvents = 'none';
     hoverBox.style.boxSizing = 'border-box';
     hoverBox.style.display = 'none';
@@ -377,10 +420,10 @@ export class ContentScriptRuntime {
     hoverBadge.style.position = 'absolute';
     hoverBadge.style.top = '-24px';
     hoverBadge.style.left = '0';
-    hoverBadge.style.backgroundColor = '#0f172a';
-    hoverBadge.style.color = '#f8fafc';
-    hoverBadge.style.border = '1px solid #14b8a6';
-    hoverBadge.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+    hoverBadge.style.backgroundColor = '#00001e';
+    hoverBadge.style.color = '#f4f6fb';
+    hoverBadge.style.border = '1px solid #2972ff';
+    hoverBadge.style.fontFamily = '"IBM Plex Mono", ui-monospace, monospace';
     hoverBadge.style.fontSize = '11px';
     hoverBadge.style.padding = '2px 6px';
     hoverBadge.style.borderRadius = '4px';
@@ -392,10 +435,10 @@ export class ContentScriptRuntime {
     selectedBox.style.position = 'fixed';
     selectedBox.style.top = '0';
     selectedBox.style.left = '0';
-    selectedBox.style.border = '2px solid #2dd4bf';
+    selectedBox.style.border = '2px solid #0057ff';
     selectedBox.style.boxShadow =
-      '0 0 0 1px rgba(15, 23, 42, 0.85), inset 0 0 0 1px rgba(15, 23, 42, 0.45)';
-    selectedBox.style.backgroundColor = 'rgba(45, 212, 191, 0.14)';
+      '0 0 0 1px rgba(244, 246, 251, 0.9), inset 0 0 0 1px rgba(0, 0, 30, 0.5)';
+    selectedBox.style.backgroundColor = 'rgba(0, 87, 255, 0.12)';
     selectedBox.style.pointerEvents = 'none';
     selectedBox.style.boxSizing = 'border-box';
     selectedBox.style.display = 'none';
@@ -405,11 +448,10 @@ export class ContentScriptRuntime {
     selectedBadge.style.position = 'absolute';
     selectedBadge.style.top = '-24px';
     selectedBadge.style.left = '0';
-    selectedBadge.style.backgroundColor = '#0f172a';
-    selectedBadge.style.color = '#f8fafc';
-    selectedBadge.style.border = '1px solid #2dd4bf';
-    selectedBadge.style.boxShadow = '0 4px 12px rgba(2, 6, 23, 0.45)';
-    selectedBadge.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+    selectedBadge.style.backgroundColor = '#00001e';
+    selectedBadge.style.color = '#f4f6fb';
+    selectedBadge.style.border = '1px solid #0057ff';
+    selectedBadge.style.fontFamily = '"IBM Plex Mono", ui-monospace, monospace';
     selectedBadge.style.fontSize = '11px';
     selectedBadge.style.fontWeight = '600';
     selectedBadge.style.padding = '2px 7px';
@@ -427,9 +469,9 @@ export class ContentScriptRuntime {
 
     const measureBadge = this.doc.createElement('div');
     measureBadge.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
-    measureBadge.style.backgroundColor = '#0f172a';
-    measureBadge.style.color = '#2dd4bf';
-    measureBadge.style.border = '1px solid #14b8a6';
+    measureBadge.style.backgroundColor = '#00001e';
+    measureBadge.style.color = '#74a6ff';
+    measureBadge.style.border = '1px solid #0057ff';
     measureBadge.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
     measureBadge.style.fontSize = '11px';
     measureBadge.style.fontWeight = '600';
@@ -535,6 +577,7 @@ export class ContentScriptRuntime {
     this.doc.documentElement.appendChild(host);
 
     this.overlayHost = host;
+    this.overlayShadow = shadow;
     this.hoverBox = hoverBox;
     this.hoverBadge = hoverBadge;
     this.selectedBox = selectedBox;
@@ -546,9 +589,438 @@ export class ContentScriptRuntime {
     this.updateOnPageDockState();
   }
 
+  private ensureOverlayDashboard(): OnPageOverlayDashboard {
+    this.ensureOverlayDom();
+    if (!this.overlayShadow) {
+      throw new Error('Overlay shadow root unavailable');
+    }
+    if (!this.overlayDashboard) {
+      const chromeApi = (globalThis as unknown as { chrome?: { runtime?: ChromeRuntimeLike } })
+        .chrome;
+      this.overlayDashboard = new OnPageOverlayDashboard(this.doc, this.overlayShadow, {
+        getPageInfo: () => ({
+          title: this.doc.title || 'Untitled Page',
+          url: this.doc.location.href,
+          hostname: this.doc.location.hostname || 'local',
+        }),
+        getResourceUrl: (relPath) =>
+          chromeApi?.runtime?.getURL ? chromeApi.runtime.getURL(relPath) : null,
+        onRunOverlayTool: (tool) => this.executeOverlayTool(tool),
+        onStartPickerForTool: (tool) => {
+          this.restoreOverlayAfterPick = true;
+          this.activeTool = tool;
+          if (this.onPageDock) {
+            this.onPageDock.style.display = 'none';
+          }
+          this.doc.addEventListener('mousemove', this.handlePointerMove, true);
+          this.doc.addEventListener('click', this.handleClick, true);
+        },
+        onOpenFullDashboard: async (opts) => {
+          if (!this.adapters.sendBackgroundMessage) {
+            return;
+          }
+          await this.adapters
+            .sendBackgroundMessage({
+              schemaVersion: 1,
+              requestId: `open-dash-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              operation: 'OPEN_FULL_DASHBOARD',
+              documentId: this.documentId,
+              payload: {
+                ...(opts?.tool ? { tool: opts.tool } : {}),
+                ...(opts?.autorun ? { autorun: true } : {}),
+                ...(opts?.section ? { section: opts.section } : {}),
+              },
+            })
+            .catch(() => undefined);
+        },
+        onFetchSiteActivity: async (): Promise<OverlaySiteActivityItem[]> => {
+          if (!this.adapters.sendBackgroundMessage) {
+            return [];
+          }
+          const res = await this.adapters
+            .sendBackgroundMessage({
+              schemaVersion: 1,
+              requestId: `site-hist-${Date.now()}`,
+              operation: 'LIST_SITE_ACTIVITY',
+              documentId: this.documentId,
+              payload: { limit: 6 },
+            })
+            .catch(() => null);
+          if (!res || !res.ok) {
+            return [];
+          }
+          const data = res.data as { items?: OverlaySiteActivityItem[] };
+          return Array.isArray(data.items) ? data.items : [];
+        },
+        onCloseOverlay: () => {
+          this.closeOverlayAndHost();
+        },
+      });
+    }
+    return this.overlayDashboard;
+  }
+
+  private async syncOverlayThemeFromSettings(): Promise<void> {
+    if (!this.adapters.sendBackgroundMessage || !this.overlayDashboard) {
+      return;
+    }
+    try {
+      const res = await this.adapters.sendBackgroundMessage({
+        schemaVersion: 1,
+        requestId: `overlay-theme-${Date.now()}`,
+        operation: 'GET_SETTINGS',
+        payload: {},
+      });
+      if (res.ok) {
+        const theme = (res.data as { settings?: { theme?: string } }).settings?.theme;
+        if (theme === 'light') {
+          this.overlayDashboard.setTheme('light');
+        } else if (theme === 'dark') {
+          this.overlayDashboard.setTheme('dark');
+        } else {
+          const prefersDark =
+            typeof this.win.matchMedia === 'function'
+              ? this.win.matchMedia('(prefers-color-scheme: dark)').matches
+              : true;
+          this.overlayDashboard.setTheme(prefersDark ? 'dark' : 'light');
+        }
+      }
+    } catch {
+      return;
+    }
+  }
+
+  public toggleOverlayDashboard(
+    mode: 'toggle' | 'open' | 'close' | 'minimize' = 'toggle',
+  ): 'expanded' | 'minimized' | 'closed' {
+    const currentMode = this.overlayDashboard?.getMode() ?? 'closed';
+    if (mode === 'close' || (mode === 'toggle' && currentMode !== 'closed')) {
+      this.closeOverlayAndHost();
+      return 'closed';
+    }
+    const dash = this.ensureOverlayDashboard();
+    if (this.onPageDock) {
+      this.onPageDock.style.display = 'none';
+    }
+    void this.syncOverlayThemeFromSettings();
+    if (mode === 'minimize') {
+      dash.minimize(this.doc.location.hostname || 'PageSift');
+      return 'minimized';
+    }
+    dash.openExpanded();
+    return 'expanded';
+  }
+
+  private stopInteractivePickerOnly(): void {
+    this.activeTool = null;
+    this.lastPointerTarget = null;
+    this.doc.removeEventListener('mousemove', this.handlePointerMove, true);
+    this.doc.removeEventListener('click', this.handleClick, true);
+    if (this.hoverBox) this.hoverBox.style.display = 'none';
+    if (this.selectedBox) this.selectedBox.style.display = 'none';
+    if (this.measureLineBox) this.measureLineBox.style.display = 'none';
+  }
+
+  private closeOverlayAndHost(): void {
+    this.restoreOverlayAfterPick = false;
+    this.overlayDashboard?.close();
+    this.overlayDashboard = null;
+    this.deactivateInteractiveTools();
+  }
+
+  private async recordOverlayActivity(params: {
+    activityId: string;
+    tool: ToolId;
+    actionLabel: string;
+    status: 'completed' | 'failed';
+    durationMs: number;
+    optionsSummary?: Record<string, unknown>;
+    resultSummary: string;
+    errorCategory?: string;
+  }): Promise<void> {
+    if (!this.adapters.sendBackgroundMessage) {
+      return;
+    }
+    await this.adapters
+      .sendBackgroundMessage({
+        schemaVersion: 1,
+        requestId: `rec-act-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        operation: 'RECORD_LOCAL_ACTIVITY',
+        documentId: this.documentId,
+        payload: {
+          activityId: params.activityId,
+          tool: params.tool,
+          actionLabel: params.actionLabel,
+          pageTitle: this.doc.title || 'Untitled Page',
+          status: params.status,
+          durationMs: Math.max(0, Math.round(params.durationMs)),
+          ...(params.optionsSummary ? { optionsSummary: params.optionsSummary } : {}),
+          resultSummary: params.resultSummary,
+          ...(params.errorCategory ? { errorCategory: params.errorCategory } : {}),
+        },
+      })
+      .catch(() => undefined);
+  }
+
+  private async executeOverlayTool(tool: ToolId): Promise<OverlayToolSummary | null> {
+    const startMono = performance.now();
+    const activityId = `ov-${tool}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    try {
+      if (tool === 'inspect') {
+        const target = this.resolveTargetElement();
+        const report = inspectElement(target, this.win);
+        const summaryText = `${report.selector} · ${Math.round(report.boundingBox.width)}×${Math.round(report.boundingBox.height)}px · ${report.typography.fontSize} ${report.typography.fontFamily.split(',')[0] ?? ''}`;
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Inspect Element',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          optionsSummary: { selector: report.selector },
+          resultSummary: summaryText,
+        });
+        return {
+          tool,
+          title: `Inspected ${report.selector}`,
+          summary: summaryText,
+          copyableText: report.safeHtml,
+        };
+      }
+      if (tool === 'measure') {
+        const primary = this.resolveTargetElement();
+        const report = measureElements(primary, this.secondaryElement, this.win);
+        const summaryText = report.distance
+          ? `${report.primary.selector} → ${report.secondary?.selector ?? ''}: ${report.distance.horizontalGap}px H, ${report.distance.verticalGap}px V`
+          : `${report.primary.selector}: ${report.primary.width}×${report.primary.height}px`;
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Measure Elements',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          optionsSummary: { primarySelector: report.primary.selector },
+          resultSummary: summaryText,
+        });
+        return {
+          tool,
+          title: 'Measurement',
+          summary: summaryText,
+          copyableText: JSON.stringify(report, null, 2),
+        };
+      }
+      if (tool === 'colors') {
+        const report = extractPageColors(this.doc, this.win);
+        const summaryText = `${report.colors.length} colors, ${report.customProperties.length} CSS variables, ${report.gradients.length} gradients`;
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Extract Colors',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          optionsSummary: { format: 'cssVariables' },
+          resultSummary: summaryText,
+        });
+        return {
+          tool,
+          title: 'Color Palette',
+          summary: summaryText,
+          copyableText: report.exports.cssVariables,
+          downloadFilename: 'pagesift-colors.css',
+          downloadMime: 'text/css;charset=utf-8',
+          downloadText: report.exports.cssVariables,
+        };
+      }
+      if (tool === 'fonts') {
+        const report = extractPageFonts(this.doc, this.win);
+        const topFam = report.families
+          .slice(0, 3)
+          .map((f) => f.primaryFamily)
+          .join(', ');
+        const summaryText = `${report.families.length} families (${topFam || 'system'}), ${report.fontFaceDeclarations.length} @font-face rules`;
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Inspect Fonts',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          resultSummary: summaryText,
+        });
+        return {
+          tool,
+          title: 'Typography',
+          summary: summaryText,
+          copyableText: JSON.stringify(report, null, 2),
+        };
+      }
+      if (tool === 'design_md') {
+        const snap = extractPageDesignSnapshot(this.doc, this.win);
+        const res = generateDesignMdFromPages([snap]);
+        const summaryText = `Generated DESIGN.md (${res.markdown.length.toLocaleString()} chars)`;
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Generate DESIGN.md',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          resultSummary: summaryText,
+        });
+        return {
+          tool,
+          title: 'DESIGN.md Ready',
+          summary: summaryText,
+          copyableText: res.markdown,
+          downloadFilename: 'DESIGN.md',
+          downloadMime: 'text/markdown;charset=utf-8',
+          downloadText: res.markdown,
+        };
+      }
+      if (tool === 'clone_prompt') {
+        const report = generateLocalClonePrompt(this.doc, this.win, 'react_tailwind');
+        const summaryText = `Generated React + Tailwind brief (${report.prompt.length.toLocaleString()} chars)`;
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Generate Clone Prompt',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          optionsSummary: { targetFramework: 'react_tailwind' },
+          resultSummary: summaryText,
+        });
+        return {
+          tool,
+          title: 'Clone Prompt Ready',
+          summary: summaryText,
+          copyableText: report.prompt,
+          downloadFilename: 'pagesift-clone-prompt.md',
+          downloadMime: 'text/markdown;charset=utf-8',
+          downloadText: report.prompt,
+        };
+      }
+      if (tool === 'design_review') {
+        const report = runLocalDesignReview(this.doc, this.win);
+        const summaryText = `${report.findings.length} findings (${report.metrics.contrastFailuresCount} contrast issues)`;
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Design Review',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          resultSummary: summaryText,
+        });
+        return {
+          tool,
+          title: 'Design Review',
+          summary: summaryText,
+          copyableText: report.localFixPrompt,
+        };
+      }
+      if (tool === 'tech_stack') {
+        const report = detectPageTechStack(this.doc);
+        const names = report.detections.map((d) => d.technology).join(', ');
+        const summaryText =
+          report.detections.length > 0
+            ? `Detected ${report.detections.length}: ${names}`
+            : 'No public frontend markers detected on this page';
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Detect Tech Stack',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          resultSummary: summaryText,
+        });
+        return {
+          tool,
+          title: 'Tech Stack',
+          summary: summaryText,
+          copyableText: JSON.stringify(report, null, 2),
+        };
+      }
+      if (tool === 'edit_text') {
+        const target = this.resolveTargetElement();
+        const selector = buildShortSelector(target);
+        this.editController.applyTextEdit(
+          target,
+          `${(target.textContent || 'Preview').trim()} (Preview)`,
+        );
+        const summaryText = `Previewed text edit on ${selector} (reversible)`;
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Edit Text Preview',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          optionsSummary: { selector },
+          resultSummary: summaryText,
+        });
+        return { tool, title: 'Edit Text Preview', summary: summaryText };
+      }
+      if (tool === 'swap_font') {
+        const target = this.resolveTargetElement();
+        const selector = buildShortSelector(target);
+        this.editController.applyFontSwap({
+          target,
+          scope: 'element',
+          fontFamily: 'Georgia, serif',
+        });
+        const summaryText = `Swapped font on ${selector} to Georgia, serif (reversible)`;
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Swap Font Preview',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          optionsSummary: { selector, fontFamily: 'Georgia, serif' },
+          resultSummary: summaryText,
+        });
+        return { tool, title: 'Swap Font Preview', summary: summaryText };
+      }
+      if (tool === 'arrange') {
+        const target = this.resolveTargetElement();
+        const selector = buildShortSelector(target);
+        this.editController.applyArrangeMutation({
+          target,
+          action: 'move',
+          dx: 16,
+          dy: 16,
+        });
+        const summaryText = `Moved ${selector} by +16px (reversible)`;
+        await this.recordOverlayActivity({
+          activityId,
+          tool,
+          actionLabel: 'Arrange Element',
+          status: 'completed',
+          durationMs: performance.now() - startMono,
+          optionsSummary: { selector, action: 'move' },
+          resultSummary: summaryText,
+        });
+        return { tool, title: 'Arrange Preview', summary: summaryText };
+      }
+      return null;
+    } catch (err: unknown) {
+      const msgText = err instanceof Error ? err.message : 'Tool execution failed';
+      await this.recordOverlayActivity({
+        activityId,
+        tool,
+        actionLabel: tool,
+        status: 'failed',
+        durationMs: performance.now() - startMono,
+        resultSummary: msgText,
+        errorCategory: 'TOOL_EXECUTION_ERROR',
+      });
+      return { tool, title: 'Action failed', summary: msgText };
+    }
+  }
+
   public activateInteractiveTool(tool: ToolId): void {
     this.activeTool = tool;
     this.ensureOverlayDom();
+    if (
+      this.onPageDock &&
+      (!this.overlayDashboard || this.overlayDashboard.getMode() === 'closed')
+    ) {
+      this.onPageDock.style.display = 'flex';
+    }
     this.updateOnPageDockState();
     this.doc.addEventListener('mousemove', this.handlePointerMove, true);
     this.doc.addEventListener('click', this.handleClick, true);
@@ -557,12 +1029,16 @@ export class ContentScriptRuntime {
   public deactivateInteractiveTools(): void {
     this.activeTool = null;
     this.lastPointerTarget = null;
+    this.restoreOverlayAfterPick = false;
+    this.overlayDashboard?.close();
+    this.overlayDashboard = null;
     this.doc.removeEventListener('mousemove', this.handlePointerMove, true);
     this.doc.removeEventListener('click', this.handleClick, true);
     if (this.overlayHost && this.overlayHost.isConnected) {
       this.overlayHost.remove();
     }
     this.overlayHost = null;
+    this.overlayShadow = null;
     this.hoverBox = null;
     this.hoverBadge = null;
     this.selectedBox = null;
@@ -692,6 +1168,18 @@ export class ContentScriptRuntime {
             },
             this.documentId,
           );
+
+        case 'TOGGLE_OVERLAY_DASHBOARD': {
+          const reqMode =
+            (msg.payload['mode'] as 'toggle' | 'open' | 'close' | 'minimize' | undefined) ??
+            'toggle';
+          const nextMode = this.toggleOverlayDashboard(reqMode);
+          return createSuccessResponse(
+            msg,
+            { overlayMode: nextMode, documentId: this.documentId },
+            this.documentId,
+          );
+        }
 
         case 'ACTIVATE_TOOL': {
           const tool = (msg.payload['tool'] as ToolId | undefined) ?? 'inspect';

@@ -18,6 +18,12 @@ import type {
   RuntimeMessageEnvelope,
   ToolId,
 } from '../protocol/messages.js';
+import {
+  groupDateLabelForLocalDisplay,
+  sanitizeActivitySourceUrl,
+  type ActivityQueryItem,
+  type ActivityQueryResult,
+} from '../storage/activity-history.js';
 import type { LocalArtifactKind } from '../storage/idb-storage.js';
 import {
   applyThemePreference,
@@ -63,6 +69,8 @@ interface CaptureWorkState {
   annotations: CaptureAnnotation[];
 }
 
+type DashboardSection = 'tools' | 'history' | 'saved';
+
 const TOOL_TITLES: Record<ToolId, string> = {
   inspect: '1. Inspect Element & Computed Styles',
   clone_page: '2. Clone Page (Static HTML/CSS Snapshot ZIP)',
@@ -79,6 +87,24 @@ const TOOL_TITLES: Record<ToolId, string> = {
   arrange: '13. Reversible Element Arrange',
   design_review: '14. Evidence-Based Design & Contrast Review',
   tech_stack: '15. Public Tech Stack Detector',
+};
+
+const TOOL_SHORT_LABELS: Record<ToolId, string> = {
+  inspect: 'Inspect',
+  clone_page: 'Clone Page',
+  clone_prompt: 'Clone Prompt',
+  design_md: 'Design MD',
+  assets: 'Assets',
+  colors: 'Colors',
+  fonts: 'Fonts',
+  measure: 'Measure',
+  edit_text: 'Edit Text',
+  capture: 'Capture',
+  responsive: 'Responsive',
+  swap_font: 'Swap Font',
+  arrange: 'Arrange',
+  design_review: 'Design Review',
+  tech_stack: 'Tech Stack',
 };
 
 const TOOL_SUBTITLES: Record<ToolId, string> = {
@@ -122,6 +148,19 @@ const TOOL_TO_ARTIFACT_KIND: Record<ToolId, LocalArtifactKind> = {
   tech_stack: 'tech_stack',
 };
 
+const ARTIFACT_KIND_TO_TOOL: Record<string, ToolId> = {
+  inspect_report: 'inspect',
+  clone_snapshot: 'clone_page',
+  clone_prompt: 'clone_prompt',
+  design_md: 'design_md',
+  asset_manifest: 'assets',
+  color_palette: 'colors',
+  font_report: 'fonts',
+  capture_image: 'capture',
+  design_review: 'design_review',
+  tech_stack: 'tech_stack',
+};
+
 const TOOLS_WITH_SELECTOR = new Set<ToolId>([
   'inspect',
   'measure',
@@ -135,10 +174,21 @@ const TOOLS_WITH_MODE = new Set<ToolId>(['clone_prompt', 'arrange']);
 const TOOLS_WITH_EDIT_HISTORY = new Set<ToolId>(['edit_text', 'swap_font', 'arrange']);
 const TOOLS_WITH_AI_ENHANCE = new Set<ToolId>(['clone_prompt', 'design_md', 'design_review']);
 
+const HISTORY_PAGE_SIZE = 25;
+
+let activeSection: DashboardSection = 'tools';
 let currentTool: ToolId = 'inspect';
 let lastResultTool: ToolId | null = null;
 let lastResultData: Record<string, unknown> | null = null;
-let lastTargetPageUrl = 'https://example.com';
+let lastActivityIdForResult: string | null = null;
+let lastActivityMeta: {
+  tool: ToolId;
+  actionLabel: string;
+  optionsSummary: Record<string, unknown>;
+  resultSummary: string;
+  durationMs: number | null;
+} | null = null;
+let lastTargetPageUrl = '';
 let lastTargetPageTitle = 'pagesift';
 let lastDownloadable: DownloadableArtifact | null = null;
 let lastCopyableText: string | null = null;
@@ -148,7 +198,13 @@ let confirmedNvidiaTaskType: 'enhance_clone_prompt' | 'interpret_design_review' 
 let activeJobRequestId: string | null = null;
 let pickerActive = false;
 let currentThemePref: ThemePreference = readCachedTheme();
+let sidebarCollapsed = false;
 let lastFocusedBeforeModal: HTMLElement | null = null;
+let historyItemsLoaded: ActivityQueryItem[] = [];
+let historyTotalMatching = 0;
+let historyHasMore = false;
+let historyOffset = 0;
+let historySearchTimer: ReturnType<typeof setTimeout> | null = null;
 const activeObjectUrls = new Set<string>();
 
 function getChromeApi(): ChromeWorkspaceApis {
@@ -166,6 +222,73 @@ function makeSlug(rawTitle: string): string {
   return cleaned || 'pagesift';
 }
 
+function formatDurationMs(durationMs: number | null): string {
+  if (durationMs === null || !Number.isFinite(durationMs)) {
+    return 'n/a';
+  }
+  if (durationMs < 1000) {
+    return `${Math.round(durationMs)} ms`;
+  }
+  return `${(durationMs / 1000).toFixed(2)} s`;
+}
+
+function formatLocalTime(utcIso: string): string {
+  const date = new Date(utcIso);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+function summarizeToolResultShort(tool: ToolId, data: Record<string, unknown>): string {
+  if (tool === 'inspect') {
+    const rep = data['report'] as { tagName?: string; selector?: string } | undefined;
+    if (rep?.selector) {
+      return `Inspected ${rep.tagName ?? 'element'} (${rep.selector})`;
+    }
+  }
+  if (tool === 'colors') {
+    const rep = data['report'] as
+      | { colors?: unknown[]; customProperties?: unknown[]; gradients?: unknown[] }
+      | undefined;
+    return `Extracted ${rep?.colors?.length ?? 0} colors and ${rep?.customProperties?.length ?? 0} CSS variables`;
+  }
+  if (tool === 'fonts') {
+    const rep = data['report'] as
+      | { families?: unknown[]; fontFaceDeclarations?: unknown[] }
+      | undefined;
+    return `Inspected ${rep?.families?.length ?? 0} font families and ${rep?.fontFaceDeclarations?.length ?? 0} @font-face rules`;
+  }
+  if (tool === 'measure') {
+    const rep = data['report'] as
+      | { primary?: { selector?: string }; distance?: unknown }
+      | undefined;
+    return rep?.distance
+      ? `Measured spacing from ${rep.primary?.selector ?? 'element'}`
+      : `Measured ${rep?.primary?.selector ?? 'element'} geometry`;
+  }
+  if (tool === 'design_md') {
+    const res = data['result'] as { markdown?: string } | undefined;
+    return `Generated DESIGN.md (${(res?.markdown?.length ?? 0).toLocaleString()} chars)`;
+  }
+  if (tool === 'clone_prompt') {
+    const rep = data['report'] as { prompt?: string; targetFramework?: string } | undefined;
+    return `Built ${rep?.targetFramework ?? 'default'} clone prompt (${(rep?.prompt?.length ?? 0).toLocaleString()} chars)`;
+  }
+  if (tool === 'design_review') {
+    const rep = data['report'] as { findings?: unknown[] } | undefined;
+    return `Completed audit with ${rep?.findings?.length ?? 0} findings`;
+  }
+  if (tool === 'tech_stack') {
+    const rep = data['report'] as { detections?: unknown[] } | undefined;
+    return `Detected ${rep?.detections?.length ?? 0} technology signals`;
+  }
+  if (tool === 'edit_text' || tool === 'swap_font' || tool === 'arrange') {
+    return `Applied reversible ${TOOL_SHORT_LABELS[tool].toLowerCase()} preview`;
+  }
+  return `Completed ${TOOL_SHORT_LABELS[tool]} locally`;
+}
+
 function setStatus(
   message: string,
   variant: 'neutral' | 'error' | 'success' | 'warning' = 'neutral',
@@ -175,7 +298,7 @@ function setStatus(
     return;
   }
   statusEl.textContent = message;
-  statusEl.className = variant === 'neutral' ? 'status-banner' : `status-banner ${variant}`;
+  statusEl.className = variant === 'neutral' ? 'status-line' : `status-line ${variant}`;
 }
 
 function clearNvidiaConfirmation(): void {
@@ -199,6 +322,40 @@ function setActiveJobState(requestId: string | null): void {
     runBtn.disabled = requestId !== null;
   }
   progressTrack?.classList.toggle('active', requestId !== null);
+}
+
+function applySidebarCollapsedUi(): void {
+  const body = document.getElementById('workspace-body');
+  const toggleBtn = document.getElementById('toggle-sidebar-btn');
+  body?.classList.toggle('rail-collapsed', sidebarCollapsed);
+  toggleBtn?.setAttribute('aria-expanded', sidebarCollapsed ? 'false' : 'true');
+  toggleBtn?.setAttribute(
+    'title',
+    sidebarCollapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar',
+  );
+}
+
+function switchSection(section: DashboardSection): void {
+  activeSection = section;
+  const panels: Array<[DashboardSection, string]> = [
+    ['tools', 'view-tools'],
+    ['history', 'view-history'],
+    ['saved', 'view-saved'],
+  ];
+  for (const [key, id] of panels) {
+    document.getElementById(id)?.classList.toggle('active', key === section);
+  }
+  document.querySelectorAll<HTMLButtonElement>('.rail-section-btn').forEach((btn) => {
+    const isSelected = btn.getAttribute('data-section') === section;
+    btn.classList.toggle('active', isSelected);
+    btn.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+  });
+  if (section === 'history') {
+    void loadActivityHistory(true);
+  } else if (section === 'saved') {
+    void refreshProjectsDropdown();
+  }
+  closeMobileRail();
 }
 
 function updateSubPanelsForTool(tool: ToolId): void {
@@ -563,24 +720,32 @@ async function resolveTargetTabId(): Promise<{ tabId: number | null; url: string
       return { tabId: firstActive.id, url: firstActive.url ?? 'https://example.com' };
     }
   }
-  return { tabId: null, url: 'https://example.com' };
+  return { tabId: null, url: '' };
 }
 
 async function updateTargetPageIdentity(): Promise<void> {
   const labelEl = document.getElementById('target-page-label');
+  const dotEl = document.getElementById('target-status-dot');
   const { tabId, url } = await resolveTargetTabId();
   if (!labelEl) {
     return;
   }
   if (tabId === null) {
-    labelEl.textContent = 'No target tab bound (open from popup)';
+    labelEl.textContent = 'No bound web tab (click toolbar icon on any web page)';
+    if (dotEl) {
+      dotEl.className = 'status-dot warning';
+    }
     return;
+  }
+  if (dotEl) {
+    dotEl.className = 'status-dot positive';
   }
   try {
     const parsed = new URL(url);
-    labelEl.textContent = `${parsed.host}${parsed.pathname} (Tab #${tabId})`;
+    lastTargetPageUrl = url;
+    labelEl.textContent = `${parsed.host}${parsed.pathname}`;
   } catch {
-    labelEl.textContent = `${url} (Tab #${tabId})`;
+    labelEl.textContent = url || `Tab #${tabId}`;
   }
   try {
     const ctx = await getBoundDocumentContext(tabId);
@@ -755,6 +920,426 @@ function summarizeOutputForDisplay(tool: ToolId, data: Record<string, unknown>):
   return JSON.stringify(data, null, 2);
 }
 
+async function openSavedArtifactById(artifactId: string): Promise<void> {
+  const res = await sendBackgroundMessage('GET_ARTIFACT_FROM_IDB', { artifactId });
+  if (!res.ok) {
+    setStatus(`Unable to open saved artifact: ${res.error.message}`, 'error');
+    return;
+  }
+  const artifact = (
+    res.data as {
+      artifact: {
+        id: string;
+        kind: string;
+        title: string;
+        sourceUrl: string | null;
+        payload: Record<string, unknown>;
+      } | null;
+    }
+  ).artifact;
+  if (!artifact) {
+    setStatus('This saved artifact was removed from local storage.', 'warning');
+    if (activeSection === 'history') {
+      void loadActivityHistory(true);
+    }
+    return;
+  }
+  const tool = ARTIFACT_KIND_TO_TOOL[artifact.kind] ?? 'inspect';
+  switchSection('tools');
+  selectActiveTool(tool);
+  lastResultTool = tool;
+  lastResultData = artifact.payload;
+  lastTargetPageUrl = artifact.sourceUrl ?? lastTargetPageUrl;
+  lastTargetPageTitle = artifact.title;
+  const built = buildDownloadableForTool(tool, artifact.payload, makeSlug(artifact.title));
+  lastDownloadable = built.downloadable;
+  lastCopyableText = built.copyableText;
+  updateActionButtons();
+  renderCurrentStructuredOutput(tool, artifact.payload);
+  const outputEl = document.getElementById('tool-output');
+  if (outputEl) {
+    outputEl.textContent = summarizeOutputForDisplay(tool, artifact.payload);
+  }
+  setStatus(`Loaded saved artifact: ${artifact.title}`, 'success');
+}
+
+function openExternalUrlInNewTab(url: string): void {
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    setStatus('Cannot reopen restricted or non-HTTP URL.', 'warning');
+    return;
+  }
+  const chromeApi = getChromeApi();
+  if (chromeApi.tabs?.create) {
+    void chromeApi.tabs.create({ url });
+  } else {
+    window.open(url, '_blank', 'noopener');
+  }
+}
+
+function buildDateRangeFilterBounds(rangeValue: string): {
+  fromIso?: string;
+  toIso?: string;
+} {
+  const now = new Date();
+  if (rangeValue === 'today') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return { fromIso: start.toISOString() };
+  }
+  if (rangeValue === '7d') {
+    return { fromIso: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString() };
+  }
+  if (rangeValue === '30d') {
+    return { fromIso: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString() };
+  }
+  return {};
+}
+
+function updateHistoryDomainOptions(domains: string[]): void {
+  const domainSel = document.getElementById('history-domain-filter') as HTMLSelectElement | null;
+  if (!domainSel) {
+    return;
+  }
+  const prev = domainSel.value;
+  domainSel.textContent = '';
+  const allOpt = document.createElement('option');
+  allOpt.value = '';
+  allOpt.textContent = 'All websites';
+  domainSel.appendChild(allOpt);
+  for (const domain of domains) {
+    const opt = document.createElement('option');
+    opt.value = domain;
+    opt.textContent = domain;
+    domainSel.appendChild(opt);
+  }
+  if (prev && domains.includes(prev)) {
+    domainSel.value = prev;
+  }
+}
+
+function createActivityRowElement(item: ActivityQueryItem): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'timeline-row';
+  row.setAttribute('data-activity-id', item.id);
+
+  const main = document.createElement('div');
+  main.className = 'timeline-main';
+
+  const titleLine = document.createElement('div');
+  titleLine.className = 'timeline-title-line';
+
+  const statusDot = document.createElement('span');
+  statusDot.className =
+    item.status === 'completed'
+      ? 'status-dot positive'
+      : item.status === 'failed'
+        ? 'status-dot danger'
+        : item.status === 'running'
+          ? 'status-dot accent'
+          : 'status-dot warning';
+  statusDot.setAttribute('aria-hidden', 'true');
+
+  const toolTag = document.createElement('span');
+  toolTag.className = 'tag accent';
+  toolTag.textContent = TOOL_SHORT_LABELS[item.tool];
+
+  const title = document.createElement('strong');
+  title.textContent = item.pageTitle || item.sourceDomain || 'Local page';
+
+  const statusTag = document.createElement('span');
+  statusTag.className =
+    item.status === 'completed'
+      ? 'tag positive'
+      : item.status === 'failed'
+        ? 'tag danger'
+        : item.status === 'interrupted' || item.status === 'cancelled'
+          ? 'tag warning'
+          : 'tag';
+  statusTag.textContent = item.status;
+
+  titleLine.append(statusDot, toolTag, title, statusTag);
+
+  const summary = document.createElement('div');
+  summary.textContent = item.resultSummary || item.actionLabel;
+
+  const meta = document.createElement('div');
+  meta.className = 'timeline-meta';
+
+  const urlSpan = document.createElement('span');
+  urlSpan.className = 'mono truncate';
+  urlSpan.style.maxWidth = '380px';
+  urlSpan.textContent = item.sourceUrl;
+  urlSpan.title = item.sourceUrl;
+
+  const timeSpan = document.createElement('span');
+  timeSpan.className = 'mono';
+  timeSpan.textContent = `${formatLocalTime(item.startedAt)} · Action duration: ${formatDurationMs(item.durationMs)}`;
+
+  meta.append(urlSpan, timeSpan);
+
+  const optionEntries = Object.entries(item.optionsSummary);
+  if (optionEntries.length > 0) {
+    const optsSpan = document.createElement('span');
+    optsSpan.className = 'mono';
+    optsSpan.textContent = optionEntries.map(([k, v]) => `${k}=${String(v)}`).join(', ');
+    meta.appendChild(optsSpan);
+  }
+
+  if (item.errorCategory) {
+    const errTag = document.createElement('span');
+    errTag.className = 'tag danger';
+    errTag.textContent = item.errorCategory;
+    meta.appendChild(errTag);
+  }
+
+  if (item.linkedResourceStatus === 'removed') {
+    const removedTag = document.createElement('span');
+    removedTag.className = 'tag warning';
+    removedTag.textContent = 'Saved result removed';
+    meta.appendChild(removedTag);
+  }
+
+  main.append(titleLine, summary, meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'timeline-actions';
+
+  if (item.linkedArtifactId && item.linkedResourceStatus === 'present') {
+    const openResBtn = document.createElement('button');
+    openResBtn.type = 'button';
+    openResBtn.className = 'secondary sm';
+    openResBtn.textContent = 'Open Result';
+    openResBtn.addEventListener('click', () => {
+      void openSavedArtifactById(item.linkedArtifactId as string);
+    });
+    actions.appendChild(openResBtn);
+  } else if (item.linkedCaptureId && item.linkedResourceStatus === 'present') {
+    const openSavedBtn = document.createElement('button');
+    openSavedBtn.type = 'button';
+    openSavedBtn.className = 'secondary sm';
+    openSavedBtn.textContent = 'View Capture';
+    openSavedBtn.addEventListener('click', () => {
+      switchSection('saved');
+    });
+    actions.appendChild(openSavedBtn);
+  }
+
+  if (item.sourceUrl.startsWith('http://') || item.sourceUrl.startsWith('https://')) {
+    const reopenBtn = document.createElement('button');
+    reopenBtn.type = 'button';
+    reopenBtn.className = 'ghost sm';
+    reopenBtn.textContent = 'Reopen Site';
+    reopenBtn.addEventListener('click', () => {
+      openExternalUrlInNewTab(item.sourceUrl);
+    });
+    actions.appendChild(reopenBtn);
+  }
+
+  const rerunBtn = document.createElement('button');
+  rerunBtn.type = 'button';
+  rerunBtn.className = 'secondary sm';
+  rerunBtn.textContent = 'Rerun';
+  rerunBtn.addEventListener('click', () => {
+    switchSection('tools');
+    selectActiveTool(item.tool);
+    const selInput = document.getElementById('target-selector-input') as HTMLInputElement | null;
+    if (selInput && typeof item.optionsSummary['selector'] === 'string') {
+      selInput.value = item.optionsSummary['selector'];
+    }
+    const modeSel = document.getElementById('mode-select') as HTMLSelectElement | null;
+    if (modeSel && typeof item.optionsSummary['targetFramework'] === 'string') {
+      modeSel.value = item.optionsSummary['targetFramework'];
+    } else if (modeSel && typeof item.optionsSummary['action'] === 'string') {
+      modeSel.value = item.optionsSummary['action'];
+    }
+    void executeSelectedTool();
+  });
+  actions.appendChild(rerunBtn);
+
+  const deleteBtn = document.createElement('button');
+  deleteBtn.type = 'button';
+  deleteBtn.className = 'ghost sm';
+  deleteBtn.textContent = 'Delete';
+  deleteBtn.setAttribute('aria-label', `Delete ${TOOL_SHORT_LABELS[item.tool]} activity entry`);
+  deleteBtn.addEventListener('click', () => {
+    void sendBackgroundMessage('DELETE_ACTIVITY_ENTRY', { activityId: item.id }).then((res) => {
+      if (res.ok) {
+        void loadActivityHistory(true);
+      }
+    });
+  });
+  actions.appendChild(deleteBtn);
+
+  row.append(main, actions);
+  return row;
+}
+
+function renderActivityHistoryList(): void {
+  const listEl = document.getElementById('history-timeline-list');
+  const summaryEl = document.getElementById('history-summary-line');
+  const loadMoreBtn = document.getElementById('history-load-more-btn') as HTMLButtonElement | null;
+  const groupMode =
+    (document.getElementById('history-group-mode') as HTMLSelectElement | null)?.value ?? 'day';
+
+  if (summaryEl) {
+    summaryEl.textContent =
+      historyTotalMatching === 0
+        ? 'No recorded PageSift tool actions match the current filters.'
+        : `Showing ${historyItemsLoaded.length} of ${historyTotalMatching} recorded PageSift actions.`;
+  }
+  if (loadMoreBtn) {
+    loadMoreBtn.style.display = historyHasMore ? '' : 'none';
+  }
+  if (!listEl) {
+    return;
+  }
+
+  listEl.textContent = '';
+  if (historyItemsLoaded.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    const strong = document.createElement('strong');
+    strong.textContent = 'No PageSift activity recorded yet';
+    const sub = document.createElement('span');
+    sub.textContent =
+      'Run any of the 15 PageSift tools from the on-page overlay or dashboard to build your local research timeline.';
+    empty.append(strong, sub);
+    listEl.appendChild(empty);
+    return;
+  }
+
+  const groups = new Map<
+    string,
+    { label: string; sessionId?: string; items: ActivityQueryItem[] }
+  >();
+
+  for (const item of historyItemsLoaded) {
+    if (groupMode === 'session') {
+      const existing = groups.get(item.sessionId);
+      if (existing) {
+        existing.items.push(item);
+      } else {
+        const dayLabel = groupDateLabelForLocalDisplay(item.startedAt);
+        groups.set(item.sessionId, {
+          label: `${item.sourceDomain || 'Local'} · ${dayLabel}`,
+          sessionId: item.sessionId,
+          items: [item],
+        });
+      }
+    } else {
+      const dayLabel = groupDateLabelForLocalDisplay(item.startedAt);
+      const existing = groups.get(dayLabel);
+      if (existing) {
+        existing.items.push(item);
+      } else {
+        groups.set(dayLabel, { label: dayLabel, items: [item] });
+      }
+    }
+  }
+
+  for (const group of groups.values()) {
+    const wrap = document.createElement('section');
+    wrap.className = 'timeline-group';
+
+    const header = document.createElement('div');
+    header.className = 'timeline-group-header';
+
+    const title = document.createElement('span');
+    title.textContent = `${group.label} (${group.items.length})`;
+    header.appendChild(title);
+
+    if (group.sessionId) {
+      const delSessBtn = document.createElement('button');
+      delSessBtn.type = 'button';
+      delSessBtn.className = 'ghost sm';
+      delSessBtn.textContent = 'Delete Session';
+      const sid = group.sessionId;
+      delSessBtn.addEventListener('click', () => {
+        void sendBackgroundMessage('DELETE_ACTIVITY_SESSION', { sessionId: sid }).then((res) => {
+          if (res.ok) {
+            void loadActivityHistory(true);
+          }
+        });
+      });
+      header.appendChild(delSessBtn);
+    }
+
+    wrap.appendChild(header);
+    for (const item of group.items) {
+      wrap.appendChild(createActivityRowElement(item));
+    }
+    listEl.appendChild(wrap);
+  }
+}
+
+async function loadActivityHistory(reset: boolean): Promise<void> {
+  if (reset) {
+    historyOffset = 0;
+    historyItemsLoaded = [];
+  }
+
+  const currentSiteOnly =
+    (document.getElementById('history-current-site-only') as HTMLInputElement | null)?.checked ??
+    false;
+  const domain =
+    (document.getElementById('history-domain-filter') as HTMLSelectElement | null)?.value || '';
+  const tool =
+    (document.getElementById('history-tool-filter') as HTMLSelectElement | null)?.value || '';
+  const status =
+    (document.getElementById('history-status-filter') as HTMLSelectElement | null)?.value || '';
+  const dateRange =
+    (document.getElementById('history-date-range') as HTMLSelectElement | null)?.value || 'all';
+  const search =
+    (document.getElementById('history-search-input') as HTMLInputElement | null)?.value.trim() ||
+    '';
+
+  const bounds = buildDateRangeFilterBounds(dateRange);
+  const payload: Record<string, unknown> = {
+    limit: HISTORY_PAGE_SIZE,
+    offset: historyOffset,
+    ...(bounds.fromIso ? { fromIso: bounds.fromIso } : {}),
+    ...(bounds.toIso ? { toIso: bounds.toIso } : {}),
+  };
+
+  if (currentSiteOnly && lastTargetPageUrl) {
+    const clean = sanitizeActivitySourceUrl(lastTargetPageUrl);
+    if (clean.sourceOrigin) {
+      payload['origin'] = clean.sourceOrigin;
+    }
+  } else if (domain) {
+    payload['domain'] = domain;
+  }
+  if (tool) {
+    payload['tool'] = tool;
+  }
+  if (status) {
+    payload['status'] = status;
+  }
+  if (search) {
+    payload['search'] = search;
+  }
+
+  const res = await sendBackgroundMessage('QUERY_ACTIVITY_HISTORY', payload);
+  if (!res.ok) {
+    const summaryEl = document.getElementById('history-summary-line');
+    if (summaryEl) {
+      summaryEl.textContent = `Could not load activity history: ${res.error.message}`;
+    }
+    return;
+  }
+
+  const result = res.data as ActivityQueryResult;
+  updateHistoryDomainOptions(result.domains);
+  if (reset) {
+    historyItemsLoaded = result.items;
+  } else {
+    historyItemsLoaded = [...historyItemsLoaded, ...result.items];
+  }
+  historyTotalMatching = result.totalMatching;
+  historyHasMore = result.hasMore;
+  historyOffset = historyItemsLoaded.length;
+  renderActivityHistoryList();
+}
+
 async function refreshProjectsDropdown(): Promise<void> {
   const select = document.getElementById('project-select') as HTMLSelectElement | null;
   const savedList = document.getElementById('saved-work-list');
@@ -800,37 +1385,84 @@ async function refreshProjectsDropdown(): Promise<void> {
   if (savedList) {
     savedList.textContent = '';
 
-    const artCard = document.createElement('div');
-    artCard.className = 'card';
-    const artTitle = document.createElement('h3');
-    artTitle.className = 'card-title';
-    artTitle.textContent = `Saved Artifacts (${data.artifacts.length}) & Captures (${data.captures.length})`;
-    artCard.appendChild(artTitle);
+    const artBlock = document.createElement('section');
+    artBlock.className = 'timeline-group';
+    const artHeader = document.createElement('div');
+    artHeader.className = 'timeline-group-header';
+    artHeader.textContent = `Saved Artifacts (${data.artifacts.length}) & Captures (${data.captures.length})`;
+    artBlock.appendChild(artHeader);
 
     if (data.artifacts.length === 0 && data.captures.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'muted';
-      empty.textContent = 'No saved items in this project yet.';
-      artCard.appendChild(empty);
+      const emptyRow = document.createElement('div');
+      emptyRow.className = 'timeline-row';
+      const msg = document.createElement('span');
+      msg.className = 'muted';
+      msg.textContent = 'No saved items in this project yet. Run a tool and click Save Result.';
+      emptyRow.appendChild(msg);
+      artBlock.appendChild(emptyRow);
     } else {
-      for (const art of data.artifacts.slice(0, 6)) {
+      for (const art of data.artifacts) {
         const row = document.createElement('div');
-        row.className = 'popup-recent-item';
-        const lbl = document.createElement('span');
-        lbl.className = 'truncate';
+        row.className = 'timeline-row';
+
+        const main = document.createElement('div');
+        main.className = 'timeline-main';
+        const titleLine = document.createElement('div');
+        titleLine.className = 'timeline-title-line';
+        const lbl = document.createElement('strong');
         lbl.textContent = art.title;
-        const pill = document.createElement('span');
-        pill.className = 'pill';
-        pill.textContent = art.kind;
-        row.append(lbl, pill);
-        artCard.appendChild(row);
+        const kindTag = document.createElement('span');
+        kindTag.className = 'tag';
+        kindTag.textContent = art.kind;
+        titleLine.append(lbl, kindTag);
+        const meta = document.createElement('div');
+        meta.className = 'timeline-meta mono';
+        meta.textContent = `${groupDateLabelForLocalDisplay(art.createdAt)} · ${formatLocalTime(art.createdAt)}`;
+        main.append(titleLine, meta);
+
+        const actions = document.createElement('div');
+        actions.className = 'timeline-actions';
+        const openBtn = document.createElement('button');
+        openBtn.type = 'button';
+        openBtn.className = 'secondary sm';
+        openBtn.textContent = 'Open';
+        openBtn.addEventListener('click', () => {
+          void openSavedArtifactById(art.id);
+        });
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'ghost sm';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', () => {
+          void sendBackgroundMessage('DELETE_ARTIFACT_FROM_IDB', { artifactId: art.id }).then(
+            () => {
+              void refreshProjectsDropdown();
+            },
+          );
+        });
+        actions.append(openBtn, delBtn);
+
+        row.append(main, actions);
+        artBlock.appendChild(row);
       }
-      for (const cap of data.captures.slice(0, 4)) {
+
+      for (const cap of data.captures) {
         const row = document.createElement('div');
-        row.className = 'popup-recent-item';
-        const lbl = document.createElement('span');
-        lbl.className = 'truncate';
-        lbl.textContent = `${cap.pageTitle} (${cap.width}×${cap.height})`;
+        row.className = 'timeline-row';
+        const main = document.createElement('div');
+        main.className = 'timeline-main';
+        const titleLine = document.createElement('div');
+        titleLine.className = 'timeline-title-line';
+        const lbl = document.createElement('strong');
+        lbl.textContent = cap.pageTitle;
+        const dimsTag = document.createElement('span');
+        dimsTag.className = 'tag mono';
+        dimsTag.textContent = `${cap.width}×${cap.height} · ${cap.mimeType}`;
+        titleLine.append(lbl, dimsTag);
+        main.appendChild(titleLine);
+
+        const actions = document.createElement('div');
+        actions.className = 'timeline-actions';
         const dlBtn = document.createElement('button');
         dlBtn.type = 'button';
         dlBtn.className = 'secondary sm';
@@ -846,11 +1478,12 @@ async function refreshProjectsDropdown(): Promise<void> {
             bytes,
           });
         });
-        row.append(lbl, dlBtn);
-        artCard.appendChild(row);
+        actions.appendChild(dlBtn);
+        row.append(main, actions);
+        artBlock.appendChild(row);
       }
     }
-    savedList.appendChild(artCard);
+    savedList.appendChild(artBlock);
 
     if (jobsRes.ok) {
       const jobs = (
@@ -858,37 +1491,40 @@ async function refreshProjectsDropdown(): Promise<void> {
           jobs: Array<{ id: string; tool: string; status: string; statusMessage: string }>;
         }
       ).jobs;
-      const jobsCard = document.createElement('div');
-      jobsCard.className = 'card';
-      const jt = document.createElement('h3');
-      jt.className = 'card-title';
-      jt.textContent = `Recent Background Jobs (${jobs.length})`;
-      jobsCard.appendChild(jt);
+      const jobsBlock = document.createElement('section');
+      jobsBlock.className = 'timeline-group';
+      const jt = document.createElement('div');
+      jt.className = 'timeline-group-header';
+      jt.textContent = `Background Jobs (${jobs.length})`;
+      jobsBlock.appendChild(jt);
       if (jobs.length === 0) {
-        const empty = document.createElement('div');
+        const emptyRow = document.createElement('div');
+        emptyRow.className = 'timeline-row';
+        const empty = document.createElement('span');
         empty.className = 'muted';
         empty.textContent = 'No persisted background jobs recorded yet.';
-        jobsCard.appendChild(empty);
+        emptyRow.appendChild(empty);
+        jobsBlock.appendChild(emptyRow);
       } else {
-        for (const job of jobs.slice(0, 6)) {
+        for (const job of jobs.slice(0, 12)) {
           const row = document.createElement('div');
-          row.className = 'popup-recent-item';
+          row.className = 'timeline-row';
           const lbl = document.createElement('span');
           lbl.className = 'truncate';
           lbl.textContent = `${job.tool}: ${job.statusMessage}`;
-          const pill = document.createElement('span');
-          pill.className =
+          const statusTag = document.createElement('span');
+          statusTag.className =
             job.status === 'completed'
-              ? 'pill success'
+              ? 'tag positive'
               : job.status === 'interrupted' || job.status === 'failed'
-                ? 'pill warning'
-                : 'pill accent';
-          pill.textContent = job.status;
-          row.append(lbl, pill);
-          jobsCard.appendChild(row);
+                ? 'tag warning'
+                : 'tag accent';
+          statusTag.textContent = job.status;
+          row.append(lbl, statusTag);
+          jobsBlock.appendChild(row);
         }
       }
-      savedList.appendChild(jobsCard);
+      savedList.appendChild(jobsBlock);
     }
   }
 }
@@ -960,6 +1596,10 @@ async function runResponsiveOpenAction(): Promise<void> {
     return;
   }
   const { url } = await resolveTargetTabId();
+  if (!url) {
+    setStatus('No active target URL to preview in responsive windows.', 'error');
+    return;
+  }
   const syncToggle = document.getElementById('responsive-sync-toggle') as HTMLInputElement | null;
   const customViewports = collectSelectedResponsiveViewports();
   setStatus('Opening responsive preview windows and measuring actual viewports...');
@@ -976,6 +1616,8 @@ async function runResponsiveOpenAction(): Promise<void> {
     const data = res.data as Record<string, unknown>;
     lastResultTool = 'responsive';
     lastResultData = data;
+    lastActivityIdForResult = null;
+    lastActivityMeta = null;
     clearNvidiaConfirmation();
     renderResponsiveSessionStatus(data['session']);
     renderCurrentStructuredOutput('responsive', data);
@@ -1019,11 +1661,15 @@ async function executeSelectedTool(): Promise<void> {
   clearNvidiaConfirmation();
   setStatus(`Running ${TOOL_TITLES[currentTool]}...`);
 
+  let localActivityId: string | null = null;
+  let localStartMs = 0;
+  let localOptionsSummary: Record<string, unknown> = {};
+
   try {
     const { tabId, url } = await resolveTargetTabId();
     if (tabId === null) {
       throw new Error(
-        'No active target tab detected. Open PageSift from a web tab or pass ?tabId=<id>.',
+        'No active target tab detected. Click the PageSift toolbar icon on a web page or pass ?tabId=<id>.',
       );
     }
 
@@ -1106,6 +1752,14 @@ async function executeSelectedTool(): Promise<void> {
 
       lastResultTool = 'capture';
       lastResultData = data;
+      lastActivityIdForResult = `act-${requestId}`;
+      lastActivityMeta = {
+        tool: 'capture',
+        actionLabel: `Capture (${mode})`,
+        optionsSummary: { mode, exportMime },
+        resultSummary: `Captured ${verified.width}×${verified.height}px (${verified.mimeType})`,
+        durationMs: null,
+      };
       const built = buildDownloadableForTool('capture', data, makeSlug(lastTargetPageTitle));
       lastDownloadable = built.downloadable;
       lastCopyableText = built.copyableText;
@@ -1131,6 +1785,14 @@ async function executeSelectedTool(): Promise<void> {
       const data = res.data as Record<string, unknown>;
       lastResultTool = 'clone_page';
       lastResultData = data;
+      lastActivityIdForResult = `act-${requestId}`;
+      lastActivityMeta = {
+        tool: 'clone_page',
+        actionLabel: 'Clone Page',
+        optionsSummary: {},
+        resultSummary: 'Generated static HTML/CSS snapshot ZIP',
+        durationMs: null,
+      };
       const built = buildDownloadableForTool('clone_page', data, makeSlug(lastTargetPageTitle));
       lastDownloadable = built.downloadable;
       lastCopyableText = built.copyableText;
@@ -1153,14 +1815,22 @@ async function executeSelectedTool(): Promise<void> {
       const data = res.data as Record<string, unknown>;
       lastResultTool = 'assets';
       lastResultData = data;
+      const packagedCount =
+        typeof data['packagedFilesCount'] === 'number' ? data['packagedFilesCount'] : 0;
+      lastActivityIdForResult = `act-${requestId}`;
+      lastActivityMeta = {
+        tool: 'assets',
+        actionLabel: 'Assets Extract',
+        optionsSummary: { includeZip: true },
+        resultSummary: `Packaged ${packagedCount} asset files`,
+        durationMs: null,
+      };
       const built = buildDownloadableForTool('assets', data, makeSlug(lastTargetPageTitle));
       lastDownloadable = built.downloadable;
       lastCopyableText = built.copyableText;
       updateActionButtons();
       renderCurrentStructuredOutput('assets', data);
       outputEl.textContent = summarizeOutputForDisplay('assets', data);
-      const packagedCount =
-        typeof data['packagedFilesCount'] === 'number' ? data['packagedFilesCount'] : 0;
       setStatus(`Assets ZIP ready (${packagedCount} bundled files).`, 'success');
       return;
     }
@@ -1216,23 +1886,81 @@ async function executeSelectedTool(): Promise<void> {
       payload['dy'] = 16;
     }
 
+    localActivityId = `act-${requestId}`;
+    localStartMs = performance.now();
+    localOptionsSummary = {
+      ...(selector && TOOLS_WITH_SELECTOR.has(currentTool) ? { selector } : {}),
+      ...(payload['targetFramework'] ? { targetFramework: payload['targetFramework'] } : {}),
+      ...(payload['action'] ? { action: payload['action'] } : {}),
+      ...(payload['fontFamily'] ? { fontFamily: payload['fontFamily'] } : {}),
+    };
+
+    void sendBackgroundMessage('RECORD_LOCAL_ACTIVITY', {
+      activityId: localActivityId,
+      tool: currentTool,
+      actionLabel: TOOL_SHORT_LABELS[currentTool],
+      sourceUrl: lastTargetPageUrl,
+      pageTitle: lastTargetPageTitle,
+      status: 'running',
+      optionsSummary: localOptionsSummary,
+      resultSummary: `Running ${TOOL_SHORT_LABELS[currentTool]}...`,
+    });
+
     const res = await sendContentMessage(tabId, opMap[currentTool], payload, docCtx.documentId);
     if (!res.ok) {
       throw new Error(res.error.message);
     }
 
+    const durationMs = Math.max(0, Math.round(performance.now() - localStartMs));
     const data = res.data as Record<string, unknown>;
+    const summaryText = summarizeToolResultShort(currentTool, data);
+
+    void sendBackgroundMessage('RECORD_LOCAL_ACTIVITY', {
+      activityId: localActivityId,
+      tool: currentTool,
+      actionLabel: TOOL_SHORT_LABELS[currentTool],
+      sourceUrl: lastTargetPageUrl,
+      pageTitle: lastTargetPageTitle,
+      status: 'completed',
+      durationMs,
+      optionsSummary: localOptionsSummary,
+      resultSummary: summaryText,
+    });
+
     lastResultTool = currentTool;
     lastResultData = data;
+    lastActivityIdForResult = localActivityId;
+    lastActivityMeta = {
+      tool: currentTool,
+      actionLabel: TOOL_SHORT_LABELS[currentTool],
+      optionsSummary: localOptionsSummary,
+      resultSummary: summaryText,
+      durationMs,
+    };
     const built = buildDownloadableForTool(currentTool, data, makeSlug(lastTargetPageTitle));
     lastDownloadable = built.downloadable;
     lastCopyableText = built.copyableText;
     updateActionButtons();
     renderCurrentStructuredOutput(currentTool, data);
     outputEl.textContent = summarizeOutputForDisplay(currentTool, data);
-    setStatus(`Completed ${TOOL_TITLES[currentTool]} locally.`, 'success');
+    setStatus(`Completed ${TOOL_TITLES[currentTool]} locally (${durationMs} ms).`, 'success');
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Execution failed';
+    if (localActivityId) {
+      const durationMs = Math.max(0, Math.round(performance.now() - localStartMs));
+      void sendBackgroundMessage('RECORD_LOCAL_ACTIVITY', {
+        activityId: localActivityId,
+        tool: currentTool,
+        actionLabel: TOOL_SHORT_LABELS[currentTool],
+        sourceUrl: lastTargetPageUrl,
+        pageTitle: lastTargetPageTitle,
+        status: 'failed',
+        durationMs,
+        optionsSummary: localOptionsSummary,
+        resultSummary: message,
+        errorCategory: 'TOOL_EXECUTION_ERROR',
+      });
+    }
     setStatus(`Error: ${message}`, 'error');
     outputEl.textContent = JSON.stringify({ error: message }, null, 2);
   } finally {
@@ -1336,6 +2064,22 @@ function closeNvidiaModal(): void {
   lastFocusedBeforeModal = null;
 }
 
+function openClearHistoryModal(): void {
+  const modal = document.getElementById('clear-history-modal');
+  const cancelBtn = document.getElementById('clear-history-cancel-btn');
+  lastFocusedBeforeModal =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modal?.classList.add('open');
+  cancelBtn?.focus();
+}
+
+function closeClearHistoryModal(): void {
+  const modal = document.getElementById('clear-history-modal');
+  modal?.classList.remove('open');
+  lastFocusedBeforeModal?.focus();
+  lastFocusedBeforeModal = null;
+}
+
 function selectActiveTool(tool: ToolId): void {
   currentTool = tool;
   const dock = document.getElementById('tool-dock');
@@ -1350,7 +2094,29 @@ function selectActiveTool(tool: ToolId): void {
   } else if (lastCaptureState) {
     updateCapturePreviewUi();
   }
-  closeMobileRail();
+  if (activeSection !== 'tools') {
+    switchSection('tools');
+  } else {
+    closeMobileRail();
+  }
+}
+
+function filterSidebarTools(query: string): void {
+  const normalized = query.trim().toLowerCase();
+  const groups = document.querySelectorAll<HTMLElement>('#tool-dock .rail-group');
+  groups.forEach((group) => {
+    let visibleCount = 0;
+    group.querySelectorAll<HTMLButtonElement>('button[data-tool]').forEach((btn) => {
+      const toolId = btn.getAttribute('data-tool') ?? '';
+      const text = `${btn.textContent} ${toolId}`.toLowerCase();
+      const match = !normalized || text.includes(normalized);
+      btn.style.display = match ? '' : 'none';
+      if (match) {
+        visibleCount += 1;
+      }
+    });
+    group.style.display = visibleCount > 0 ? '' : 'none';
+  });
 }
 
 function attachNavIcons(): void {
@@ -1358,10 +2124,18 @@ function attachNavIcons(): void {
     const tool = btn.getAttribute('data-tool');
     if (tool) {
       btn.prepend(createSvgIcon(tool));
+      btn.title = tool in TOOL_SHORT_LABELS ? TOOL_SHORT_LABELS[tool as ToolId] : tool;
     }
   });
-  const menuBtn = document.getElementById('mobile-menu-btn');
-  menuBtn?.prepend(createSvgIcon('menu'));
+  document.getElementById('nav-tools-btn')?.prepend(createSvgIcon('tools'));
+  document.getElementById('nav-history-btn')?.prepend(createSvgIcon('history'));
+  document.getElementById('nav-saved-btn')?.prepend(createSvgIcon('folder'));
+  document.getElementById('mobile-menu-btn')?.prepend(createSvgIcon('menu'));
+  const sidebarBtn = document.getElementById('toggle-sidebar-btn');
+  if (sidebarBtn) {
+    sidebarBtn.textContent = '';
+    sidebarBtn.appendChild(createSvgIcon('sidebar'));
+  }
 }
 
 function updateThemeButton(): void {
@@ -1371,17 +2145,40 @@ function updateThemeButton(): void {
   }
 }
 
-async function syncThemeFromSettings(): Promise<void> {
+async function syncSettingsIntoWorkspace(): Promise<void> {
   applyThemePreference(currentThemePref);
   updateThemeButton();
   try {
     const res = await sendBackgroundMessage('GET_SETTINGS');
     if (res.ok) {
-      const s = (res.data as { settings?: { theme?: ThemePreference } }).settings;
+      const s = (
+        res.data as {
+          settings?: {
+            theme?: ThemePreference;
+            sidebarCollapsed?: boolean;
+            recordActivityHistory?: boolean;
+            activityFirstUseNoticeDismissed?: boolean;
+          };
+        }
+      ).settings;
       if (s?.theme === 'system' || s?.theme === 'light' || s?.theme === 'dark') {
         currentThemePref = s.theme;
         applyThemePreference(currentThemePref);
         updateThemeButton();
+      }
+      if (typeof s?.sidebarCollapsed === 'boolean') {
+        sidebarCollapsed = s.sidebarCollapsed;
+        applySidebarCollapsedUi();
+      }
+      const recordToggle = document.getElementById(
+        'history-recording-toggle',
+      ) as HTMLInputElement | null;
+      if (recordToggle && typeof s?.recordActivityHistory === 'boolean') {
+        recordToggle.checked = s.recordActivityHistory;
+      }
+      const notice = document.getElementById('history-first-use-notice');
+      if (notice) {
+        notice.style.display = s?.activityFirstUseNoticeDismissed ? 'none' : '';
       }
     }
   } catch {
@@ -1391,7 +2188,7 @@ async function syncThemeFromSettings(): Promise<void> {
 
 function initWorkspaceUi(): void {
   attachNavIcons();
-  void syncThemeFromSettings();
+  void syncSettingsIntoWorkspace();
   void updateTargetPageIdentity();
 
   const dock = document.getElementById('tool-dock');
@@ -1402,6 +2199,14 @@ function initWorkspaceUi(): void {
       URL.revokeObjectURL(url);
     }
     activeObjectUrls.clear();
+  });
+
+  document.getElementById('toggle-sidebar-btn')?.addEventListener('click', () => {
+    sidebarCollapsed = !sidebarCollapsed;
+    applySidebarCollapsedUi();
+    void sendBackgroundMessage('UPDATE_SETTINGS', {
+      settings: { sidebarCollapsed },
+    }).catch(() => undefined);
   });
 
   document.getElementById('mobile-menu-btn')?.addEventListener('click', () => {
@@ -1421,6 +2226,19 @@ function initWorkspaceUi(): void {
     closeMobileRail();
   });
 
+  document.querySelectorAll<HTMLButtonElement>('.rail-section-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sec = btn.getAttribute('data-section') as DashboardSection | null;
+      if (sec) {
+        switchSection(sec);
+      }
+    });
+  });
+
+  document.getElementById('tool-search-input')?.addEventListener('input', (event) => {
+    filterSidebarTools((event.target as HTMLInputElement).value);
+  });
+
   document.getElementById('theme-toggle-btn')?.addEventListener('click', () => {
     void (async () => {
       currentThemePref = nextThemePreference(currentThemePref);
@@ -1430,22 +2248,6 @@ function initWorkspaceUi(): void {
         settings: { theme: currentThemePref },
       }).catch(() => undefined);
     })();
-  });
-
-  document.getElementById('toggle-projects-btn')?.addEventListener('click', () => {
-    const drawer = document.getElementById('projects-drawer');
-    const btn = document.getElementById('toggle-projects-btn');
-    const nextOpen = !drawer?.classList.contains('visible');
-    drawer?.classList.toggle('visible', nextOpen);
-    btn?.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
-    if (nextOpen) {
-      void refreshProjectsDropdown();
-    }
-  });
-
-  document.getElementById('close-projects-btn')?.addEventListener('click', () => {
-    document.getElementById('projects-drawer')?.classList.remove('visible');
-    document.getElementById('toggle-projects-btn')?.setAttribute('aria-expanded', 'false');
   });
 
   document.getElementById('refresh-projects-btn')?.addEventListener('click', () => {
@@ -1480,25 +2282,6 @@ function initWorkspaceUi(): void {
       const { tabId } = await resolveTargetTabId();
       await sendBackgroundMessage('CANCEL_JOB', { jobId: activeJobRequestId }, { tabId });
       setStatus('Cancellation requested for active job.');
-    })();
-  });
-
-  document.getElementById('open-tab-workspace-btn')?.addEventListener('click', () => {
-    void (async () => {
-      const chromeApi = getChromeApi();
-      const { tabId, url } = await resolveTargetTabId();
-      const base = chromeApi.runtime?.getURL
-        ? chromeApi.runtime.getURL('workspace.html')
-        : 'workspace.html';
-      const target =
-        tabId !== null
-          ? `${base}?tabId=${tabId}&targetUrl=${encodeURIComponent(url)}&tool=${currentTool}`
-          : base;
-      if (chromeApi.tabs?.create) {
-        await chromeApi.tabs.create({ url: target });
-      } else {
-        window.open(target, '_blank', 'noopener');
-      }
     })();
   });
 
@@ -1585,7 +2368,7 @@ function initWorkspaceUi(): void {
     const label =
       (document.getElementById('ann-label') as HTMLInputElement | null)?.value.trim() || 'Note';
     const color =
-      (document.getElementById('ann-color') as HTMLInputElement | null)?.value || '#0f766e';
+      (document.getElementById('ann-color') as HTMLInputElement | null)?.value || '#0057ff';
     void applyCaptureTransform(undefined, {
       x: Math.max(0, Number.isFinite(x) ? x : 16),
       y: Math.max(0, Number.isFinite(y) ? y : 16),
@@ -1632,6 +2415,7 @@ function initWorkspaceUi(): void {
     void (async () => {
       const { tabId } = await resolveTargetTabId();
       if (tabId === null) {
+        setStatus('No bound web tab for on-page picker.', 'warning');
         return;
       }
       const docCtx = await getBoundDocumentContext(tabId);
@@ -1645,7 +2429,7 @@ function initWorkspaceUi(): void {
       if (res.ok) {
         setStatus(
           pickerActive
-            ? `On-page picker & dock active for ${currentTool} (press Escape on page to dismiss).`
+            ? `On-page picker active for ${TOOL_SHORT_LABELS[currentTool]} (press Escape on page to dismiss).`
             : 'On-page picker deactivated.',
           'success',
         );
@@ -1710,6 +2494,23 @@ function initWorkspaceUi(): void {
           dataUrl: lastCaptureState.currentDataUrl,
           annotations: lastCaptureState.annotations,
         });
+        if (res.ok && lastActivityIdForResult && lastActivityMeta) {
+          const savedCap = (res.data as { capture?: { id?: string } }).capture;
+          if (savedCap?.id) {
+            void sendBackgroundMessage('RECORD_LOCAL_ACTIVITY', {
+              activityId: lastActivityIdForResult,
+              tool: lastActivityMeta.tool,
+              actionLabel: lastActivityMeta.actionLabel,
+              sourceUrl: lastCaptureState.pageUrl,
+              pageTitle: lastCaptureState.pageTitle,
+              status: 'completed',
+              durationMs: lastActivityMeta.durationMs,
+              optionsSummary: lastActivityMeta.optionsSummary,
+              resultSummary: lastActivityMeta.resultSummary,
+              linkedCaptureId: savedCap.id,
+            });
+          }
+        }
         setStatus(
           res.ok
             ? 'Saved screenshot capture to local IndexedDB.'
@@ -1726,16 +2527,121 @@ function initWorkspaceUi(): void {
       const res = await sendBackgroundMessage('SAVE_ARTIFACT_TO_IDB', {
         projectId,
         kind: TOOL_TO_ARTIFACT_KIND[toolKey],
-        title: `${TOOL_TITLES[toolKey]} Output`,
-        sourceUrl: lastTargetPageUrl,
+        title: `${TOOL_SHORT_LABELS[toolKey]} · ${lastTargetPageTitle}`,
+        sourceUrl: lastTargetPageUrl || null,
         artifactPayload: payloadToSave,
       });
+      if (res.ok && lastActivityIdForResult && lastActivityMeta) {
+        const savedArt = (res.data as { artifact?: { id?: string } }).artifact;
+        if (savedArt?.id) {
+          void sendBackgroundMessage('RECORD_LOCAL_ACTIVITY', {
+            activityId: lastActivityIdForResult,
+            tool: lastActivityMeta.tool,
+            actionLabel: lastActivityMeta.actionLabel,
+            sourceUrl: lastTargetPageUrl,
+            pageTitle: lastTargetPageTitle,
+            status: 'completed',
+            durationMs: lastActivityMeta.durationMs,
+            optionsSummary: lastActivityMeta.optionsSummary,
+            resultSummary: lastActivityMeta.resultSummary,
+            linkedArtifactId: savedArt.id,
+          });
+        }
+      }
       setStatus(
         res.ok ? 'Saved tool result to local IndexedDB.' : `Save error: ${res.error.message}`,
         res.ok ? 'success' : 'error',
       );
       void refreshProjectsDropdown();
     })();
+  });
+
+  document.getElementById('history-recording-toggle')?.addEventListener('change', (event) => {
+    const enabled = (event.target as HTMLInputElement).checked;
+    void sendBackgroundMessage('UPDATE_SETTINGS', {
+      settings: { recordActivityHistory: enabled },
+    }).then((res) => {
+      if (res.ok) {
+        setStatus(
+          enabled
+            ? 'Activity history recording enabled for explicit PageSift actions.'
+            : 'Activity history recording paused. Existing entries remain intact.',
+          'success',
+        );
+      }
+    });
+  });
+
+  document.getElementById('dismiss-history-notice-btn')?.addEventListener('click', () => {
+    const notice = document.getElementById('history-first-use-notice');
+    if (notice) {
+      notice.style.display = 'none';
+    }
+    void sendBackgroundMessage('UPDATE_SETTINGS', {
+      settings: { activityFirstUseNoticeDismissed: true },
+    });
+  });
+
+  document.getElementById('history-refresh-btn')?.addEventListener('click', () => {
+    void loadActivityHistory(true);
+  });
+
+  document.getElementById('history-clear-btn')?.addEventListener('click', () => {
+    openClearHistoryModal();
+  });
+
+  document.getElementById('clear-history-cancel-btn')?.addEventListener('click', () => {
+    closeClearHistoryModal();
+  });
+
+  document.getElementById('clear-history-modal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      closeClearHistoryModal();
+    }
+  });
+
+  document.getElementById('clear-history-confirm-btn')?.addEventListener('click', () => {
+    void (async () => {
+      closeClearHistoryModal();
+      const res = await sendBackgroundMessage('CLEAR_ACTIVITY_HISTORY');
+      if (res.ok) {
+        void loadActivityHistory(true);
+        setStatus(
+          'Cleared local activity history. Saved projects and artifacts were kept.',
+          'success',
+        );
+      }
+    })();
+  });
+
+  for (const filterId of [
+    'history-current-site-only',
+    'history-domain-filter',
+    'history-tool-filter',
+    'history-status-filter',
+    'history-date-range',
+  ]) {
+    document.getElementById(filterId)?.addEventListener('change', () => {
+      void loadActivityHistory(true);
+    });
+  }
+
+  document.getElementById('history-group-mode')?.addEventListener('change', () => {
+    renderActivityHistoryList();
+  });
+
+  document.getElementById('history-search-input')?.addEventListener('input', () => {
+    if (historySearchTimer !== null) {
+      clearTimeout(historySearchTimer);
+    }
+    historySearchTimer = setTimeout(() => {
+      historySearchTimer = null;
+      void loadActivityHistory(true);
+    }, 180);
+  });
+
+  document.getElementById('history-load-more-btn')?.addEventListener('click', () => {
+    void loadActivityHistory(false);
   });
 
   const supportedNvidiaSourceTools = new Set([
@@ -1841,6 +2747,11 @@ function initWorkspaceUi(): void {
 
   window.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
+      if (document.getElementById('clear-history-modal')?.classList.contains('open')) {
+        event.preventDefault();
+        closeClearHistoryModal();
+        return;
+      }
       if (document.getElementById('nvidia-preview-modal')?.classList.contains('open')) {
         event.preventDefault();
         closeNvidiaModal();
@@ -1855,11 +2766,27 @@ function initWorkspaceUi(): void {
   });
 
   const params = new URLSearchParams(window.location.search);
+  const unsupportedUrl = params.get('unsupportedUrl');
+  if (unsupportedUrl) {
+    const noticeEl = document.getElementById('unsupported-page-notice');
+    if (noticeEl) {
+      noticeEl.style.display = '';
+      noticeEl.textContent = `On-page overlay is restricted by Chrome on "${unsupportedUrl}". Use Activity History, Saved Work, or Settings here, or click the PageSift icon on any http:// or https:// website.`;
+    }
+  }
+
   const initialToolParam = params.get('tool') as ToolId | null;
   if (initialToolParam && initialToolParam in TOOL_TITLES) {
     selectActiveTool(initialToolParam);
   } else {
     selectActiveTool(currentTool);
+  }
+
+  const initialSection = params.get('section');
+  if (initialSection === 'history' || initialSection === 'saved' || initialSection === 'tools') {
+    switchSection(initialSection);
+  } else if (unsupportedUrl) {
+    switchSection('history');
   }
 
   updateActionButtons();
@@ -1874,7 +2801,12 @@ function initWorkspaceUi(): void {
     }
   });
 
-  if (params.get('autorun') === '1' && initialToolParam && initialToolParam !== 'responsive') {
+  if (
+    params.get('autorun') === '1' &&
+    initialToolParam &&
+    initialToolParam !== 'responsive' &&
+    activeSection === 'tools'
+  ) {
     setTimeout(() => {
       void executeSelectedTool();
     }, 120);
