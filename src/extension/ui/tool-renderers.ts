@@ -293,7 +293,7 @@ function renderClonePageView(data: Record<string, unknown>): HTMLElement {
     el(
       'span',
       manifest.isSelfContained ? 'tag positive' : 'tag warning',
-      manifest.isSelfContained ? 'Self-Contained Archive' : 'Partial — Missing Resources Listed',
+      manifest.isSelfContained ? 'Self-Contained Archive' : 'Partial: Missing Resources Listed',
     ),
   );
   policy.appendChild(ph);
@@ -953,40 +953,79 @@ function renderTechStackView(data: Record<string, unknown>): HTMLElement {
     return wrap;
   }
 
-  wrap.appendChild(el('div', 'notice-bar', report.methodologyDisclosure));
+  const summary = report.organizedSummary;
+  const banner = el('div', 'tech-summary-banner');
+  const summaryLeft = el('div');
+  summaryLeft.style.display = 'flex';
+  summaryLeft.style.flexDirection = 'column';
+  summaryLeft.style.gap = '2px';
+  summaryLeft.appendChild(
+    el('strong', undefined, summary.oneLiner || 'No public frontend markers detected'),
+  );
+  summaryLeft.appendChild(
+    el(
+      'span',
+      'muted',
+      `${report.detections.length} public technologies identified across ${summary.groups.length} categories`,
+    ),
+  );
+  banner.appendChild(summaryLeft);
+  banner.appendChild(
+    el(
+      'span',
+      report.detections.length > 0 ? 'tag positive' : 'tag',
+      `${report.detections.length} Detected`,
+    ),
+  );
+  wrap.appendChild(banner);
 
   if (report.detections.length === 0) {
-    wrap.appendChild(
-      el(
-        'div',
-        'empty-state',
-        'No public framework, CSS library, CMS, or analytics markers were detected on this page.',
-      ),
-    );
+    wrap.appendChild(el('div', 'notice-bar', report.methodologyDisclosure));
     return wrap;
   }
 
-  const grid = el('div', 'kv-grid');
+  const groups = summary.groups;
+  if (groups.length > 0) {
+    const orgGrid = el('div', 'kv-grid');
+    for (const grp of groups) {
+      const box = el('div', 'kv-section');
+      const hdr = el('div', 'block-heading');
+      hdr.appendChild(el('h3', 'block-title', grp.label));
+      hdr.appendChild(el('span', 'tag', String(grp.items.length)));
+      box.appendChild(hdr);
+
+      for (const item of grp.items) {
+        const row = el('div', 'tech-short-row');
+        const left = el('div');
+        left.style.display = 'flex';
+        left.style.flexDirection = 'column';
+        left.style.gap = '2px';
+        left.style.minWidth = '0';
+        left.appendChild(el('strong', undefined, item.technology));
+        left.appendChild(el('span', 'muted mono break-all', item.shortReason));
+        row.appendChild(left);
+        row.appendChild(
+          el('span', item.confidence === 'high' ? 'tag positive' : 'tag accent', item.confidence),
+        );
+        box.appendChild(row);
+      }
+      orgGrid.appendChild(box);
+    }
+    wrap.appendChild(orgGrid);
+  }
+
+  const details = el('details', 'raw-disclosure');
+  details.appendChild(
+    el('summary', undefined, `Detailed Evidence & Uncertainty Notes (${report.detections.length})`),
+  );
+  const detGrid = el('div', 'kv-grid');
+  detGrid.style.marginTop = '10px';
   for (const det of report.detections) {
     const box = el('div', 'kv-section');
     const hdr = el('div', 'block-heading');
-    hdr.appendChild(el('h3', 'block-title', det.technology));
-    const tags = el('div', 'control-row');
-    tags.appendChild(el('span', 'tag', det.category.replace(/_/g, ' ')));
-    tags.appendChild(
-      el(
-        'span',
-        det.confidence === 'high'
-          ? 'tag positive'
-          : det.confidence === 'medium'
-            ? 'tag accent'
-            : 'tag warning',
-        `${det.confidence} confidence`,
-      ),
-    );
-    hdr.appendChild(tags);
+    hdr.appendChild(el('strong', undefined, det.technology));
+    hdr.appendChild(el('span', 'tag', `${det.confidence} confidence`));
     box.appendChild(hdr);
-
     const list = el('ul');
     list.style.margin = '0 0 6px';
     list.style.paddingLeft = '18px';
@@ -994,10 +1033,12 @@ function renderTechStackView(data: Record<string, unknown>): HTMLElement {
       list.appendChild(el('li', 'mono', ev));
     }
     box.appendChild(list);
-    box.appendChild(el('div', 'muted', `Uncertainty: ${det.uncertaintyNote}`));
-    grid.appendChild(box);
+    box.appendChild(el('div', 'muted', `Note: ${det.uncertaintyNote}`));
+    detGrid.appendChild(box);
   }
-  wrap.appendChild(grid);
+  details.appendChild(detGrid);
+  wrap.appendChild(details);
+  wrap.appendChild(el('div', 'notice-bar', report.methodologyDisclosure));
   return wrap;
 }
 
@@ -1008,7 +1049,7 @@ function renderEditPreviewView(tool: ToolId, data: Record<string, unknown>): HTM
     el(
       'div',
       'notice-bar',
-      'Local preview only — changes apply strictly inside this live browser tab and reset automatically when the page reloads.',
+      'Local preview only: changes apply strictly inside this live browser tab and reset automatically when the page reloads.',
     ),
   );
   wrap.appendChild(
@@ -1053,7 +1094,7 @@ function renderCaptureSummaryView(data: Record<string, unknown>): HTMLElement {
       el(
         'div',
         'status-line warning',
-        'Nested scroll container detected — full-page scrolling stopped at the document scroll boundary.',
+        'Nested scroll container detected: full-page scrolling stopped at the document scroll boundary.',
       ),
     );
   }

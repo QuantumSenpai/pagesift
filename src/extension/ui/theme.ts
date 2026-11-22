@@ -9,9 +9,9 @@ export function readCachedTheme(): ThemePreference {
       return val;
     }
   } catch {
-    return 'system';
+    return 'light';
   }
-  return 'system';
+  return 'light';
 }
 
 export function writeCachedTheme(pref: ThemePreference): void {
@@ -29,11 +29,11 @@ export function resolveEffectiveTheme(pref: ThemePreference): 'light' | 'dark' {
   if (
     typeof window !== 'undefined' &&
     typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-color-scheme: light)').matches
+    window.matchMedia('(prefers-color-scheme: dark)').matches
   ) {
-    return 'light';
+    return 'dark';
   }
-  return 'dark';
+  return 'light';
 }
 
 export function applyThemePreference(pref: ThemePreference): 'light' | 'dark' {
@@ -123,10 +123,41 @@ const ICON_PATHS: Record<string, string[]> = {
   settings: ['M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M4 12h2', 'M18 12h2', 'M12 4v2', 'M12 18v2'],
   sidebar: ['M4 4h16v16H4V4z', 'M9 4v16'],
   tools: ['M4 6h7', 'M4 12h16', 'M4 18h11'],
+  sparkles: ['M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8L12 3z'],
 };
 
-export function createSvgIcon(name: string, className = 'icon'): SVGSVGElement {
-  const svg = document.createElementNS(SVG_NS, 'svg');
+export function triggerTapFeedback(target: EventTarget | null): void {
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  const btn = target.closest('button, .btn-link');
+  if (!(btn instanceof HTMLElement) || (btn as HTMLButtonElement).disabled) {
+    return;
+  }
+  btn.classList.remove('tap-confirm');
+  void btn.getBoundingClientRect();
+  btn.classList.add('tap-confirm');
+}
+
+export function bindGlobalTapFeedback(root: Document | ShadowRoot = document): void {
+  root.addEventListener(
+    'click',
+    (ev) => {
+      triggerTapFeedback(ev.target);
+    },
+    true,
+  );
+}
+
+export function createSvgIcon(
+  name: string,
+  className = 'icon',
+  ownerDocument: Document | undefined = typeof document !== 'undefined' ? document : undefined,
+): SVGSVGElement {
+  if (!ownerDocument) {
+    throw new Error('No document available to create SVG icon');
+  }
+  const svg = ownerDocument.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('fill', 'none');
   svg.setAttribute('stroke', 'currentColor');
@@ -138,7 +169,7 @@ export function createSvgIcon(name: string, className = 'icon'): SVGSVGElement {
 
   const paths = ICON_PATHS[name] ?? ICON_PATHS['inspect'] ?? [];
   for (const d of paths) {
-    const p = document.createElementNS(SVG_NS, 'path');
+    const p = ownerDocument.createElementNS(SVG_NS, 'path');
     p.setAttribute('d', d);
     svg.appendChild(p);
   }

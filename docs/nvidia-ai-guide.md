@@ -1,15 +1,19 @@
-# PageSift Optional NVIDIA AI Integration Guide
+# PageSift Optional AI Integration Guide (NVIDIA NIM & Custom API Keys)
 
 ## 1. Overview
 
-All 15 PageSift tools work locally without any AI credentials. For users who explicitly choose optional LLM enhancement of local `Clone Prompt` blueprints or `Design Review` findings, PageSift includes a strict adapter (`src/extension/ai/nvidia-client.ts`) targeting NVIDIA's OpenAI-compatible NIM API.
+All 15 PageSift tools work locally without any AI credentials. For users who explicitly choose optional LLM enhancement of local `Clone Prompt` blueprints, `Design Review` findings, or `Tech Stack` summaries, PageSift includes an OpenAI-compatible client (`src/extension/ai/nvidia-client.ts`) defaulting to NVIDIA NIM while supporting user-selected provider presets or custom endpoints:
 
-- **Verified Endpoint Allowlist**:
-  - `https://integrate.api.nvidia.com/v1/chat/completions`
+- **Supported Presets & SSRF-Safe Endpoint Validation**:
+  - `nvidia`: `https://integrate.api.nvidia.com/v1/chat/completions`
+  - `openai`: `https://api.openai.com/v1/chat/completions`
+  - `openrouter`: `https://openrouter.ai/api/v1/chat/completions`
+  - `groq`: `https://api.groq.com/openai/v1/chat/completions`
+  - `custom`: User-supplied endpoint validated by `validateSafeAiEndpointUrl()` (HTTPS required for public hosts; HTTP permitted only for `127.0.0.1` / `localhost` / `[::1]`; private/link-local/metadata IP ranges rejected).
 - **User-Owned Key & Model ID**:
-  - No developer-owned key is bundled, and PageSift never invents a fallback model ID.
-  - The user supplies their own NVIDIA API key (`nvapi-...`) and chosen catalog model ID (for example `meta/llama-3.1-70b-instruct` from https://build.nvidia.com).
-  - Provider access is governed by the user's own NVIDIA account terms and credits.
+  - No developer-owned key is bundled into `dist/extension/`, and PageSift never invents a fallback model ID.
+  - The user supplies their own API key (`nvapi-...`, `sk-...`, or custom Bearer token) and chosen model ID (for example `meta/llama-3.1-70b-instruct` or `gpt-4o-mini`).
+  - Provider access is governed by the user's own account terms and credits.
 
 ---
 
@@ -26,11 +30,12 @@ All 15 PageSift tools work locally without any AI credentials. For users who exp
 
 ## 3. Data Minimization, Allowlist, and Preview/Confirmation Consistency
 
-PageSift does **not** forward arbitrary tool outputs or trust a caller-supplied `sanitizedContext` field at the background boundary. Instead, `BackgroundCoordinator` rebuilds a compact allowlisted payload via `buildAllowlistedNvidiaContext()` for supported tasks (`enhance_clone_prompt` and `interpret_design_review`) and runs recursive sanitization across both objects and arrays:
+PageSift does **not** forward arbitrary tool outputs or trust a caller-supplied `sanitizedContext` field at the background boundary. Instead, `BackgroundCoordinator` rebuilds a compact allowlisted payload via `buildAllowlistedNvidiaContext()` for supported tasks (`enhance_clone_prompt`, `interpret_design_review`, and `explain_tech_stack`) and runs recursive sanitization across both objects and arrays:
 
 - **Allowlisted Fields Only**:
   - `enhance_clone_prompt`: `sourceTool`, `pageTitle`, `sourceUrl`, `targetFramework`, `observations`, `assumptions`, `prompt`, `colors`/`topColors`/`palette`, `typography`/`fonts`, `spacing`/`spacingScale`, `layout`, `components`, `sections`, `markdown`.
   - `interpret_design_review`: `sourceTool`, `pageTitle`, `sourceUrl`, `findings`, `findingsCount`, `summary`, `counts`, `remediationPrompt`, `colors`, `typography`, `spacing`, `layout`.
+  - `explain_tech_stack`: `sourceTool`, `pageTitle`, `sourceUrl`, `summary`, `organizedSummary`, `detections`, `uncertaintyNotes`.
 - **Recursive Structural Removal (Objects & Arrays)**:
   - Recursively strips case-insensitive sensitive structural field names matching or containing `password`, `passwd`, `pwd`, `secret`, `token`, `apikey`, `authorization`, `authheader`, `cookie`, `session`, `credential`, `privatekey`, `formvalues`, `rawhtml`, `htmlcontent`, `htmlpreview`, `zipbase64`, `dataurl`, `backup`, `bearer`, `csrf`, `creditcard`, `cardnumber`, `cvv`, `ssn` at every supported nesting depth inside objects and arrays.
   - Strips `username`, `password`, query strings (`?...`), and fragments (`#...`) from HTTP(S) URLs (including URLs embedded in strings), and replaces `data:` URIs with `[omitted-data-uri]`.

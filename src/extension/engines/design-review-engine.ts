@@ -114,7 +114,7 @@ export function runLocalDesignReview(doc: Document, win: Window): DesignReviewRe
       evidence: `Primary <h1> font size (${maxHeadingSize}px) is only ${headingScaleRatio}x body size (${bodyFontSize}px).`,
       affectedSelectors: h1Elements.map((e) => buildShortSelector(e.element)),
       suggestion:
-        'Increase primary heading scale to at least 1.75x–2.5x body text size with tighter line-height.',
+        'Increase primary heading scale to at least 1.75x - 2.5x body text size with tighter line-height.',
     });
   }
 

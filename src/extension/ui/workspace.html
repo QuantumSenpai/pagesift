@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PageSift — Web Research &amp; Inspection Dashboard</title>
+    <title>PageSift: Web Research &amp; Inspection Dashboard</title>
     <link rel="stylesheet" href="design-system.css" />
   </head>
   <body>
@@ -39,7 +39,7 @@
             <span class="brand-name">PageSift</span>
           </div>
           <span class="header-divider" aria-hidden="true"></span>
-          <div class="target-context" id="target-page-pill" title="Active target page">
+          <div class="target-context" id="target-page-badge" title="Active target page">
             <span class="status-dot positive" id="target-status-dot" aria-hidden="true"></span>
             <span id="target-page-label" class="truncate">Connecting to page...</span>
           </div>
@@ -391,7 +391,7 @@
 
               <div id="edit-history-controls" class="sub-panel">
                 <div class="control-row">
-                  <span class="tag warning">Local preview only — reloads reset changes</span>
+                  <span class="tag warning">Local preview only (reloads reset changes)</span>
                   <button id="undo-edit-btn" class="secondary sm" type="button">Undo</button>
                   <button id="redo-edit-btn" class="secondary sm" type="button">Redo</button>
                   <button id="reset-edit-btn" class="danger-outline sm" type="button">
@@ -403,7 +403,8 @@
               <div id="ai-controls" class="sub-panel">
                 <div class="control-row">
                   <span class="muted"
-                    >Optional NVIDIA AI enhancement (exact redacted preview required):</span
+                    >Optional AI enhancement (NVIDIA NIM or custom API key; egress preview
+                    required):</span
                   >
                   <button id="preview-nvidia-btn" class="secondary sm" type="button">
                     Preview Data Egress
@@ -425,7 +426,7 @@
             </div>
 
             <div id="status-message" class="status-line" role="status" aria-live="polite">
-              Ready — all 15 tools run locally in your browser.
+              Ready: all 15 tools run locally in your browser.
             </div>
 
             <div id="result-actions" class="result-toolbar">
@@ -470,8 +471,8 @@
               <div>
                 <h1 class="section-title">Activity History</h1>
                 <p class="section-subtitle">
-                  Local timeline of explicit PageSift tool actions — never ordinary browsing
-                  history. Action duration measures tool execution time, not time spent reading a
+                  Local timeline of explicit PageSift tool actions (never ordinary browsing
+                  history). Action duration measures tool execution time, not time spent reading a
                   page.
                 </p>
               </div>
@@ -619,7 +620,7 @@
       >
         <div class="block-heading">
           <h2 id="nvidia-modal-title" class="section-title" style="font-size: 16px">
-            Optional NVIDIA AI — Data Egress Preview
+            Optional AI Enhancement: Data Egress Preview
           </h2>
           <button
             id="nvidia-modal-close-btn"

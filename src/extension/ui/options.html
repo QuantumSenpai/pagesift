@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PageSift Settings — Preferences, Activity History &amp; Storage</title>
+    <title>PageSift Settings: Preferences, Overlay Customization &amp; Storage</title>
     <link rel="stylesheet" href="design-system.css" />
   </head>
   <body>
@@ -48,9 +48,25 @@
             <div class="field-group">
               <label for="opt-theme">Color Theme</label>
               <select id="opt-theme">
+                <option value="light">Light (Architectural)</option>
+                <option value="dark">Dark (Charcoal)</option>
                 <option value="system">System Default</option>
-                <option value="dark">Dark (Midnight)</option>
-                <option value="light">Light (Warm Paper)</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="opt-overlay-position">On-Page Overlay Position</label>
+              <select id="opt-overlay-position">
+                <option value="bottom-center">Bottom Center (Mid Under)</option>
+                <option value="bottom-right">Bottom Right</option>
+                <option value="top-center">Top Center</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="opt-overlay-theme">On-Page Overlay Surface</label>
+              <select id="opt-overlay-theme">
+                <option value="follow">Match Dashboard</option>
+                <option value="light">Light Surface</option>
+                <option value="dark">Charcoal Dark Surface</option>
               </select>
             </div>
             <div class="field-group">
@@ -87,18 +103,8 @@
               </select>
             </div>
           </div>
-          <div class="control-row">
-            <div class="field-group" style="flex: 1 1 260px">
-              <label for="opt-nvidia-model">Optional NVIDIA Catalog Model ID</label>
-              <input
-                id="opt-nvidia-model"
-                type="text"
-                placeholder="e.g. meta/llama-3.1-70b-instruct"
-              />
-            </div>
-            <button id="save-settings-btn" type="button" style="align-self: flex-end">
-              Save Preferences
-            </button>
+          <div class="control-row" style="justify-content: flex-end">
+            <button id="save-settings-btn" type="button">Save Preferences</button>
           </div>
         </section>
 
@@ -110,7 +116,7 @@
             <span class="muted mono">explicit tool actions only</span>
           </div>
           <p class="muted" style="margin: 0">
-            PageSift only records actions you explicitly trigger in PageSift — never ordinary
+            PageSift only records actions you explicitly trigger in PageSift, never ordinary
             browsing visits, query strings, passwords, or full HTML. Disabling recording immediately
             stops future entries without deleting existing saved artifacts.
           </p>
@@ -140,24 +146,58 @@
         <section class="flat-block" aria-labelledby="sec-nvidia-title">
           <div class="block-heading">
             <h2 id="sec-nvidia-title" class="section-title" style="font-size: 15.5px">
-              Optional NVIDIA NIM API Key (BYOK)
+              Optional AI Provider &amp; Session API Key (NVIDIA or Any API Key)
             </h2>
             <span id="nvidia-key-status" class="tag">Status: Checking...</span>
           </div>
           <p class="muted" style="margin: 0">
-            All 15 PageSift tools work locally with no API key. If you add your own NVIDIA key, it
-            stays strictly in in-memory session storage until the browser closes and is never
-            written to pages, backups, or history.
+            All 15 PageSift tools work locally with no API key. Use an NVIDIA NIM key, OpenAI,
+            OpenRouter, Groq, or any custom OpenAI-compatible API endpoint. Your key stays strictly
+            in in-memory session storage until the browser closes and is never written to pages,
+            backups, or history.
           </p>
+          <div class="options-grid">
+            <div class="field-group">
+              <label for="opt-ai-provider">AI Provider Preset</label>
+              <select id="opt-ai-provider">
+                <option value="nvidia">NVIDIA NIM (build.nvidia.com)</option>
+                <option value="openai">OpenAI (api.openai.com)</option>
+                <option value="openrouter">OpenRouter (openrouter.ai)</option>
+                <option value="groq">Groq (api.groq.com)</option>
+                <option value="custom">Custom OpenAI-Compatible API</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="opt-ai-endpoint">Chat Completions Endpoint URL</label>
+              <input
+                id="opt-ai-endpoint"
+                type="url"
+                value="https://integrate.api.nvidia.com/v1/chat/completions"
+                placeholder="https://integrate.api.nvidia.com/v1/chat/completions"
+              />
+            </div>
+            <div class="field-group">
+              <label for="opt-nvidia-model">Model ID</label>
+              <input
+                id="opt-nvidia-model"
+                type="text"
+                value="meta/llama-3.1-70b-instruct"
+                placeholder="e.g. meta/llama-3.1-70b-instruct or gpt-4o-mini"
+              />
+            </div>
+          </div>
           <div class="control-row">
-            <label class="sr-only" for="nvidia-api-key-input">NVIDIA API key</label>
+            <label class="sr-only" for="nvidia-api-key-input">Session API key</label>
             <input
               id="nvidia-api-key-input"
               type="password"
               autocomplete="off"
-              placeholder="Enter user-owned NVIDIA API key (nvapi-...)"
+              placeholder="Paste session API key (nvapi-..., sk-..., or custom Bearer token)"
               style="flex: 1 1 280px"
             />
+            <button id="save-ai-config-btn" class="secondary" type="button">
+              Save Provider Settings
+            </button>
             <button id="set-nvidia-key-btn" type="button">Set Session Key</button>
             <button id="clear-nvidia-key-btn" class="secondary" type="button">Clear Key</button>
           </div>

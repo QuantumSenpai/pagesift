@@ -144,6 +144,11 @@ export class BackgroundCoordinator {
     const pending = (async (): Promise<{ recoveredJobsCount: number }> => {
       try {
         const recoveredJobsCount = await this.env.storage.recoverInterruptedJobs();
+        const settings = await this.env.settingsStore.getSettings();
+        await this.env.storage.pruneActivities({
+          retentionDays: settings.activityRetentionDays,
+          maxEntries: settings.activityMaxEntries,
+        });
         await this.restoreResponsiveSession();
         return { recoveredJobsCount };
       } catch (err: unknown) {
@@ -260,11 +265,19 @@ export class BackgroundCoordinator {
     errorCategory?: string | null | undefined;
   }): Promise<LocalActivityRecord | null> {
     const settings = await this.env.settingsStore.getSettings();
-    if (!settings.recordActivityHistory) {
-      return null;
-    }
-
     const existing = await this.env.storage.getActivity(params.activityId);
+    if (!settings.recordActivityHistory) {
+      if (!existing || existing.status !== 'running' || params.status === 'running') {
+        return null;
+      }
+      return this.env.storage.upsertActivity({
+        ...existing,
+        status: params.status,
+        completedAt: new Date().toISOString(),
+        durationMs: null,
+        resultSummary: 'Recording paused during this action',
+      });
+    }
     const nowIso = new Date().toISOString();
     const cleanUrl = sanitizeActivitySourceUrl(params.rawUrl || existing?.sourceUrl || '');
     const cleanTitle = params.rawTitle
@@ -508,6 +521,21 @@ export class BackgroundCoordinator {
           return createSuccessResponse(msg, { settings });
         }
 
+        case 'UPDATE_OVERLAY_CUSTOMIZATION': {
+          const partial: Record<string, unknown> = {};
+          if (typeof msg.payload['overlayPosition'] === 'string') {
+            partial['overlayPosition'] = msg.payload['overlayPosition'];
+          }
+          if (typeof msg.payload['overlayThemeMode'] === 'string') {
+            partial['overlayThemeMode'] = msg.payload['overlayThemeMode'];
+          }
+          if (Array.isArray(msg.payload['overlayPinnedTools'])) {
+            partial['overlayPinnedTools'] = msg.payload['overlayPinnedTools'];
+          }
+          const settings = await this.env.settingsStore.updateSettings(partial);
+          return createSuccessResponse(msg, { settings });
+        }
+
         case 'SET_NVIDIA_API_KEY': {
           const apiKey = typeof msg.payload['apiKey'] === 'string' ? msg.payload['apiKey'] : '';
           await this.env.settingsStore.setSessionNvidiaApiKey(apiKey);
@@ -531,9 +559,10 @@ export class BackgroundCoordinator {
           const modelId =
             typeof msg.payload['modelId'] === 'string' && msg.payload['modelId'].trim().length > 0
               ? msg.payload['modelId'].trim()
-              : settings.nvidiaModelId;
+              : settings.nvidiaModelId || 'meta/llama-3.1-70b-instruct';
           const taskType = msg.payload['taskType'] as NvidiaTaskType;
           const sourceTool = msg.payload['sourceTool'] as NvidiaSupportedSourceTool;
+          const allowCustomEndpoint = settings.aiProviderPreset !== 'nvidia';
           const toolOutput =
             typeof msg.payload['toolOutput'] === 'object' && msg.payload['toolOutput'] !== null
               ? (msg.payload['toolOutput'] as Record<string, unknown>)
@@ -548,6 +577,7 @@ export class BackgroundCoordinator {
           const egressPreview = buildNvidiaEgressPreview({
             modelId,
             endpoint: settings.nvidiaEndpoint,
+            allowCustomEndpoint,
             taskType,
             sanitizedContext: rebuiltContext,
           });
@@ -612,6 +642,7 @@ export class BackgroundCoordinator {
               apiKey,
               modelId,
               endpoint: settings.nvidiaEndpoint,
+              allowCustomEndpoint,
               taskType,
               sanitizedContext: cached.sanitizedContext,
               signal: abortCtrl.signal,
@@ -626,12 +657,29 @@ export class BackgroundCoordinator {
         case 'CANCEL_JOB': {
           const targetJobId =
             typeof msg.payload['jobId'] === 'string' ? msg.payload['jobId'] : msg.requestId;
+          const existingJob = await this.env.storage.getJob(targetJobId);
+          const ownerTabId = existingJob?.tabId ?? this.activeJobTabs.get(targetJobId);
+          if (!senderAuth.isExtensionPage) {
+            const senderTabId = sender.tab?.id;
+            if (
+              typeof senderTabId !== 'number' ||
+              typeof ownerTabId !== 'number' ||
+              ownerTabId !== senderTabId
+            ) {
+              return createErrorResponse(
+                msg.requestId,
+                'UNAUTHORIZED_SENDER',
+                'Content scripts can only cancel jobs belonging to their own tab',
+                msg.operation,
+              );
+            }
+          }
           const ctrl = this.activeJobControllers.get(targetJobId);
           if (ctrl) {
             ctrl.abort();
             this.activeJobControllers.delete(targetJobId);
           }
-          const boundTabId = this.activeJobTabs.get(targetJobId) ?? msg.tabId;
+          const boundTabId = ownerTabId ?? (senderAuth.isExtensionPage ? msg.tabId : undefined);
           if (typeof boundTabId === 'number' && this.env.sendToTab) {
             await this.env
               .sendToTab(boundTabId, {
@@ -643,7 +691,6 @@ export class BackgroundCoordinator {
               })
               .catch(() => undefined);
           }
-          const existingJob = await this.env.storage.getJob(targetJobId);
           if (existingJob && existingJob.status === 'running') {
             await this.updateJob(existingJob, {
               status: 'cancelled',
@@ -664,6 +711,18 @@ export class BackgroundCoordinator {
           const jobs = await db.getAll('jobs');
           jobs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
           return createSuccessResponse(msg, { jobs: jobs.slice(0, 50) });
+        }
+
+        case 'LIST_SITE_JOBS': {
+          const senderTabId = senderAuth.isExtensionPage ? msg.tabId : sender.tab?.id;
+          if (typeof senderTabId !== 'number') {
+            return createSuccessResponse(msg, { jobs: [] });
+          }
+          const db = await this.env.storage.getDb();
+          const jobs = await db.getAll('jobs');
+          const scoped = jobs.filter((job) => job.tabId === senderTabId);
+          scoped.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+          return createSuccessResponse(msg, { jobs: scoped.slice(0, 50) });
         }
 
         case 'LIST_PROJECTS_FROM_IDB': {

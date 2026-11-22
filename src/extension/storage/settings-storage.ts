@@ -4,8 +4,94 @@ export const ALLOWED_NVIDIA_ENDPOINTS = [
   'https://integrate.api.nvidia.com/v1/chat/completions',
 ] as const;
 
+export const AI_PROVIDER_PRESETS = {
+  nvidia: {
+    label: 'NVIDIA NIM',
+    endpoint: 'https://integrate.api.nvidia.com/v1/chat/completions',
+    defaultModel: 'meta/llama-3.1-70b-instruct',
+  },
+  openai: {
+    label: 'OpenAI',
+    endpoint: 'https://api.openai.com/v1/chat/completions',
+    defaultModel: 'gpt-4o-mini',
+  },
+  openrouter: {
+    label: 'OpenRouter',
+    endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+    defaultModel: 'openai/gpt-4o-mini',
+  },
+  groq: {
+    label: 'Groq',
+    endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+    defaultModel: 'llama-3.3-70b-versatile',
+  },
+  custom: {
+    label: 'Custom OpenAI-Compatible API',
+    endpoint: '',
+    defaultModel: '',
+  },
+} as const;
+
+export type AiProviderPreset = keyof typeof AI_PROVIDER_PRESETS;
+
+export function validateSafeAiEndpointUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error('AI endpoint URL must be a valid URL');
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('AI endpoint URL must not embed credentials');
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  const isLoopback = hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]';
+  if (parsed.protocol === 'https:') {
+    if (
+      hostname.endsWith('.local') ||
+      hostname === '169.254.169.254' ||
+      hostname.startsWith('10.') ||
+      hostname.startsWith('192.168.') ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+    ) {
+      throw new Error('Private or link-local HTTPS AI endpoints are blocked for security');
+    }
+    return parsed.toString();
+  }
+  if (parsed.protocol === 'http:' && isLoopback) {
+    return parsed.toString();
+  }
+  throw new Error('Remote AI endpoint must use https:// (or http://localhost for local runtimes)');
+}
+
+const overlayToolIdSchema = z.enum([
+  'inspect',
+  'clone_page',
+  'clone_prompt',
+  'design_md',
+  'assets',
+  'colors',
+  'fonts',
+  'measure',
+  'edit_text',
+  'capture',
+  'responsive',
+  'swap_font',
+  'arrange',
+  'design_review',
+  'tech_stack',
+]);
+
 export const extensionSettingsSchema = z.strictObject({
-  theme: z.enum(['system', 'light', 'dark']).default('system'),
+  theme: z.enum(['system', 'light', 'dark']).default('light'),
+  overlayPosition: z.enum(['bottom-center', 'bottom-right', 'top-center']).default('bottom-center'),
+  overlayThemeMode: z.enum(['follow', 'light', 'dark']).default('follow'),
+  overlayPinnedTools: z
+    .array(overlayToolIdSchema)
+    .min(3)
+    .max(6)
+    .default(['inspect', 'tech_stack', 'colors', 'fonts', 'capture']),
   defaultExportFormat: z.enum(['markdown', 'json', 'html_css']).default('markdown'),
   colorFormat: z.enum(['hex', 'rgb', 'hsl', 'oklch']).default('hex'),
   spacingUnit: z.enum(['px', 'rem']).default('px'),
@@ -20,10 +106,21 @@ export const extensionSettingsSchema = z.strictObject({
   defaultPromptTarget: z
     .enum(['generic', 'react_tailwind', 'html_css', 'vue_css'])
     .default('react_tailwind'),
+  aiProviderPreset: z.enum(['nvidia', 'openai', 'openrouter', 'groq', 'custom']).default('nvidia'),
   nvidiaEndpoint: z
-    .enum(ALLOWED_NVIDIA_ENDPOINTS)
-    .default('https://integrate.api.nvidia.com/v1/chat/completions'),
-  nvidiaModelId: z.string().trim().max(160).default(''),
+    .string()
+    .trim()
+    .max(512)
+    .default(ALLOWED_NVIDIA_ENDPOINTS[0])
+    .refine((val) => {
+      try {
+        validateSafeAiEndpointUrl(val);
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'AI endpoint must be a safe https:// URL or localhost endpoint'),
+  nvidiaModelId: z.string().trim().max(160).default('meta/llama-3.1-70b-instruct'),
 });
 
 export type ExtensionSettings = z.infer<typeof extensionSettingsSchema>;
@@ -101,8 +198,8 @@ export class ExtensionSettingsStore {
 
   public async setSessionNvidiaApiKey(apiKey: string): Promise<void> {
     const trimmed = apiKey.trim();
-    if (trimmed.length < 12 || trimmed.length > 256 || /\s/.test(trimmed)) {
-      throw new Error('NVIDIA API key must be a non-empty token between 12 and 256 characters');
+    if (trimmed.length < 8 || trimmed.length > 512 || /\s/.test(trimmed)) {
+      throw new Error('API key must be a non-empty token between 8 and 512 characters');
     }
     await this.sessionArea.set({ [NVIDIA_SESSION_KEY]: trimmed });
   }

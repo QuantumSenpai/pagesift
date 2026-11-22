@@ -1203,20 +1203,59 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       const host = document.getElementById('pagesift-root-host');
       const sr = host?.shadowRoot;
       const iconImg = sr?.querySelector<HTMLImageElement>('.ps-brand img');
-      const toolsCount = sr?.querySelectorAll('button[data-overlay-tool]').length ?? 0;
-      const panelVisible = Boolean(
-        sr?.querySelector('.ps-panel') &&
-        getComputedStyle(sr.querySelector('.ps-panel') as HTMLElement).display !== 'none',
-      );
+      const panel = sr?.querySelector<HTMLElement>('.ps-panel');
+      const styleText = sr?.querySelector('style')?.textContent ?? '';
+      const anchor = sr?.querySelector<HTMLElement>('.ps-anchor');
+      const dockRect = panel?.getBoundingClientRect();
+      const computed = panel ? getComputedStyle(panel) : null;
+      const anchorComputed = anchor ? getComputedStyle(anchor) : null;
+      const matrix =
+        computed && computed.transform !== 'none' ? new DOMMatrix(computed.transform) : null;
       return {
-        toolsCount,
-        panelVisible,
+        pinnedCount: sr?.querySelectorAll('button[data-overlay-bar-tool]').length ?? 0,
+        panelVisible: Boolean(panel && computed?.display !== 'none'),
         iconLoaded: Boolean(iconImg && iconImg.complete && iconImg.naturalWidth > 0),
+        bottomCenterAligned: Boolean(
+          dockRect &&
+          Math.abs((dockRect.left + dockRect.right) / 2 - window.innerWidth / 2) < 30 &&
+          dockRect.bottom > window.innerHeight - 60,
+        ),
+        noTransformCollision:
+          anchorComputed?.transform === 'none' && (!matrix || Math.abs(matrix.m41) < 0.5),
+        hasDropShadow: Boolean(computed?.boxShadow && computed.boxShadow !== 'none'),
+        noPillsOrGradientsOrDashes:
+          !styleText.includes('999px') &&
+          !styleText.includes('gradient(') &&
+          !/[\u2013\u2014]/.test(sr?.textContent ?? ''),
       };
     });
-    expect(overlayState1.toolsCount).toBe(15);
+    expect(overlayState1.pinnedCount).toBeGreaterThanOrEqual(3);
     expect(overlayState1.panelVisible).toBe(true);
     expect(overlayState1.iconLoaded).toBe(true);
+    expect(overlayState1.bottomCenterAligned).toBe(true);
+    expect(overlayState1.noTransformCollision).toBe(true);
+    expect(overlayState1.hasDropShadow).toBe(true);
+    expect(overlayState1.noPillsOrGradientsOrDashes).toBe(true);
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-ps-action="toggle-tools"]')?.click();
+    });
+    const drawerToolsState = await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const drawer = sr?.querySelector<HTMLElement>('.ps-drawer');
+      const dock = sr?.querySelector<HTMLElement>('.ps-panel');
+      const dRect = drawer?.getBoundingClientRect();
+      const pRect = dock?.getBoundingClientRect();
+      return {
+        open: Boolean(drawer?.classList.contains('open')),
+        toolsCount: sr?.querySelectorAll('button[data-overlay-tool]').length ?? 0,
+        unfoldsUpward: Boolean(dRect && pRect && dRect.bottom <= pRect.top + 4),
+      };
+    });
+    expect(drawerToolsState.open).toBe(true);
+    expect(drawerToolsState.toolsCount).toBe(15);
+    expect(drawerToolsState.unfoldsUpward).toBe(true);
 
     await fixturePage.evaluate(() => {
       const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
@@ -1225,8 +1264,8 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
     });
     const minimizedCheck = await fixturePage.evaluate(() => {
       const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
-      const pill = sr?.querySelector<HTMLElement>('.ps-minbar');
-      return Boolean(pill && getComputedStyle(pill).display !== 'none');
+      const bar = sr?.querySelector<HTMLElement>('.ps-minbar');
+      return Boolean(bar && getComputedStyle(bar).display !== 'none');
     });
     expect(minimizedCheck).toBe(true);
 
@@ -1238,13 +1277,17 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
 
     await fixturePage.evaluate(() => {
       const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
-      const colorsBtn = sr?.querySelector<HTMLButtonElement>('button[data-overlay-tool="colors"]');
+      const colorsBtn = sr?.querySelector<HTMLButtonElement>(
+        'button[data-overlay-bar-tool="colors"]',
+      );
       colorsBtn?.click();
     });
     await fixturePage.waitForFunction(
       () => {
         const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
-        return (sr?.querySelector('.ps-result')?.textContent ?? '').includes('Color Palette');
+        return (sr?.querySelector('.ps-drawer-content')?.textContent ?? '').includes(
+          'Color Palette',
+        );
       },
       undefined,
       { polling: 100, timeout: 10000 },
@@ -1252,15 +1295,49 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
 
     await fixturePage.evaluate(() => {
       const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-overlay-bar-tool="tech_stack"]')?.click();
+    });
+    await fixturePage.waitForFunction(
+      () => {
+        const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        const text = sr?.querySelector('.ps-drawer-content')?.textContent ?? '';
+        return text.includes('Tech Stack');
+      },
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-ps-action="customize"]')?.click();
+    });
+    const customDockMoved = await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const sel = sr?.querySelector<HTMLSelectElement>('.ps-drawer select.ps-field');
+      if (!sel) return false;
+      sel.value = 'bottom-right';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      const dock = sr?.querySelector<HTMLElement>('.ps-panel');
+      const movedRight = Boolean(
+        dock && dock.getBoundingClientRect().right > window.innerWidth - 40,
+      );
+      sel.value = 'bottom-center';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      return movedRight;
+    });
+    expect(customDockMoved).toBe(true);
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
       const inspectBtn = sr?.querySelector<HTMLButtonElement>(
-        'button[data-overlay-tool="inspect"]',
+        'button[data-overlay-bar-tool="inspect"]',
       );
       inspectBtn?.click();
     });
     const minimizedForPick = await fixturePage.evaluate(() => {
       const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
-      const pill = sr?.querySelector<HTMLElement>('.ps-minbar');
-      return Boolean(pill && getComputedStyle(pill).display !== 'none');
+      const bar = sr?.querySelector<HTMLElement>('.ps-minbar');
+      return Boolean(bar && getComputedStyle(bar).display !== 'none');
     });
     expect(minimizedForPick).toBe(true);
 
@@ -1269,7 +1346,7 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       () => {
         const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
         const panel = sr?.querySelector<HTMLElement>('.ps-panel');
-        const resText = sr?.querySelector('.ps-result')?.textContent ?? '';
+        const resText = sr?.querySelector('.ps-drawer-content')?.textContent ?? '';
         return (
           Boolean(panel && getComputedStyle(panel).display !== 'none') &&
           resText.includes('hero-title')
@@ -1378,57 +1455,148 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
     );
     expect(overlayDismissed).toBe(true);
 
-    const optionsPage = await context.newPage();
-    await optionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
-      waitUntil: 'domcontentloaded',
+    const mockAiRequests: Array<{ auth: string; body: string }> = [];
+    const mockAiServer = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += String(chunk);
+      });
+      req.on('end', () => {
+        mockAiRequests.push({
+          auth: req.headers['authorization'] ?? '',
+          body,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            id: 'chatcmpl-custom-local',
+            model: 'custom-tech-explainer',
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: 'assistant',
+                  content: 'CUSTOM_AI_TECH_SUMMARY: Organized architecture stack verified.',
+                },
+                finish_reason: 'stop',
+              },
+            ],
+          }),
+        );
+      });
     });
-    await optionsPage.fill('#opt-nvidia-model', 'meta/llama-3.1-70b-instruct');
-    await optionsPage.click('#save-settings-btn');
-    await optionsPage.waitForFunction(
-      () =>
-        (document.getElementById('options-status-banner')?.textContent ?? '').includes(
-          'Preferences saved',
-        ),
-      undefined,
-      { polling: 100, timeout: 10000 },
-    );
-    const activityStat = (await optionsPage.locator('#stat-activities').textContent()) ?? '0';
-    expect(Number.parseInt(activityStat, 10)).toBeGreaterThanOrEqual(1);
-    await optionsPage.click('#clear-all-data-btn');
-    expect(
-      await optionsPage.evaluate(
-        () => document.getElementById('confirm-clear-modal')?.classList.contains('open') === true,
-      ),
-    ).toBe(true);
-    await optionsPage.keyboard.press('Escape');
-    expect(
-      await optionsPage.evaluate(
-        () => document.getElementById('confirm-clear-modal')?.classList.contains('open') === false,
-      ),
-    ).toBe(true);
-    await optionsPage.close();
+    await new Promise<void>((resolve) => {
+      mockAiServer.listen(0, '127.0.0.1', () => {
+        resolve();
+      });
+    });
+    const mockAiAddr = mockAiServer.address();
+    const mockAiPort = typeof mockAiAddr === 'object' && mockAiAddr ? mockAiAddr.port : 0;
 
-    await handedOffWorkspace.bringToFront();
-    await handedOffWorkspace.click('button[data-tool="clone_prompt"]');
-    await handedOffWorkspace.click('#run-tool-btn');
-    await waitForWorkspaceStatus(handedOffWorkspace, 'Completed ', 10000);
-    await handedOffWorkspace.click('#preview-nvidia-btn');
-    await handedOffWorkspace.waitForFunction(
-      () => document.getElementById('nvidia-preview-modal')?.classList.contains('open') === true,
-      undefined,
-      { polling: 100, timeout: 10000 },
-    );
-    const modalFocusInDialog = await handedOffWorkspace.evaluate(
-      () => document.activeElement?.id === 'nvidia-modal-close-btn',
-    );
-    expect(modalFocusInDialog).toBe(true);
-    await handedOffWorkspace.keyboard.press('Escape');
-    const modalClosedAndRestored = await handedOffWorkspace.evaluate(() => ({
-      closed: document.getElementById('nvidia-preview-modal')?.classList.contains('open') === false,
-      focusedId: document.activeElement?.id ?? '',
-    }));
-    expect(modalClosedAndRestored.closed).toBe(true);
-    expect(modalClosedAndRestored.focusedId).toBe('preview-nvidia-btn');
+    try {
+      const optionsPage = await context.newPage();
+      await optionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await optionsPage.selectOption('#opt-ai-provider', 'custom');
+      await optionsPage.fill('#opt-ai-endpoint', 'http://169.254.169.254/v1/chat/completions');
+      await optionsPage.click('#save-ai-config-btn');
+      await optionsPage.waitForFunction(
+        () =>
+          (document.getElementById('options-status-banner')?.textContent ?? '').includes(
+            'Save failed',
+          ),
+        undefined,
+        { polling: 100, timeout: 10000 },
+      );
+
+      await optionsPage.fill(
+        '#opt-ai-endpoint',
+        `http://127.0.0.1:${mockAiPort}/v1/chat/completions`,
+      );
+      await optionsPage.fill('#opt-nvidia-model', 'custom-tech-explainer');
+      await optionsPage.click('#save-ai-config-btn');
+      await optionsPage.waitForFunction(
+        () =>
+          (document.getElementById('options-status-banner')?.textContent ?? '').includes('saved'),
+        undefined,
+        { polling: 100, timeout: 10000 },
+      );
+      await optionsPage.fill('#nvidia-api-key-input', 'sk-any-custom-key-9876543210');
+      await optionsPage.click('#set-nvidia-key-btn');
+      await optionsPage.waitForFunction(
+        () =>
+          (document.getElementById('nvidia-key-status')?.textContent ?? '').includes(
+            'Active in session',
+          ),
+        undefined,
+        { polling: 100, timeout: 10000 },
+      );
+
+      const activityStat = (await optionsPage.locator('#stat-activities').textContent()) ?? '0';
+      expect(Number.parseInt(activityStat, 10)).toBeGreaterThanOrEqual(1);
+      await optionsPage.click('#clear-all-data-btn');
+      expect(
+        await optionsPage.evaluate(
+          () => document.getElementById('confirm-clear-modal')?.classList.contains('open') === true,
+        ),
+      ).toBe(true);
+      await optionsPage.keyboard.press('Escape');
+      expect(
+        await optionsPage.evaluate(
+          () =>
+            document.getElementById('confirm-clear-modal')?.classList.contains('open') === false,
+        ),
+      ).toBe(true);
+      await optionsPage.close();
+
+      await handedOffWorkspace.bringToFront();
+      await handedOffWorkspace.click('button[data-tool="tech_stack"]');
+      const tapClassTriggered = await handedOffWorkspace.evaluate(
+        () =>
+          document
+            .querySelector('button[data-tool="tech_stack"]')
+            ?.classList.contains('tap-confirm') ?? false,
+      );
+      expect(tapClassTriggered).toBe(true);
+      await handedOffWorkspace.click('#run-tool-btn');
+      await waitForWorkspaceStatus(handedOffWorkspace, 'Completed ', 10000);
+      await handedOffWorkspace.click('#preview-nvidia-btn');
+      await handedOffWorkspace.waitForFunction(
+        () => document.getElementById('nvidia-preview-modal')?.classList.contains('open') === true,
+        undefined,
+        { polling: 100, timeout: 10000 },
+      );
+      const modalFocusInDialog = await handedOffWorkspace.evaluate(
+        () => document.activeElement?.id === 'nvidia-modal-close-btn',
+      );
+      expect(modalFocusInDialog).toBe(true);
+      await handedOffWorkspace.click('#nvidia-modal-confirm-btn');
+      await waitForWorkspaceStatus(handedOffWorkspace, 'Optional AI enhancement completed.', 15000);
+      expect(mockAiRequests.length).toBe(1);
+      expect(mockAiRequests[0]?.auth).toBe('Bearer sk-any-custom-key-9876543210');
+
+      await handedOffWorkspace.click('#preview-nvidia-btn');
+      await handedOffWorkspace.waitForFunction(
+        () => document.getElementById('nvidia-preview-modal')?.classList.contains('open') === true,
+        undefined,
+        { polling: 100, timeout: 10000 },
+      );
+      await handedOffWorkspace.keyboard.press('Escape');
+      const modalClosedAndRestored = await handedOffWorkspace.evaluate(() => ({
+        closed:
+          document.getElementById('nvidia-preview-modal')?.classList.contains('open') === false,
+        focusedId: document.activeElement?.id ?? '',
+      }));
+      expect(modalClosedAndRestored.closed).toBe(true);
+      expect(modalClosedAndRestored.focusedId).toBe('preview-nvidia-btn');
+    } finally {
+      await new Promise<void>((resolve) => {
+        mockAiServer.close(() => {
+          resolve();
+        });
+      });
+    }
 
     const beforeTheme = await handedOffWorkspace.evaluate(
       () => document.documentElement.getAttribute('data-theme-pref') ?? 'system',

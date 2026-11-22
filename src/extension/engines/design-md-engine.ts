@@ -258,7 +258,7 @@ export function generateDesignMdFromPages(
     pages.length === 1
       ? (pages[0]?.pageTitle ?? 'Design System')
       : `Combined Design System (${pages.length} Pages)`;
-  lines.push(`# DESIGN.md — ${primaryTitle}`);
+  lines.push(`# DESIGN.md - ${primaryTitle}`);
   lines.push('');
   lines.push('## 1. Source References');
   for (const page of pages) {
@@ -272,7 +272,7 @@ export function generateDesignMdFromPages(
   } else {
     for (const c of deduplicatedColors.slice(0, 24)) {
       lines.push(
-        `- \`${c.hex}\` (\`${c.rgbString}\` / \`${c.hslString}\`) — used ${c.totalUsage}x across \`${Array.from(c.properties).sort().join(', ')}\``,
+        `- \`${c.hex}\` (\`${c.rgbString}\` / \`${c.hslString}\`) - used ${c.totalUsage}x across \`${Array.from(c.properties).sort().join(', ')}\``,
       );
     }
   }

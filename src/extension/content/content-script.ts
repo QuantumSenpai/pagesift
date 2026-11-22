@@ -37,9 +37,11 @@ import {
   type RuntimeMessageEnvelope,
   type ToolId,
 } from '../protocol/messages.js';
+import type { ActivityQueryItem } from '../storage/activity-history.js';
 import {
   OnPageOverlayDashboard,
-  type OverlaySiteActivityItem,
+  type OverlayCustomizationState,
+  type OverlayEditOptions,
   type OverlayToolSummary,
 } from './overlay-dashboard.js';
 
@@ -280,6 +282,14 @@ export class ContentScriptRuntime {
       if (shouldCompleteMeasure) {
         this.restoreOverlayAfterPick = false;
         this.stopInteractivePickerOnly();
+        if (pickedTool === 'edit_text' || pickedTool === 'swap_font' || pickedTool === 'arrange') {
+          this.overlayDashboard.showEditor(
+            pickedTool,
+            buildShortSelector(target),
+            target.textContent,
+          );
+          return;
+        }
         void this.executeOverlayTool(pickedTool).then((summary) => {
           this.overlayDashboard?.openExpanded();
           if (summary) {
@@ -448,9 +458,10 @@ export class ContentScriptRuntime {
     selectedBadge.style.position = 'absolute';
     selectedBadge.style.top = '-24px';
     selectedBadge.style.left = '0';
-    selectedBadge.style.backgroundColor = '#00001e';
-    selectedBadge.style.color = '#f4f6fb';
-    selectedBadge.style.border = '1px solid #0057ff';
+    selectedBadge.style.backgroundColor = '#18181b';
+    selectedBadge.style.color = '#ffffff';
+    selectedBadge.style.border = '1px solid #2563eb';
+    selectedBadge.style.boxShadow = '0 4px 12px rgba(15, 23, 42, 0.18)';
     selectedBadge.style.fontFamily = '"IBM Plex Mono", ui-monospace, monospace';
     selectedBadge.style.fontSize = '11px';
     selectedBadge.style.fontWeight = '600';
@@ -469,14 +480,15 @@ export class ContentScriptRuntime {
 
     const measureBadge = this.doc.createElement('div');
     measureBadge.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
-    measureBadge.style.backgroundColor = '#00001e';
-    measureBadge.style.color = '#74a6ff';
-    measureBadge.style.border = '1px solid #0057ff';
-    measureBadge.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+    measureBadge.style.backgroundColor = '#18181b';
+    measureBadge.style.color = '#ffffff';
+    measureBadge.style.border = '1px solid #2563eb';
+    measureBadge.style.boxShadow = '0 4px 12px rgba(15, 23, 42, 0.18)';
+    measureBadge.style.fontFamily = '"IBM Plex Mono", ui-monospace, monospace';
     measureBadge.style.fontSize = '11px';
     measureBadge.style.fontWeight = '600';
-    measureBadge.style.padding = '3px 7px';
-    measureBadge.style.borderRadius = '999px';
+    measureBadge.style.padding = '3px 8px';
+    measureBadge.style.borderRadius = '4px';
     measureBadge.style.whiteSpace = 'nowrap';
     measureBadge.style.transform = 'translate(-50%, -50%)';
     measureLineBox.appendChild(measureBadge);
@@ -486,34 +498,37 @@ export class ContentScriptRuntime {
     dock.setAttribute('role', 'toolbar');
     dock.setAttribute('aria-label', 'PageSift on-page dock');
     dock.style.position = 'fixed';
-    dock.style.right = '16px';
-    dock.style.bottom = '16px';
+    dock.style.left = '0';
+    dock.style.right = '0';
+    dock.style.bottom = '18px';
+    dock.style.margin = '0 auto';
+    dock.style.width = 'fit-content';
     dock.style.display = 'flex';
     dock.style.alignItems = 'center';
     dock.style.gap = '6px';
     dock.style.padding = '6px 10px';
-    dock.style.borderRadius = '999px';
-    dock.style.backgroundColor = '#0f172a';
-    dock.style.color = '#f8fafc';
-    dock.style.border = '1px solid #334155';
-    dock.style.boxShadow = '0 10px 28px rgba(2, 6, 23, 0.45)';
-    dock.style.fontFamily = 'system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
-    dock.style.fontSize = '12px';
+    dock.style.borderRadius = '8px';
+    dock.style.backgroundColor = '#ffffff';
+    dock.style.color = '#111827';
+    dock.style.border = '1px solid #e5e7eb';
+    dock.style.boxShadow = '0 12px 32px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.05)';
+    dock.style.fontFamily = '"Instrument Sans", system-ui, -apple-system, sans-serif';
+    dock.style.fontSize = '12.5px';
     dock.style.pointerEvents = 'auto';
 
     const brandDot = this.doc.createElement('span');
     brandDot.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
-    brandDot.style.width = '8px';
-    brandDot.style.height = '8px';
-    brandDot.style.borderRadius = '50%';
-    brandDot.style.backgroundColor = '#14b8a6';
+    brandDot.style.width = '7px';
+    brandDot.style.height = '7px';
+    brandDot.style.borderRadius = '2px';
+    brandDot.style.backgroundColor = '#0f766e';
     dock.appendChild(brandDot);
 
     const statusEl = this.doc.createElement('span');
     statusEl.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
-    statusEl.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
-    statusEl.style.fontSize = '11px';
-    statusEl.style.color = '#e2e8f0';
+    statusEl.style.fontFamily = '"IBM Plex Mono", ui-monospace, monospace';
+    statusEl.style.fontSize = '12px';
+    statusEl.style.color = '#374151';
     statusEl.style.maxWidth = '180px';
     statusEl.style.overflow = 'hidden';
     statusEl.style.textOverflow = 'ellipsis';
@@ -533,14 +548,14 @@ export class ContentScriptRuntime {
       btn.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
       btn.setAttribute('data-dock-tool', item.id);
       btn.textContent = item.label;
-      btn.style.border = '1px solid #334155';
-      btn.style.borderRadius = '999px';
-      btn.style.padding = '3px 8px';
-      btn.style.fontSize = '11px';
+      btn.style.border = '1px solid #e5e7eb';
+      btn.style.borderRadius = '6px';
+      btn.style.padding = '4px 9px';
+      btn.style.fontSize = '12px';
       btn.style.fontWeight = '600';
       btn.style.cursor = 'pointer';
-      btn.style.backgroundColor = 'transparent';
-      btn.style.color = '#cbd5e1';
+      btn.style.backgroundColor = '#f5f6f8';
+      btn.style.color = '#111827';
       btn.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
@@ -555,14 +570,14 @@ export class ContentScriptRuntime {
     closeBtn.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
     closeBtn.setAttribute('aria-label', 'Dismiss PageSift overlay (Escape)');
     closeBtn.textContent = 'Esc';
-    closeBtn.style.border = '1px solid #475569';
-    closeBtn.style.borderRadius = '999px';
-    closeBtn.style.padding = '3px 8px';
-    closeBtn.style.fontSize = '11px';
+    closeBtn.style.border = '1px solid #18181b';
+    closeBtn.style.borderRadius = '6px';
+    closeBtn.style.padding = '4px 9px';
+    closeBtn.style.fontSize = '12px';
     closeBtn.style.fontWeight = '600';
     closeBtn.style.cursor = 'pointer';
-    closeBtn.style.backgroundColor = '#1e293b';
-    closeBtn.style.color = '#f8fafc';
+    closeBtn.style.backgroundColor = '#18181b';
+    closeBtn.style.color = '#ffffff';
     closeBtn.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
@@ -605,7 +620,35 @@ export class ContentScriptRuntime {
         }),
         getResourceUrl: (relPath) =>
           chromeApi?.runtime?.getURL ? chromeApi.runtime.getURL(relPath) : null,
-        onRunOverlayTool: (tool) => this.executeOverlayTool(tool),
+        onRunOverlayTool: (tool, options) => this.executeOverlayTool(tool, options),
+        onEditHistoryCommand: (command) => {
+          if (command === 'EDIT_UNDO') this.editController.undo();
+          else if (command === 'EDIT_REDO') this.editController.redo();
+          else this.editController.resetAll();
+          const st = this.editController.getStatus();
+          return Promise.resolve({
+            ok: true,
+            message: `${command.replace('EDIT_', '')} applied (undo stack: ${st.undoCount}, redo: ${st.redoCount}).`,
+          });
+        },
+        onSaveCustomization: async (next: Partial<OverlayCustomizationState>) => {
+          if (!this.adapters.sendBackgroundMessage) {
+            return;
+          }
+          await this.adapters
+            .sendBackgroundMessage({
+              schemaVersion: 1,
+              requestId: `ov-cust-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              operation: 'UPDATE_OVERLAY_CUSTOMIZATION',
+              documentId: this.documentId,
+              payload: {
+                ...(next.position ? { overlayPosition: next.position } : {}),
+                ...(next.themeMode ? { overlayThemeMode: next.themeMode } : {}),
+                ...(next.pinnedTools ? { overlayPinnedTools: next.pinnedTools } : {}),
+              },
+            })
+            .catch(() => undefined);
+        },
         onStartPickerForTool: (tool) => {
           this.restoreOverlayAfterPick = true;
           this.activeTool = tool;
@@ -633,7 +676,7 @@ export class ContentScriptRuntime {
             })
             .catch(() => undefined);
         },
-        onFetchSiteActivity: async (): Promise<OverlaySiteActivityItem[]> => {
+        onFetchSiteActivity: async (): Promise<ActivityQueryItem[]> => {
           if (!this.adapters.sendBackgroundMessage) {
             return [];
           }
@@ -649,7 +692,7 @@ export class ContentScriptRuntime {
           if (!res || !res.ok) {
             return [];
           }
-          const data = res.data as { items?: OverlaySiteActivityItem[] };
+          const data = res.data as { items?: ActivityQueryItem[] };
           return Array.isArray(data.items) ? data.items : [];
         },
         onCloseOverlay: () => {
@@ -672,18 +715,33 @@ export class ContentScriptRuntime {
         payload: {},
       });
       if (res.ok) {
-        const theme = (res.data as { settings?: { theme?: string } }).settings?.theme;
-        if (theme === 'light') {
-          this.overlayDashboard.setTheme('light');
-        } else if (theme === 'dark') {
-          this.overlayDashboard.setTheme('dark');
-        } else {
+        const settings = (
+          res.data as {
+            settings?: {
+              theme?: string;
+              overlayPosition?: OverlayCustomizationState['position'];
+              overlayThemeMode?: OverlayCustomizationState['themeMode'];
+              overlayPinnedTools?: ToolId[];
+            };
+          }
+        ).settings;
+        const theme = settings?.theme;
+        if (theme === 'dark') {
+          this.overlayDashboard.setResolvedTheme('dark');
+        } else if (theme === 'system') {
           const prefersDark =
             typeof this.win.matchMedia === 'function'
               ? this.win.matchMedia('(prefers-color-scheme: dark)').matches
-              : true;
-          this.overlayDashboard.setTheme(prefersDark ? 'dark' : 'light');
+              : false;
+          this.overlayDashboard.setResolvedTheme(prefersDark ? 'dark' : 'light');
+        } else {
+          this.overlayDashboard.setResolvedTheme('light');
         }
+        this.overlayDashboard.applyCustomization({
+          ...(settings?.overlayPosition ? { position: settings.overlayPosition } : {}),
+          ...(settings?.overlayThemeMode ? { themeMode: settings.overlayThemeMode } : {}),
+          ...(settings?.overlayPinnedTools ? { pinnedTools: settings.overlayPinnedTools } : {}),
+        });
       }
     } catch {
       return;
@@ -762,7 +820,10 @@ export class ContentScriptRuntime {
       .catch(() => undefined);
   }
 
-  private async executeOverlayTool(tool: ToolId): Promise<OverlayToolSummary | null> {
+  private async executeOverlayTool(
+    tool: ToolId,
+    options?: OverlayEditOptions,
+  ): Promise<OverlayToolSummary | null> {
     const startMono = performance.now();
     const activityId = `ov-${tool}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     try {
@@ -916,11 +977,7 @@ export class ContentScriptRuntime {
       }
       if (tool === 'tech_stack') {
         const report = detectPageTechStack(this.doc);
-        const names = report.detections.map((d) => d.technology).join(', ');
-        const summaryText =
-          report.detections.length > 0
-            ? `Detected ${report.detections.length}: ${names}`
-            : 'No public frontend markers detected on this page';
+        const summaryText = report.organizedSummary.oneLiner;
         await this.recordOverlayActivity({
           activityId,
           tool,
@@ -931,18 +988,18 @@ export class ContentScriptRuntime {
         });
         return {
           tool,
-          title: 'Tech Stack',
+          title: `Tech Stack (${report.detections.length} Detected)`,
           summary: summaryText,
-          copyableText: JSON.stringify(report, null, 2),
+          techStackSummary: report.organizedSummary,
+          copyableText: JSON.stringify(report.organizedSummary, null, 2),
         };
       }
       if (tool === 'edit_text') {
         const target = this.resolveTargetElement();
         const selector = buildShortSelector(target);
-        this.editController.applyTextEdit(
-          target,
-          `${(target.textContent || 'Preview').trim()} (Preview)`,
-        );
+        if (typeof options?.text !== 'string')
+          throw new Error('Choose replacement text before applying a preview');
+        this.editController.applyTextEdit(target, options.text);
         const summaryText = `Previewed text edit on ${selector} (reversible)`;
         await this.recordOverlayActivity({
           activityId,
@@ -961,16 +1018,16 @@ export class ContentScriptRuntime {
         this.editController.applyFontSwap({
           target,
           scope: 'element',
-          fontFamily: 'Georgia, serif',
+          fontFamily: options?.fontFamily ?? '',
         });
-        const summaryText = `Swapped font on ${selector} to Georgia, serif (reversible)`;
+        const summaryText = `Swapped font on ${selector} to ${options?.fontFamily ?? ''} (reversible)`;
         await this.recordOverlayActivity({
           activityId,
           tool,
           actionLabel: 'Swap Font Preview',
           status: 'completed',
           durationMs: performance.now() - startMono,
-          optionsSummary: { selector, fontFamily: 'Georgia, serif' },
+          optionsSummary: { selector, fontFamily: options?.fontFamily ?? '' },
           resultSummary: summaryText,
         });
         return { tool, title: 'Swap Font Preview', summary: summaryText };
@@ -980,18 +1037,18 @@ export class ContentScriptRuntime {
         const selector = buildShortSelector(target);
         this.editController.applyArrangeMutation({
           target,
-          action: 'move',
-          dx: 16,
-          dy: 16,
+          action: options?.action ?? 'move',
+          dx: options?.dx ?? 0,
+          dy: options?.dy ?? 0,
         });
-        const summaryText = `Moved ${selector} by +16px (reversible)`;
+        const summaryText = `${options?.action === 'hide' ? 'Hid' : options?.action === 'remove' ? 'Removed from layout' : 'Moved'} ${selector}${!options?.action || options.action === 'move' ? ` by ${options?.dx ?? 0}px, ${options?.dy ?? 0}px` : ''} (reversible)`;
         await this.recordOverlayActivity({
           activityId,
           tool,
           actionLabel: 'Arrange Element',
           status: 'completed',
           durationMs: performance.now() - startMono,
-          optionsSummary: { selector, action: 'move' },
+          optionsSummary: { selector, action: options?.action ?? 'move' },
           resultSummary: summaryText,
         });
         return { tool, title: 'Arrange Preview', summary: summaryText };

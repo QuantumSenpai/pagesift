@@ -70,6 +70,130 @@ describe('Local Research Activity History — Schema, Sanitization, Lifecycle, F
     expect(summary).toContain('[redacted]');
   });
 
+  it('prunes expired history on a fresh worker wake even while recording is paused', async () => {
+    const storage = new LocalExtensionStorage(`history-retention-wake-${Date.now()}`);
+    const settingsStore = new ExtensionSettingsStore(
+      new InMemoryKeyValueArea(),
+      new InMemoryKeyValueArea(),
+    );
+    await settingsStore.updateSettings({ recordActivityHistory: false });
+    const oldIso = new Date(Date.now() - 100 * 86400000).toISOString();
+    await storage.upsertActivity({
+      id: 'expired',
+      sessionId: 'session-old',
+      tool: 'colors',
+      actionLabel: 'Extract Colors',
+      sourceUrl: 'https://example.com/',
+      sourceOrigin: 'https://example.com',
+      sourceDomain: 'example.com',
+      pageTitle: 'Old page',
+      startedAt: oldIso,
+      completedAt: oldIso,
+      durationMs: 1,
+      status: 'completed',
+      optionsSummary: {},
+      resultSummary: 'Old palette',
+      linkedArtifactId: null,
+      linkedCaptureId: null,
+      errorCategory: null,
+    });
+    try {
+      const coordinator = new BackgroundCoordinator({
+        extensionId: EXT_ID,
+        storage,
+        settingsStore,
+      });
+      await coordinator.handleRuntimeMessage(
+        {
+          schemaVersion: 1,
+          requestId: 'wake-query',
+          operation: 'QUERY_ACTIVITY_HISTORY',
+          payload: {},
+        },
+        EXT_SENDER,
+      );
+      expect(await storage.getActivity('expired')).toBeUndefined();
+    } finally {
+      await storage.close();
+    }
+  });
+
+  it('finishes existing activity after recording is paused without recording new actions', async () => {
+    const storage = new LocalExtensionStorage(`history-pause-lifecycle-${Date.now()}`);
+    const settingsStore = new ExtensionSettingsStore(
+      new InMemoryKeyValueArea(),
+      new InMemoryKeyValueArea(),
+    );
+    const coordinator = new BackgroundCoordinator({ extensionId: EXT_ID, storage, settingsStore });
+    const message = (status: 'running' | 'completed') => ({
+      schemaVersion: 1,
+      requestId: `pause-${status}`,
+      operation: 'RECORD_LOCAL_ACTIVITY',
+      payload: {
+        activityId: 'started-before-pause',
+        tool: 'colors',
+        actionLabel: 'Extract Colors',
+        status,
+        resultSummary: 'Palette',
+      },
+    });
+    try {
+      await coordinator.handleRuntimeMessage(message('running'), TAB_SENDER);
+      await settingsStore.updateSettings({ recordActivityHistory: false });
+      await coordinator.handleRuntimeMessage(message('completed'), TAB_SENDER);
+      expect((await storage.getActivity('started-before-pause'))?.status).toBe('completed');
+      expect((await storage.queryActivities()).totalMatching).toBe(1);
+    } finally {
+      await storage.close();
+    }
+  });
+
+  it('exposes only sender-tab jobs and rejects cross-tab cancellation from overlays', async () => {
+    const storage = new LocalExtensionStorage(`history-overlay-jobs-${Date.now()}`);
+    const settingsStore = new ExtensionSettingsStore(
+      new InMemoryKeyValueArea(),
+      new InMemoryKeyValueArea(),
+    );
+    const coordinator = new BackgroundCoordinator({ extensionId: EXT_ID, storage, settingsStore });
+    await coordinator.initialize();
+    await storage.StartToolJob({
+      id: 'same-tab-job',
+      tool: 'clone_page',
+      tabId: 17,
+      documentId: 'doc-own',
+    });
+    await storage.StartToolJob({
+      id: 'other-tab-job',
+      tool: 'capture',
+      tabId: 99,
+      documentId: 'doc-other',
+    });
+    try {
+      const result = await coordinator.handleRuntimeMessage(
+        { schemaVersion: 1, requestId: 'site-jobs-list', operation: 'LIST_SITE_JOBS', payload: {} },
+        TAB_SENDER,
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok)
+        expect((result.data as { jobs: Array<{ id: string }> }).jobs.map((job) => job.id)).toEqual([
+          'same-tab-job',
+        ]);
+      const cancel = await coordinator.handleRuntimeMessage(
+        {
+          schemaVersion: 1,
+          requestId: 'wrong-tab-cancel',
+          operation: 'CANCEL_JOB',
+          payload: { jobId: 'other-tab-job' },
+        },
+        TAB_SENDER,
+      );
+      expect(cancel.ok).toBe(false);
+      expect((await storage.getJob('other-tab-job'))?.status).toBe('running');
+    } finally {
+      await storage.close();
+    }
+  });
+
   it('upgrades IndexedDB from v2 to v3 preserving existing records and adds indexed activities store', async () => {
     const dbName = `pagesift_v2_to_v3_${Date.now()}`;
     const v2 = await openDB(dbName, 2, {

@@ -3,7 +3,13 @@ import type {
   MessageOperation,
   RuntimeMessageEnvelope,
 } from '../protocol/messages.js';
-import { applyThemePreference, readCachedTheme, type ThemePreference } from './theme.js';
+import { AI_PROVIDER_PRESETS, type AiProviderPreset } from '../storage/settings-storage.js';
+import {
+  applyThemePreference,
+  bindGlobalTapFeedback,
+  readCachedTheme,
+  type ThemePreference,
+} from './theme.js';
 
 interface ChromeOptionsApis {
   runtime?: {
@@ -80,10 +86,18 @@ async function loadOptionsState(): Promise<void> {
   if (settingsRes.ok) {
     const s = (settingsRes.data as { settings: Record<string, unknown> }).settings;
     const themeSel = document.getElementById('opt-theme') as HTMLSelectElement | null;
+    const overlayPosSel = document.getElementById(
+      'opt-overlay-position',
+    ) as HTMLSelectElement | null;
+    const overlayThemeSel = document.getElementById(
+      'opt-overlay-theme',
+    ) as HTMLSelectElement | null;
     const exportSel = document.getElementById('opt-export-format') as HTMLSelectElement | null;
     const colorSel = document.getElementById('opt-color-format') as HTMLSelectElement | null;
     const twSel = document.getElementById('opt-tailwind-version') as HTMLSelectElement | null;
     const promptSel = document.getElementById('opt-prompt-target') as HTMLSelectElement | null;
+    const aiProviderSel = document.getElementById('opt-ai-provider') as HTMLSelectElement | null;
+    const aiEndpointInput = document.getElementById('opt-ai-endpoint') as HTMLInputElement | null;
     const modelInput = document.getElementById('opt-nvidia-model') as HTMLInputElement | null;
     const recordCheck = document.getElementById('opt-record-history') as HTMLInputElement | null;
     const retentionSel = document.getElementById('opt-retention-days') as HTMLSelectElement | null;
@@ -93,8 +107,12 @@ async function loadOptionsState(): Promise<void> {
         ? s['theme']
         : readCachedTheme();
     applyThemePreference(themePref);
-    if (themeSel) {
-      themeSel.value = themePref;
+    if (themeSel) themeSel.value = themePref;
+    if (overlayPosSel && typeof s['overlayPosition'] === 'string') {
+      overlayPosSel.value = s['overlayPosition'];
+    }
+    if (overlayThemeSel && typeof s['overlayThemeMode'] === 'string') {
+      overlayThemeSel.value = s['overlayThemeMode'];
     }
     if (exportSel && typeof s['defaultExportFormat'] === 'string') {
       exportSel.value = s['defaultExportFormat'];
@@ -107,6 +125,12 @@ async function loadOptionsState(): Promise<void> {
     }
     if (promptSel && typeof s['defaultPromptTarget'] === 'string') {
       promptSel.value = s['defaultPromptTarget'];
+    }
+    if (aiProviderSel && typeof s['aiProviderPreset'] === 'string') {
+      aiProviderSel.value = s['aiProviderPreset'];
+    }
+    if (aiEndpointInput && typeof s['nvidiaEndpoint'] === 'string') {
+      aiEndpointInput.value = s['nvidiaEndpoint'];
     }
     if (modelInput && typeof s['nvidiaModelId'] === 'string') {
       modelInput.value = s['nvidiaModelId'];
@@ -157,6 +181,7 @@ async function loadOptionsState(): Promise<void> {
 }
 
 function initOptionsPage(): void {
+  bindGlobalTapFeedback(document);
   applyThemePreference(readCachedTheme());
 
   const outputEl = document.getElementById('options-output');
@@ -170,6 +195,19 @@ function initOptionsPage(): void {
         setBanner(`Theme preference updated to ${val}.`, 'success');
       }
     });
+  });
+
+  document.getElementById('opt-ai-provider')?.addEventListener('change', (event) => {
+    const presetKey = (event.target as HTMLSelectElement).value as AiProviderPreset;
+    const preset = AI_PROVIDER_PRESETS[presetKey];
+    const epInput = document.getElementById('opt-ai-endpoint') as HTMLInputElement | null;
+    const modelInput = document.getElementById('opt-nvidia-model') as HTMLInputElement | null;
+    if (preset.endpoint && epInput) {
+      epInput.value = preset.endpoint;
+    }
+    if (preset.defaultModel && modelInput) {
+      modelInput.value = preset.defaultModel;
+    }
   });
 
   document.getElementById('opt-record-history')?.addEventListener('change', (event) => {
@@ -236,42 +274,55 @@ function initOptionsPage(): void {
     })();
   });
 
+  const saveAllSettings = async (msgText: string): Promise<void> => {
+    const themeSel = document.getElementById('opt-theme') as HTMLSelectElement | null;
+    const overlayPosSel = document.getElementById(
+      'opt-overlay-position',
+    ) as HTMLSelectElement | null;
+    const overlayThemeSel = document.getElementById(
+      'opt-overlay-theme',
+    ) as HTMLSelectElement | null;
+    const exportSel = document.getElementById('opt-export-format') as HTMLSelectElement | null;
+    const colorSel = document.getElementById('opt-color-format') as HTMLSelectElement | null;
+    const twSel = document.getElementById('opt-tailwind-version') as HTMLSelectElement | null;
+    const promptSel = document.getElementById('opt-prompt-target') as HTMLSelectElement | null;
+    const aiProviderSel = document.getElementById('opt-ai-provider') as HTMLSelectElement | null;
+    const aiEndpointInput = document.getElementById('opt-ai-endpoint') as HTMLInputElement | null;
+    const modelInput = document.getElementById('opt-nvidia-model') as HTMLInputElement | null;
+    const recordCheck = document.getElementById('opt-record-history') as HTMLInputElement | null;
+    const retentionSel = document.getElementById('opt-retention-days') as HTMLSelectElement | null;
+
+    const theme = (themeSel?.value as ThemePreference | undefined) ?? 'light';
+    applyThemePreference(theme);
+
+    const res = await sendOptionsMessage('UPDATE_SETTINGS', {
+      settings: {
+        theme,
+        overlayPosition: overlayPosSel?.value ?? 'bottom-center',
+        overlayThemeMode: overlayThemeSel?.value ?? 'follow',
+        defaultExportFormat: exportSel?.value ?? 'markdown',
+        colorFormat: colorSel?.value ?? 'hex',
+        tailwindVersion: twSel?.value ?? 'v4',
+        defaultPromptTarget: promptSel?.value ?? 'react_tailwind',
+        aiProviderPreset: aiProviderSel?.value ?? 'nvidia',
+        nvidiaEndpoint: aiEndpointInput?.value.trim() || AI_PROVIDER_PRESETS.nvidia.endpoint,
+        nvidiaModelId: modelInput?.value.trim() || 'meta/llama-3.1-70b-instruct',
+        recordActivityHistory: recordCheck?.checked ?? true,
+        activityRetentionDays: Number.parseInt(retentionSel?.value ?? '90', 10) || 90,
+      },
+    });
+    if (outputEl) {
+      outputEl.textContent = JSON.stringify(res, null, 2);
+    }
+    setBanner(res.ok ? msgText : `Save failed: ${res.error.message}`, res.ok ? 'success' : 'error');
+  };
+
   document.getElementById('save-settings-btn')?.addEventListener('click', () => {
-    void (async () => {
-      const themeSel = document.getElementById('opt-theme') as HTMLSelectElement | null;
-      const exportSel = document.getElementById('opt-export-format') as HTMLSelectElement | null;
-      const colorSel = document.getElementById('opt-color-format') as HTMLSelectElement | null;
-      const twSel = document.getElementById('opt-tailwind-version') as HTMLSelectElement | null;
-      const promptSel = document.getElementById('opt-prompt-target') as HTMLSelectElement | null;
-      const modelInput = document.getElementById('opt-nvidia-model') as HTMLInputElement | null;
-      const recordCheck = document.getElementById('opt-record-history') as HTMLInputElement | null;
-      const retentionSel = document.getElementById(
-        'opt-retention-days',
-      ) as HTMLSelectElement | null;
+    void saveAllSettings('Preferences saved locally.');
+  });
 
-      const theme = (themeSel?.value as ThemePreference | undefined) ?? 'system';
-      applyThemePreference(theme);
-
-      const res = await sendOptionsMessage('UPDATE_SETTINGS', {
-        settings: {
-          theme,
-          defaultExportFormat: exportSel?.value ?? 'markdown',
-          colorFormat: colorSel?.value ?? 'hex',
-          tailwindVersion: twSel?.value ?? 'v4',
-          defaultPromptTarget: promptSel?.value ?? 'react_tailwind',
-          nvidiaModelId: modelInput?.value.trim() ?? '',
-          recordActivityHistory: recordCheck?.checked ?? true,
-          activityRetentionDays: Number.parseInt(retentionSel?.value ?? '90', 10) || 90,
-        },
-      });
-      if (outputEl) {
-        outputEl.textContent = JSON.stringify(res, null, 2);
-      }
-      setBanner(
-        res.ok ? 'Preferences saved locally.' : `Save failed: ${res.error.message}`,
-        res.ok ? 'success' : 'error',
-      );
-    })();
+  document.getElementById('save-ai-config-btn')?.addEventListener('click', () => {
+    void saveAllSettings('AI provider settings saved locally.');
   });
 
   document.getElementById('set-nvidia-key-btn')?.addEventListener('click', () => {
@@ -287,7 +338,7 @@ function initOptionsPage(): void {
       }
       setBanner(
         res.ok
-          ? 'NVIDIA session API key saved in memory for this browser session.'
+          ? 'Session API key saved in memory for this browser session.'
           : `Key error: ${res.error.message}`,
         res.ok ? 'success' : 'error',
       );
@@ -301,7 +352,7 @@ function initOptionsPage(): void {
       if (outputEl) {
         outputEl.textContent = JSON.stringify(res, null, 2);
       }
-      setBanner('NVIDIA session API key cleared from memory.', 'success');
+      setBanner('Session API key cleared from memory.', 'success');
       await loadOptionsState();
     })();
   });

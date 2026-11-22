@@ -27,6 +27,7 @@ import {
 import type { LocalArtifactKind } from '../storage/idb-storage.js';
 import {
   applyThemePreference,
+  bindGlobalTapFeedback,
   createSvgIcon,
   formatThemeLabel,
   nextThemePreference,
@@ -172,7 +173,12 @@ const TOOLS_WITH_SELECTOR = new Set<ToolId>([
 const TOOLS_WITH_SECONDARY = new Set<ToolId>(['measure', 'edit_text', 'swap_font']);
 const TOOLS_WITH_MODE = new Set<ToolId>(['clone_prompt', 'arrange']);
 const TOOLS_WITH_EDIT_HISTORY = new Set<ToolId>(['edit_text', 'swap_font', 'arrange']);
-const TOOLS_WITH_AI_ENHANCE = new Set<ToolId>(['clone_prompt', 'design_md', 'design_review']);
+const TOOLS_WITH_AI_ENHANCE = new Set<ToolId>([
+  'clone_prompt',
+  'design_md',
+  'design_review',
+  'tech_stack',
+]);
 
 const HISTORY_PAGE_SIZE = 25;
 
@@ -194,7 +200,11 @@ let lastDownloadable: DownloadableArtifact | null = null;
 let lastCopyableText: string | null = null;
 let lastCaptureState: CaptureWorkState | null = null;
 let confirmedNvidiaDigest: string | null = null;
-let confirmedNvidiaTaskType: 'enhance_clone_prompt' | 'interpret_design_review' | null = null;
+let confirmedNvidiaTaskType:
+  | 'enhance_clone_prompt'
+  | 'interpret_design_review'
+  | 'explain_tech_stack'
+  | null = null;
 let activeJobRequestId: string | null = null;
 let pickerActive = false;
 let currentThemePref: ThemePreference = readCachedTheme();
@@ -1137,7 +1147,7 @@ function createActivityRowElement(item: ActivityQueryItem): HTMLElement {
   const rerunBtn = document.createElement('button');
   rerunBtn.type = 'button';
   rerunBtn.className = 'secondary sm';
-  rerunBtn.textContent = 'Rerun';
+  rerunBtn.textContent = 'Review & rerun';
   rerunBtn.addEventListener('click', () => {
     switchSection('tools');
     selectActiveTool(item.tool);
@@ -1151,7 +1161,11 @@ function createActivityRowElement(item: ActivityQueryItem): HTMLElement {
     } else if (modeSel && typeof item.optionsSummary['action'] === 'string') {
       modeSel.value = item.optionsSummary['action'];
     }
-    void executeSelectedTool();
+    const status = document.getElementById('status-message');
+    if (status) {
+      status.textContent = `Review options and the target page above, then run ${TOOL_SHORT_LABELS[item.tool]}. Previously used on ${item.sourceDomain || 'an unavailable site'}.`;
+    }
+    document.getElementById('run-tool-btn')?.focus();
   });
   actions.appendChild(rerunBtn);
 
@@ -1370,7 +1384,7 @@ async function refreshProjectsDropdown(): Promise<void> {
   };
   if (select) {
     const prev = select.value;
-    select.innerHTML = '';
+    select.textContent = '';
     for (const proj of data.projects) {
       const opt = document.createElement('option');
       opt.value = proj.id;
@@ -2187,6 +2201,7 @@ async function syncSettingsIntoWorkspace(): Promise<void> {
 }
 
 function initWorkspaceUi(): void {
+  bindGlobalTapFeedback(document);
   attachNavIcons();
   void syncSettingsIntoWorkspace();
   void updateTargetPageIdentity();
@@ -2651,11 +2666,12 @@ function initWorkspaceUi(): void {
     'colors',
     'fonts',
     'inspect',
+    'tech_stack',
   ]);
 
   const executeConfirmedNvidiaSend = async (): Promise<void> => {
     if (!confirmedNvidiaDigest || !confirmedNvidiaTaskType) {
-      setStatus('Preview NVIDIA data egress first before transmitting.', 'error');
+      setStatus('Preview data egress first before transmitting.', 'error');
       return;
     }
     const sourceTool =
@@ -2673,7 +2689,7 @@ function initWorkspaceUi(): void {
       outputEl.textContent = JSON.stringify(res, null, 2);
     }
     setStatus(
-      res.ok ? 'Optional NVIDIA AI enhancement completed.' : `NVIDIA error: ${res.error.message}`,
+      res.ok ? 'Optional AI enhancement completed.' : `AI error: ${res.error.message}`,
       res.ok ? 'success' : 'error',
     );
   };
@@ -2683,11 +2699,15 @@ function initWorkspaceUi(): void {
       const sourceTool =
         lastResultTool && supportedNvidiaSourceTools.has(lastResultTool)
           ? lastResultTool
-          : 'clone_prompt';
+          : currentTool === 'tech_stack'
+            ? 'tech_stack'
+            : 'clone_prompt';
       const taskType =
-        currentTool === 'design_review' || sourceTool === 'design_review'
-          ? 'interpret_design_review'
-          : 'enhance_clone_prompt';
+        currentTool === 'tech_stack' || sourceTool === 'tech_stack'
+          ? 'explain_tech_stack'
+          : currentTool === 'design_review' || sourceTool === 'design_review'
+            ? 'interpret_design_review'
+            : 'enhance_clone_prompt';
       const res = await sendBackgroundMessage('RUN_NVIDIA_ENHANCEMENT', {
         previewOnly: true,
         taskType,

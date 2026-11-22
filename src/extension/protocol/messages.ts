@@ -57,6 +57,7 @@ export const messageOperationSchema = z.enum([
   'JOB_PROGRESS',
   'GET_JOB_STATUS',
   'LIST_JOBS',
+  'LIST_SITE_JOBS',
   'SAVE_ARTIFACT_TO_IDB',
   'GET_ARTIFACT_FROM_IDB',
   'DELETE_ARTIFACT_FROM_IDB',
@@ -73,6 +74,7 @@ export const messageOperationSchema = z.enum([
   'GET_NVIDIA_KEY_STATUS',
   'RUN_NVIDIA_ENHANCEMENT',
   'TOGGLE_OVERLAY_DASHBOARD',
+  'UPDATE_OVERLAY_CUSTOMIZATION',
   'OPEN_FULL_DASHBOARD',
   'RECORD_LOCAL_ACTIVITY',
   'QUERY_ACTIVITY_HISTORY',
@@ -254,16 +256,29 @@ const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = 
   }),
   RUN_NVIDIA_ENHANCEMENT: z.strictObject({
     previewOnly: z.boolean().default(true),
-    taskType: z.enum(['enhance_clone_prompt', 'interpret_design_review']),
+    taskType: z.enum(['enhance_clone_prompt', 'interpret_design_review', 'explain_tech_stack']),
     modelId: z.string().trim().max(160).optional(),
     sourceTool: z
-      .enum(['clone_prompt', 'design_review', 'design_md', 'colors', 'fonts', 'inspect'])
+      .enum([
+        'clone_prompt',
+        'design_review',
+        'design_md',
+        'colors',
+        'fonts',
+        'inspect',
+        'tech_stack',
+      ])
       .default('clone_prompt'),
     toolOutput: z.record(z.string(), z.unknown()).default({}),
     confirmedPayloadDigest: z.string().trim().min(16).max(128).optional(),
   }),
   TOGGLE_OVERLAY_DASHBOARD: z.strictObject({
     mode: z.enum(['toggle', 'open', 'close', 'minimize']).default('toggle'),
+  }),
+  UPDATE_OVERLAY_CUSTOMIZATION: z.strictObject({
+    overlayPosition: z.enum(['bottom-center', 'bottom-right', 'top-center']).optional(),
+    overlayThemeMode: z.enum(['follow', 'light', 'dark']).optional(),
+    overlayPinnedTools: z.array(toolIdSchema).min(3).max(6).optional(),
   }),
   OPEN_FULL_DASHBOARD: z.strictObject({
     tool: toolIdSchema.optional(),
