@@ -402,16 +402,23 @@
 
               <div id="ai-controls" class="sub-panel">
                 <div class="control-row">
-                  <span class="muted"
-                    >Optional AI enhancement (NVIDIA NIM or custom API key; egress preview
-                    required):</span
-                  >
+                  <label for="ai-task-select" class="muted">AI Task (NVIDIA or Custom Key):</label>
+                  <select id="ai-task-select">
+                    <option value="auto">Auto for Selected Tool</option>
+                    <option value="extract_features">Feature Extraction &amp; App Spec</option>
+                    <option value="enhance_clone_prompt">Enhance Clone Prompt</option>
+                    <option value="explain_tech_stack">Explain Tech Stack</option>
+                    <option value="interpret_design_review">Interpret Design Review</option>
+                  </select>
                   <button id="preview-nvidia-btn" class="secondary sm" type="button">
                     Preview Data Egress
                   </button>
                   <button id="run-nvidia-btn" class="secondary sm" type="button" disabled>
                     Confirm &amp; Enhance
                   </button>
+                  <a class="btn-link sm" href="options.html" target="_blank" rel="noopener">
+                    API Keys
+                  </a>
                 </div>
               </div>
             </div>

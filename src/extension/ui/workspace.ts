@@ -25,6 +25,7 @@ import {
   type ActivityQueryResult,
 } from '../storage/activity-history.js';
 import type { LocalArtifactKind } from '../storage/idb-storage.js';
+import { pushMacNotification } from './notifications.js';
 import {
   applyThemePreference,
   bindGlobalTapFeedback,
@@ -204,6 +205,7 @@ let confirmedNvidiaTaskType:
   | 'enhance_clone_prompt'
   | 'interpret_design_review'
   | 'explain_tech_stack'
+  | 'extract_features'
   | null = null;
 let activeJobRequestId: string | null = null;
 let pickerActive = false;
@@ -304,11 +306,35 @@ function setStatus(
   variant: 'neutral' | 'error' | 'success' | 'warning' = 'neutral',
 ): void {
   const statusEl = document.getElementById('status-message');
-  if (!statusEl) {
-    return;
+  if (statusEl) {
+    statusEl.textContent = message;
+    statusEl.className = variant === 'neutral' ? 'status-line' : `status-line ${variant}`;
   }
-  statusEl.textContent = message;
-  statusEl.className = variant === 'neutral' ? 'status-line' : `status-line ${variant}`;
+  if (variant === 'success' || variant === 'warning' || variant === 'error') {
+    const tone = variant === 'error' ? 'error' : variant === 'warning' ? 'warning' : 'success';
+    const title =
+      variant === 'error'
+        ? 'Action Error'
+        : variant === 'warning'
+          ? 'Attention Needed'
+          : 'Completed';
+    const needsKeyAction =
+      variant === 'error' &&
+      (message.toLowerCase().includes('api key') || message.toLowerCase().includes('nvidia'));
+    pushMacNotification({
+      title,
+      message,
+      tone,
+      ...(needsKeyAction
+        ? {
+            actionLabel: 'API Settings',
+            onAction: () => {
+              window.open('options.html', '_blank', 'noopener');
+            },
+          }
+        : {}),
+    });
+  }
 }
 
 function clearNvidiaConfirmation(): void {
@@ -2180,7 +2206,8 @@ async function syncSettingsIntoWorkspace(): Promise<void> {
         applyThemePreference(currentThemePref);
         updateThemeButton();
       }
-      if (typeof s?.sidebarCollapsed === 'boolean') {
+      const isPipWindow = new URLSearchParams(window.location.search).get('pip') === '1';
+      if (typeof s?.sidebarCollapsed === 'boolean' && !isPipWindow) {
         sidebarCollapsed = s.sidebarCollapsed;
         applySidebarCollapsedUi();
       }
@@ -2675,44 +2702,104 @@ function initWorkspaceUi(): void {
       return;
     }
     const sourceTool =
-      lastResultTool && supportedNvidiaSourceTools.has(lastResultTool)
-        ? lastResultTool
-        : 'clone_prompt';
+      confirmedNvidiaTaskType === 'extract_features'
+        ? 'feature_extract'
+        : lastResultTool && supportedNvidiaSourceTools.has(lastResultTool)
+          ? lastResultTool
+          : 'clone_prompt';
     const res = await sendBackgroundMessage('RUN_NVIDIA_ENHANCEMENT', {
       previewOnly: false,
       taskType: confirmedNvidiaTaskType,
       sourceTool,
-      toolOutput: lastResultData ?? { pageTitle: lastTargetPageTitle },
+      toolOutput: lastResultData ?? {
+        pageTitle: lastTargetPageTitle,
+        sourceUrl: lastTargetPageUrl,
+      },
       confirmedPayloadDigest: confirmedNvidiaDigest,
     });
     if (outputEl) {
       outputEl.textContent = JSON.stringify(res, null, 2);
     }
-    setStatus(
-      res.ok ? 'Optional AI enhancement completed.' : `AI error: ${res.error.message}`,
-      res.ok ? 'success' : 'error',
-    );
+    if (res.ok) {
+      const completion = (res.data as { completion?: { outputText?: string; modelId?: string } })
+        .completion;
+      if (completion?.outputText) {
+        lastCopyableText = completion.outputText;
+        lastDownloadable = {
+          filename:
+            confirmedNvidiaTaskType === 'extract_features'
+              ? 'pagesift-ai-features.md'
+              : 'pagesift-ai-spec.md',
+          mimeType: 'text/markdown;charset=utf-8',
+          textContent: completion.outputText,
+        };
+        updateActionButtons();
+        const container = document.getElementById('structured-result-container');
+        if (container) {
+          container.querySelector('#ps-ai-output-card')?.remove();
+          const card = document.createElement('article');
+          card.id = 'ps-ai-output-card';
+          card.className = 'flat-block';
+          const head = document.createElement('div');
+          head.className = 'block-heading';
+          const h3 = document.createElement('h3');
+          h3.textContent =
+            confirmedNvidiaTaskType === 'extract_features'
+              ? 'AI Feature Extraction Spec'
+              : 'AI Enhancement Output';
+          const tag = document.createElement('span');
+          tag.className = 'tag positive';
+          tag.textContent = completion.modelId ?? 'AI Model';
+          head.append(h3, tag);
+          const pre = document.createElement('pre');
+          pre.className = 'code-box';
+          pre.style.whiteSpace = 'pre-wrap';
+          pre.textContent = completion.outputText;
+          card.append(head, pre);
+          container.prepend(card);
+        }
+      }
+      setStatus('AI generation completed.', 'success');
+    } else {
+      setStatus(`AI error: ${res.error.message}`, 'error');
+    }
   };
 
   document.getElementById('preview-nvidia-btn')?.addEventListener('click', () => {
     void (async () => {
+      const taskSelect = document.getElementById('ai-task-select') as HTMLSelectElement | null;
+      const chosenTask = taskSelect?.value ?? 'auto';
+      const resolvedTask:
+        | 'enhance_clone_prompt'
+        | 'interpret_design_review'
+        | 'explain_tech_stack'
+        | 'extract_features' =
+        chosenTask === 'extract_features' ||
+        chosenTask === 'enhance_clone_prompt' ||
+        chosenTask === 'interpret_design_review' ||
+        chosenTask === 'explain_tech_stack'
+          ? chosenTask
+          : currentTool === 'tech_stack' || lastResultTool === 'tech_stack'
+            ? 'explain_tech_stack'
+            : currentTool === 'design_review' || lastResultTool === 'design_review'
+              ? 'interpret_design_review'
+              : 'enhance_clone_prompt';
       const sourceTool =
-        lastResultTool && supportedNvidiaSourceTools.has(lastResultTool)
-          ? lastResultTool
-          : currentTool === 'tech_stack'
-            ? 'tech_stack'
-            : 'clone_prompt';
-      const taskType =
-        currentTool === 'tech_stack' || sourceTool === 'tech_stack'
-          ? 'explain_tech_stack'
-          : currentTool === 'design_review' || sourceTool === 'design_review'
-            ? 'interpret_design_review'
-            : 'enhance_clone_prompt';
+        resolvedTask === 'extract_features'
+          ? 'feature_extract'
+          : lastResultTool && supportedNvidiaSourceTools.has(lastResultTool)
+            ? lastResultTool
+            : currentTool === 'tech_stack'
+              ? 'tech_stack'
+              : 'clone_prompt';
       const res = await sendBackgroundMessage('RUN_NVIDIA_ENHANCEMENT', {
         previewOnly: true,
-        taskType,
+        taskType: resolvedTask,
         sourceTool,
-        toolOutput: lastResultData ?? { pageTitle: lastTargetPageTitle },
+        toolOutput: lastResultData ?? {
+          pageTitle: lastTargetPageTitle,
+          sourceUrl: lastTargetPageUrl,
+        },
       });
       if (res.ok) {
         const data = res.data as {
@@ -2720,7 +2807,7 @@ function initWorkspaceUi(): void {
           egressPreview?: { serializedPayloadPreview?: string };
         };
         confirmedNvidiaDigest = data.payloadDigest;
-        confirmedNvidiaTaskType = taskType;
+        confirmedNvidiaTaskType = resolvedTask;
         const runBtn = document.getElementById('run-nvidia-btn') as HTMLButtonElement | null;
         if (runBtn) {
           runBtn.disabled = false;
@@ -2729,12 +2816,12 @@ function initWorkspaceUi(): void {
           data.egressPreview?.serializedPayloadPreview ?? JSON.stringify(res.data, null, 2);
         openNvidiaModal(data.payloadDigest, previewText);
         setStatus(
-          'Reviewed exact NVIDIA data egress payload. Confirm in dialog or click Confirm & Enhance.',
+          'Reviewed exact AI data egress payload. Confirm in dialog or click Confirm & Enhance.',
           'success',
         );
       } else {
         clearNvidiaConfirmation();
-        setStatus(`NVIDIA preview error: ${res.error.message}`, 'error');
+        setStatus(`AI preview error: ${res.error.message}`, 'error');
       }
       if (outputEl) {
         outputEl.textContent = JSON.stringify(res, null, 2);
@@ -2786,6 +2873,24 @@ function initWorkspaceUi(): void {
   });
 
   const params = new URLSearchParams(window.location.search);
+  if (params.get('pip') === '1') {
+    sidebarCollapsed = true;
+    applySidebarCollapsedUi();
+  }
+  const initialAiTask = params.get('aiTask');
+  const aiTaskSel = document.getElementById('ai-task-select') as HTMLSelectElement | null;
+  if (
+    aiTaskSel &&
+    initialAiTask &&
+    [
+      'extract_features',
+      'enhance_clone_prompt',
+      'interpret_design_review',
+      'explain_tech_stack',
+    ].includes(initialAiTask)
+  ) {
+    aiTaskSel.value = initialAiTask;
+  }
   const unsupportedUrl = params.get('unsupportedUrl');
   if (unsupportedUrl) {
     const noticeEl = document.getElementById('unsupported-page-notice');

@@ -1507,6 +1507,85 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
     });
     expect(hasRichTechLogoShapes).toBe(true);
 
+    const themeCheck = await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const anchor = sr?.querySelector<HTMLElement>('.ps-anchor');
+      const header = sr?.querySelector<HTMLElement>('.ps-dock-header');
+      const styleText = sr?.querySelector('style')?.textContent ?? '';
+      return {
+        distinctPalette: styleText.includes('#0f1214') && styleText.includes('#0d9488'),
+        hasDockHeader: Boolean(header),
+        hasNotifyStack: Boolean(sr?.querySelector('.ps-notify-stack')),
+        theme: anchor?.getAttribute('data-theme') ?? '',
+      };
+    });
+    expect(themeCheck.distinctPalette).toBe(true);
+    expect(themeCheck.hasDockHeader).toBe(true);
+    expect(themeCheck.hasNotifyStack).toBe(true);
+    expect(themeCheck.theme).toBe('dark');
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-ps-action="extract-features"]')?.click();
+    });
+    await fixturePage.waitForFunction(
+      () => {
+        const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        const text = sr?.querySelector('.ps-drawer-content')?.textContent ?? '';
+        return (
+          text.includes('Extracted Page Features') &&
+          (sr?.querySelectorAll('.ps-mac-toast').length ?? 0) > 0
+        );
+      },
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-overlay-bar-tool="capture"]')?.click();
+    });
+    await fixturePage.waitForFunction(
+      () => {
+        const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        const text = sr?.querySelector('.ps-drawer-content')?.textContent ?? '';
+        return text.includes('Page Capture Ready');
+      },
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const buttons = Array.from(
+        sr?.querySelectorAll<HTMLButtonElement>('.ps-drawer button') ?? [],
+      );
+      buttons.find((b) => b.textContent.trim() === 'Capture Full Page')?.click();
+    });
+    await fixturePage.waitForFunction(
+      () => {
+        const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        const text = sr?.querySelector('.ps-drawer-content')?.textContent ?? '';
+        return text.includes('Full-Page Capture Ready');
+      },
+      undefined,
+      { polling: 100, timeout: 15000 },
+    );
+
+    const [pipDashPage] = await Promise.all([
+      context.waitForEvent('page'),
+      fixturePage.evaluate(() => {
+        const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        sr?.querySelector<HTMLButtonElement>(
+          'button[data-ps-action="open-pip-dashboard"]',
+        )?.click();
+      }),
+    ]);
+    await pipDashPage.waitForLoadState('domcontentloaded');
+    expect(pipDashPage.url()).toContain('workspace.html');
+    expect(pipDashPage.url()).toContain('pip=1');
+    await pipDashPage.close();
+    await fixturePage.bringToFront();
+
     await fixturePage.evaluate(() => {
       const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
       sr?.querySelector<HTMLButtonElement>('button[data-ps-action="pip-menu"]')?.click();
@@ -1774,9 +1853,16 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       );
       expect(modalFocusInDialog).toBe(true);
       await handedOffWorkspace.click('#nvidia-modal-confirm-btn');
-      await waitForWorkspaceStatus(handedOffWorkspace, 'Optional AI enhancement completed.', 15000);
+      await waitForWorkspaceStatus(handedOffWorkspace, 'AI generation completed.', 15000);
       expect(mockAiRequests.length).toBe(1);
       expect(mockAiRequests[0]?.auth).toBe('Bearer sk-any-custom-key-9876543210');
+      expect(
+        await handedOffWorkspace.evaluate(
+          () =>
+            Boolean(document.getElementById('ps-ai-output-card')) &&
+            document.querySelectorAll('.ps-mac-toast').length > 0,
+        ),
+      ).toBe(true);
 
       await handedOffWorkspace.click('#preview-nvidia-btn');
       await handedOffWorkspace.waitForFunction(

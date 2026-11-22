@@ -93,6 +93,11 @@ export interface BackgroundEnvironmentAdapters {
   updateResponsiveWindow?: (windowId: number, width: number, height: number) => Promise<void>;
   closeResponsiveWindow?: (windowId: number) => Promise<void>;
   openDashboardTab?: (relativeUrl: string) => Promise<void>;
+  openDashboardWindow?: (
+    relativeUrl: string,
+    width: number,
+    height: number,
+  ) => Promise<OpenedResponsiveWindow | null>;
   fetchImpl?: typeof fetch;
   captureMinIntervalMs?: number;
   composeCaptureImpl?: typeof composeCaptureFromTiles;
@@ -129,6 +134,7 @@ export class BackgroundCoordinator {
   private readonly activeJobControllers = new Map<string, AbortController>();
   private readonly activeJobTabs = new Map<string, number>();
   private readonly previewCache = new Map<string, CachedNvidiaPreview>();
+  private readonly lastActionClickMsByTab = new Map<number, number>();
   private responsiveSession: ResponsiveSessionState | null = null;
   private lastCaptureTimestampMs = 0;
   private initializationPromise: Promise<{ recoveredJobsCount: number }> | null = null;
@@ -338,14 +344,37 @@ export class BackgroundCoordinator {
     id?: number | undefined;
     url?: string | undefined;
     title?: string | undefined;
-  }): Promise<{ opened: 'overlay' | 'dashboard_fallback' | 'dashboard_unsupported' }> {
+  }): Promise<{
+    opened: 'overlay' | 'dashboard_double_click' | 'dashboard_fallback' | 'dashboard_unsupported';
+  }> {
     await this.ensureInitialized().catch(() => undefined);
     const tabUrl = tab.url ?? '';
     if (typeof tab.id === 'number' && isHttpOrHttpsUrl(tabUrl) && this.env.sendToTab) {
+      const now = Date.now();
+      const prevClick = this.lastActionClickMsByTab.get(tab.id) ?? 0;
+      if (prevClick > 0 && now - prevClick <= 420) {
+        this.lastActionClickMsByTab.delete(tab.id);
+        await this.env
+          .sendToTab(tab.id, {
+            schemaVersion: 1,
+            requestId: `act-dbl-close-${now}`,
+            operation: 'TOGGLE_OVERLAY_DASHBOARD',
+            tabId: tab.id,
+            payload: { mode: 'close' },
+          })
+          .catch(() => undefined);
+        if (this.env.openDashboardTab) {
+          await this.env.openDashboardTab(
+            `workspace.html?tabId=${tab.id}&targetUrl=${encodeURIComponent(tabUrl)}`,
+          );
+        }
+        return { opened: 'dashboard_double_click' };
+      }
+      this.lastActionClickMsByTab.set(tab.id, now);
       try {
         const res = await this.env.sendToTab(tab.id, {
           schemaVersion: 1,
-          requestId: `act-toggle-${Date.now()}`,
+          requestId: `act-toggle-${now}`,
           operation: 'TOGGLE_OVERLAY_DASHBOARD',
           tabId: tab.id,
           payload: { mode: 'action_click' },
@@ -1052,24 +1081,40 @@ export class BackgroundCoordinator {
               msg.operation,
             );
           }
-          const tabInfo = await this.verifyTargetTabForCapture(ownTabId, sender.tab?.url);
           const format = msg.payload['format'] === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+          const captureMode = msg.payload['mode'] === 'full_page' ? 'full_page' : 'visible';
+          if (captureMode === 'full_page' && this.env.sendToTab) {
+            const fullRes = await this.runCapturePipeline({
+              msg,
+              tabId: ownTabId,
+              mode: 'full_page',
+              exportMime: format,
+              quality: 0.92,
+              senderTabId: ownTabId,
+              initialUrl: sender.tab?.url ?? '',
+            });
+            return fullRes;
+          }
+          const tabInfo = await this.verifyTargetTabForCapture(ownTabId, sender.tab?.url);
           const dataUrl = await this.env.captureVisibleTab(
             tabInfo.windowId,
             format === 'image/jpeg' ? 'jpeg' : 'png',
           );
+          const verified = verifyCaptureBinaryAndDimensions(dataUrl);
           await this.recordActivityLifecycle({
             activityId: msg.requestId,
             tool: 'capture',
             actionLabel: 'Overlay Quick Capture',
             rawUrl: tabInfo.url,
             status: 'completed',
-            resultSummary: `Captured visible viewport (${format})`,
+            resultSummary: `Captured visible viewport ${verified.width}x${verified.height} (${format})`,
           });
           return createSuccessResponse(msg, {
             dataUrl,
             mimeType: format,
             pageUrl: tabInfo.url,
+            verified,
+            tilesCaptured: 1,
           });
         }
 
@@ -1150,6 +1195,9 @@ export class BackgroundCoordinator {
           const autorun = msg.payload['autorun'] === true;
           const section =
             typeof msg.payload['section'] === 'string' ? msg.payload['section'] : undefined;
+          const openMode = msg.payload['mode'] === 'pip' ? 'pip' : 'tab';
+          const aiTask =
+            typeof msg.payload['aiTask'] === 'string' ? msg.payload['aiTask'] : undefined;
           const params = new URLSearchParams();
           const sourceTabId = sender.tab?.id ?? msg.tabId;
           const sourceTabUrl = sender.tab?.url ?? '';
@@ -1166,12 +1214,20 @@ export class BackgroundCoordinator {
           if (section) {
             params.set('section', section);
           }
+          if (aiTask) {
+            params.set('aiTask', aiTask);
+          }
+          if (openMode === 'pip') {
+            params.set('pip', '1');
+          }
           const query = params.toString();
           const targetRel = query ? `workspace.html?${query}` : 'workspace.html';
-          if (this.env.openDashboardTab) {
+          if (openMode === 'pip' && this.env.openDashboardWindow) {
+            await this.env.openDashboardWindow(targetRel, 480, 760);
+          } else if (this.env.openDashboardTab) {
             await this.env.openDashboardTab(targetRel);
           }
-          return createSuccessResponse(msg, { openedUrl: targetRel });
+          return createSuccessResponse(msg, { openedUrl: targetRel, mode: openMode });
         }
 
         case 'RECORD_LOCAL_ACTIVITY': {
@@ -1683,301 +1739,28 @@ export class BackgroundCoordinator {
             );
           }
 
-          const tabId = msg.tabId;
-          const mode = (msg.payload['mode'] as CaptureMode | undefined) ?? 'visible';
-          const exportMime =
-            (msg.payload['exportMime'] as CaptureExportMime | undefined) ?? 'image/png';
-          const selector =
-            typeof msg.payload['selector'] === 'string' ? msg.payload['selector'] : undefined;
-          const rect = msg.payload['rect'] as CaptureRect | undefined;
-          const cropRect = msg.payload['cropRect'] as CaptureRect | undefined;
-          const annotations = msg.payload['annotations'] as CaptureAnnotation[] | undefined;
-          const quality =
-            typeof msg.payload['quality'] === 'number' ? msg.payload['quality'] : 0.92;
-          const minIntervalMs = this.env.captureMinIntervalMs ?? MIN_CAPTURE_INTERVAL_MS;
-
-          const startedMono = performance.now();
-          const abortCtrl = new AbortController();
-          this.activeJobControllers.set(msg.requestId, abortCtrl);
-          this.activeJobTabs.set(msg.requestId, tabId);
-
-          let job = await this.env.storage.StartToolJob({
-            id: msg.requestId,
-            tool: 'capture',
-            tabId,
-            documentId: msg.documentId ?? 'unbound',
+          return await this.runCapturePipeline({
+            msg,
+            tabId: msg.tabId,
+            mode: (msg.payload['mode'] as CaptureMode | undefined) ?? 'visible',
+            exportMime: (msg.payload['exportMime'] as CaptureExportMime | undefined) ?? 'image/png',
+            ...(typeof msg.payload['selector'] === 'string'
+              ? { selector: msg.payload['selector'] }
+              : {}),
+            ...(msg.payload['rect'] ? { rect: msg.payload['rect'] as CaptureRect } : {}),
+            ...(msg.payload['cropRect']
+              ? { cropRect: msg.payload['cropRect'] as CaptureRect }
+              : {}),
+            ...(msg.payload['annotations']
+              ? { annotations: msg.payload['annotations'] as CaptureAnnotation[] }
+              : {}),
+            quality: typeof msg.payload['quality'] === 'number' ? msg.payload['quality'] : 0.92,
+            senderTabId: sender.tab?.id,
+            initialUrl: typeof msg.payload['pageUrl'] === 'string' ? msg.payload['pageUrl'] : '',
+            ...(typeof msg.payload['title'] === 'string'
+              ? { initialTitle: msg.payload['title'] }
+              : {}),
           });
-
-          let preparedDom = false;
-          let capturePageUrl =
-            typeof msg.payload['pageUrl'] === 'string' ? msg.payload['pageUrl'] : '';
-          let capturePageTitle =
-            typeof msg.payload['title'] === 'string' ? msg.payload['title'] : undefined;
-          await this.recordActivityLifecycle({
-            activityId: msg.requestId,
-            tool: 'capture',
-            actionLabel: `Capture (${mode})`,
-            rawUrl: capturePageUrl,
-            rawTitle: capturePageTitle,
-            status: 'running',
-            optionsSummary: { mode, exportMime, ...(selector ? { selector } : {}) },
-            resultSummary: 'Preparing capture',
-          });
-          try {
-            const initialTab = await this.verifyTargetTabForCapture(tabId);
-            const expectedTabUrl = initialTab.url;
-            capturePageUrl = initialTab.url;
-            capturePageTitle = initialTab.title ?? capturePageTitle;
-
-            const prepareRes = await this.env.sendToTab(tabId, {
-              schemaVersion: 1,
-              requestId: `${msg.requestId}-prep`,
-              operation: 'CAPTURE_PREPARE',
-              tabId,
-              ...(msg.documentId ? { documentId: msg.documentId } : {}),
-              payload: {
-                mode,
-                ...(selector ? { selector } : {}),
-                ...(rect ? { rect } : {}),
-              },
-            });
-            if (!prepareRes.ok) {
-              await this.updateJob(job, {
-                status: 'failed',
-                statusMessage: prepareRes.error.message,
-              });
-              await this.recordActivityLifecycle({
-                activityId: msg.requestId,
-                tool: 'capture',
-                actionLabel: `Capture (${mode})`,
-                rawUrl: capturePageUrl,
-                rawTitle: capturePageTitle,
-                status: 'failed',
-                durationMs: performance.now() - startedMono,
-                errorCategory: prepareRes.error.code,
-                resultSummary: prepareRes.error.message,
-              });
-              return prepareRes;
-            }
-            preparedDom = true;
-
-            const prepData = prepareRes.data as {
-              plan: CapturePlan;
-              pageTitle: string;
-              pageUrl: string;
-              viewportWidth: number;
-              viewportHeight: number;
-              devicePixelRatio: number;
-              fixedElementsCount: number;
-            };
-            const boundDocumentId = prepareRes.documentId ?? msg.documentId;
-
-            const tiles: CaptureTile[] = [];
-            let nestedScrollDetected = false;
-
-            for (let idx = 0; idx < prepData.plan.tiles.length; idx += 1) {
-              const tileSpec = prepData.plan.tiles[idx];
-              if (!tileSpec) {
-                continue;
-              }
-              if (abortCtrl.signal.aborted) {
-                throw new Error('Capture cancelled by user');
-              }
-
-              let actualScrollX = tileSpec.scrollX;
-              let actualScrollY = tileSpec.scrollY;
-              let viewportWidth = prepData.viewportWidth;
-              let viewportHeight = prepData.viewportHeight;
-              let devicePixelRatio = prepData.devicePixelRatio;
-
-              if (prepData.plan.tiles.length > 1) {
-                const scrollRes = await this.env.sendToTab(tabId, {
-                  schemaVersion: 1,
-                  requestId: `${msg.requestId}-tile-${idx}`,
-                  operation: 'CAPTURE_SCROLL_TO',
-                  tabId,
-                  ...(boundDocumentId ? { documentId: boundDocumentId } : {}),
-                  payload: {
-                    tileIndex: tileSpec.tileIndex,
-                    scrollX: tileSpec.scrollX,
-                    scrollY: tileSpec.scrollY,
-                    hideFixed: tileSpec.tileIndex > 0,
-                    lazyWaitMs: 60,
-                  },
-                });
-                if (!scrollRes.ok) {
-                  throw new Error(scrollRes.error.message);
-                }
-                const scrollData = scrollRes.data as {
-                  actualScrollX: number;
-                  actualScrollY: number;
-                  viewportWidth: number;
-                  viewportHeight: number;
-                  devicePixelRatio: number;
-                };
-                actualScrollX = scrollData.actualScrollX;
-                actualScrollY = scrollData.actualScrollY;
-                viewportWidth = scrollData.viewportWidth;
-                viewportHeight = scrollData.viewportHeight;
-                devicePixelRatio = scrollData.devicePixelRatio;
-
-                const prevTile = tiles[tiles.length - 1];
-                if (
-                  tileSpec.tileIndex > 0 &&
-                  prevTile &&
-                  actualScrollY <= prevTile.actualScrollY &&
-                  tileSpec.scrollY > prevTile.scrollY
-                ) {
-                  nestedScrollDetected = true;
-                  break;
-                }
-              }
-
-              const elapsed = Date.now() - this.lastCaptureTimestampMs;
-              if (this.lastCaptureTimestampMs > 0 && elapsed < minIntervalMs) {
-                await new Promise((r) => setTimeout(r, minIntervalMs - elapsed));
-              }
-              assertNotAborted(abortCtrl.signal, 'Capture cancelled by user');
-
-              const verifiedTab = await this.verifyTargetTabForCapture(tabId, expectedTabUrl);
-              let tileDataUrl: string;
-              try {
-                tileDataUrl = await this.env.captureVisibleTab(verifiedTab.windowId, 'png');
-              } catch (capErr: unknown) {
-                const capMsg = capErr instanceof Error ? capErr.message : '';
-                if (!capMsg.includes('MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND')) {
-                  throw capErr;
-                }
-                await new Promise((r) => setTimeout(r, Math.max(minIntervalMs, 600)));
-                assertNotAborted(abortCtrl.signal, 'Capture cancelled by user');
-                const retryTab = await this.verifyTargetTabForCapture(tabId, expectedTabUrl);
-                tileDataUrl = await this.env.captureVisibleTab(retryTab.windowId, 'png');
-              }
-              this.lastCaptureTimestampMs = Date.now();
-
-              tiles.push({
-                tileIndex: tileSpec.tileIndex,
-                scrollX: tileSpec.scrollX,
-                scrollY: tileSpec.scrollY,
-                actualScrollX,
-                actualScrollY,
-                viewportWidth,
-                viewportHeight,
-                devicePixelRatio,
-                dataUrl: tileDataUrl,
-              });
-
-              const percent = Math.round(((idx + 1) / prepData.plan.tiles.length) * 80);
-              job = await this.updateJob(job, {
-                progressPercent: percent,
-                statusMessage: `Captured tile ${idx + 1} of ${prepData.plan.tiles.length}`,
-              });
-            }
-
-            const composeFn = this.env.composeCaptureImpl ?? composeCaptureFromTiles;
-            const composed = await composeFn({
-              tiles,
-              plan: prepData.plan,
-              exportMime,
-              ...(cropRect ? { cropRect } : {}),
-              ...(annotations ? { annotations } : {}),
-              title:
-                typeof msg.payload['title'] === 'string' && msg.payload['title'].trim().length > 0
-                  ? msg.payload['title']
-                  : prepData.pageTitle,
-              pageUrl: prepData.pageUrl,
-              quality,
-            });
-
-            const verified = verifyCaptureBinaryAndDimensions(composed.dataUrl);
-
-            await this.updateJob(job, {
-              status: 'completed',
-              progressPercent: 100,
-              statusMessage: `Captured ${verified.width}×${verified.height} (${verified.mimeType})`,
-            });
-            await this.recordActivityLifecycle({
-              activityId: msg.requestId,
-              tool: 'capture',
-              actionLabel: `Capture (${mode})`,
-              rawUrl: prepData.pageUrl || capturePageUrl,
-              rawTitle: prepData.pageTitle || capturePageTitle,
-              status: 'completed',
-              durationMs: performance.now() - startedMono,
-              optionsSummary: { mode, exportMime, ...(selector ? { selector } : {}) },
-              resultSummary: `Captured ${verified.width}×${verified.height} (${verified.mimeType}, ${tiles.length} tile${tiles.length === 1 ? '' : 's'})`,
-            });
-
-            return createSuccessResponse(
-              msg,
-              {
-                dataUrl: composed.dataUrl,
-                ...(composed.previewPngDataUrl
-                  ? { previewPngDataUrl: composed.previewPngDataUrl }
-                  : {}),
-                verified,
-                plan: prepData.plan,
-                tilesCaptured: tiles.length,
-                nestedScrollDetected,
-                pageTitle: prepData.pageTitle,
-                pageUrl: prepData.pageUrl,
-                jobId: job.id,
-              },
-              boundDocumentId,
-            );
-          } catch (err: unknown) {
-            const cancelled = abortCtrl.signal.aborted;
-            const errMsg = err instanceof Error ? err.message : 'Capture failed';
-            await this.updateJob(job, {
-              status: cancelled ? 'cancelled' : 'failed',
-              statusMessage: errMsg,
-            });
-            await this.recordActivityLifecycle({
-              activityId: msg.requestId,
-              tool: 'capture',
-              actionLabel: `Capture (${mode})`,
-              rawUrl: capturePageUrl,
-              rawTitle: capturePageTitle,
-              status: cancelled ? 'cancelled' : 'failed',
-              durationMs: performance.now() - startedMono,
-              errorCategory: cancelled ? 'JOB_CANCELLED' : 'TOOL_EXECUTION_ERROR',
-              resultSummary: errMsg,
-            });
-            return createErrorResponse(
-              msg.requestId,
-              cancelled ? 'JOB_CANCELLED' : 'TOOL_EXECUTION_ERROR',
-              errMsg,
-              msg.operation,
-            );
-          } finally {
-            if (preparedDom) {
-              await this.env
-                .sendToTab(tabId, {
-                  schemaVersion: 1,
-                  requestId: `${msg.requestId}-restore`,
-                  operation: 'CAPTURE_RESTORE',
-                  tabId,
-                  payload: {},
-                })
-                .catch(() => undefined);
-            }
-            const senderTabId = sender.tab?.id;
-            if (
-              typeof senderTabId === 'number' &&
-              senderTabId !== tabId &&
-              this.env.getTabInfo &&
-              this.env.activateTabAndWindow
-            ) {
-              const senderTab = await this.env.getTabInfo(senderTabId).catch(() => null);
-              if (senderTab) {
-                await this.env
-                  .activateTabAndWindow(senderTab.id, senderTab.windowId)
-                  .catch(() => undefined);
-              }
-            }
-            this.activeJobControllers.delete(msg.requestId);
-            this.activeJobTabs.delete(msg.requestId);
-          }
         }
 
         default: {
@@ -2000,6 +1783,311 @@ export class BackgroundCoordinator {
       const code =
         msg.operation === 'RUN_NVIDIA_ENHANCEMENT' ? 'AI_PROVIDER_ERROR' : 'TOOL_EXECUTION_ERROR';
       return createErrorResponse(msg.requestId, code, messageText, msg.operation);
+    }
+  }
+
+  private async runCapturePipeline(params: {
+    msg: RuntimeMessageEnvelope;
+    tabId: number;
+    mode: CaptureMode;
+    exportMime: CaptureExportMime;
+    selector?: string;
+    rect?: CaptureRect;
+    cropRect?: CaptureRect;
+    annotations?: CaptureAnnotation[];
+    quality: number;
+    senderTabId: number | undefined;
+    initialUrl: string;
+    initialTitle?: string;
+  }): Promise<ExtensionMessageResponse> {
+    if (!this.env.sendToTab || !this.env.captureVisibleTab) {
+      return createErrorResponse(
+        params.msg.requestId,
+        'TOOL_EXECUTION_ERROR',
+        'Real screenshot capture requires a target tabId, content script channel, and chrome.tabs.captureVisibleTab',
+        params.msg.operation,
+      );
+    }
+
+    const { msg, tabId, mode, exportMime, selector, rect, cropRect, annotations, quality } = params;
+    const minIntervalMs = this.env.captureMinIntervalMs ?? MIN_CAPTURE_INTERVAL_MS;
+    const startedMono = performance.now();
+    const abortCtrl = new AbortController();
+    this.activeJobControllers.set(msg.requestId, abortCtrl);
+    this.activeJobTabs.set(msg.requestId, tabId);
+
+    let job = await this.env.storage.StartToolJob({
+      id: msg.requestId,
+      tool: 'capture',
+      tabId,
+      documentId: msg.documentId ?? 'unbound',
+    });
+
+    let preparedDom = false;
+    let capturePageUrl = params.initialUrl;
+    let capturePageTitle = params.initialTitle;
+    await this.recordActivityLifecycle({
+      activityId: msg.requestId,
+      tool: 'capture',
+      actionLabel: `Capture (${mode})`,
+      rawUrl: capturePageUrl,
+      rawTitle: capturePageTitle,
+      status: 'running',
+      optionsSummary: { mode, exportMime, ...(selector ? { selector } : {}) },
+      resultSummary: 'Preparing capture',
+    });
+    try {
+      const initialTab = await this.verifyTargetTabForCapture(tabId);
+      const expectedTabUrl = initialTab.url;
+      capturePageUrl = initialTab.url;
+      capturePageTitle = initialTab.title ?? capturePageTitle;
+
+      const prepareRes = await this.env.sendToTab(tabId, {
+        schemaVersion: 1,
+        requestId: `${msg.requestId}-prep`,
+        operation: 'CAPTURE_PREPARE',
+        tabId,
+        ...(msg.documentId ? { documentId: msg.documentId } : {}),
+        payload: {
+          mode,
+          ...(selector ? { selector } : {}),
+          ...(rect ? { rect } : {}),
+        },
+      });
+      if (!prepareRes.ok) {
+        await this.updateJob(job, {
+          status: 'failed',
+          statusMessage: prepareRes.error.message,
+        });
+        await this.recordActivityLifecycle({
+          activityId: msg.requestId,
+          tool: 'capture',
+          actionLabel: `Capture (${mode})`,
+          rawUrl: capturePageUrl,
+          rawTitle: capturePageTitle,
+          status: 'failed',
+          durationMs: performance.now() - startedMono,
+          errorCategory: prepareRes.error.code,
+          resultSummary: prepareRes.error.message,
+        });
+        return prepareRes;
+      }
+      preparedDom = true;
+
+      const prepData = prepareRes.data as {
+        plan: CapturePlan;
+        pageTitle: string;
+        pageUrl: string;
+        viewportWidth: number;
+        viewportHeight: number;
+        devicePixelRatio: number;
+        fixedElementsCount: number;
+      };
+      const boundDocumentId = prepareRes.documentId ?? msg.documentId;
+
+      const tiles: CaptureTile[] = [];
+      let nestedScrollDetected = false;
+
+      for (let idx = 0; idx < prepData.plan.tiles.length; idx += 1) {
+        const tileSpec = prepData.plan.tiles[idx];
+        if (!tileSpec) {
+          continue;
+        }
+        if (abortCtrl.signal.aborted) {
+          throw new Error('Capture cancelled by user');
+        }
+
+        let actualScrollX = tileSpec.scrollX;
+        let actualScrollY = tileSpec.scrollY;
+        let viewportWidth = prepData.viewportWidth;
+        let viewportHeight = prepData.viewportHeight;
+        let devicePixelRatio = prepData.devicePixelRatio;
+
+        if (prepData.plan.tiles.length > 1) {
+          const scrollRes = await this.env.sendToTab(tabId, {
+            schemaVersion: 1,
+            requestId: `${msg.requestId}-tile-${idx}`,
+            operation: 'CAPTURE_SCROLL_TO',
+            tabId,
+            ...(boundDocumentId ? { documentId: boundDocumentId } : {}),
+            payload: {
+              tileIndex: tileSpec.tileIndex,
+              scrollX: tileSpec.scrollX,
+              scrollY: tileSpec.scrollY,
+              hideFixed: tileSpec.tileIndex > 0,
+              lazyWaitMs: 60,
+            },
+          });
+          if (!scrollRes.ok) {
+            throw new Error(scrollRes.error.message);
+          }
+          const scrollData = scrollRes.data as {
+            actualScrollX: number;
+            actualScrollY: number;
+            viewportWidth: number;
+            viewportHeight: number;
+            devicePixelRatio: number;
+          };
+          actualScrollX = scrollData.actualScrollX;
+          actualScrollY = scrollData.actualScrollY;
+          viewportWidth = scrollData.viewportWidth;
+          viewportHeight = scrollData.viewportHeight;
+          devicePixelRatio = scrollData.devicePixelRatio;
+
+          const prevTile = tiles[tiles.length - 1];
+          if (
+            tileSpec.tileIndex > 0 &&
+            prevTile &&
+            actualScrollY <= prevTile.actualScrollY &&
+            tileSpec.scrollY > prevTile.scrollY
+          ) {
+            nestedScrollDetected = true;
+            break;
+          }
+        }
+
+        const elapsed = Date.now() - this.lastCaptureTimestampMs;
+        if (this.lastCaptureTimestampMs > 0 && elapsed < minIntervalMs) {
+          await new Promise((r) => setTimeout(r, minIntervalMs - elapsed));
+        }
+        assertNotAborted(abortCtrl.signal, 'Capture cancelled by user');
+
+        const verifiedTab = await this.verifyTargetTabForCapture(tabId, expectedTabUrl);
+        let tileDataUrl: string;
+        try {
+          tileDataUrl = await this.env.captureVisibleTab(verifiedTab.windowId, 'png');
+        } catch (capErr: unknown) {
+          const capMsg = capErr instanceof Error ? capErr.message : '';
+          if (!capMsg.includes('MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND')) {
+            throw capErr;
+          }
+          await new Promise((r) => setTimeout(r, Math.max(minIntervalMs, 600)));
+          assertNotAborted(abortCtrl.signal, 'Capture cancelled by user');
+          const retryTab = await this.verifyTargetTabForCapture(tabId, expectedTabUrl);
+          tileDataUrl = await this.env.captureVisibleTab(retryTab.windowId, 'png');
+        }
+        this.lastCaptureTimestampMs = Date.now();
+
+        tiles.push({
+          tileIndex: tileSpec.tileIndex,
+          scrollX: tileSpec.scrollX,
+          scrollY: tileSpec.scrollY,
+          actualScrollX,
+          actualScrollY,
+          viewportWidth,
+          viewportHeight,
+          devicePixelRatio,
+          dataUrl: tileDataUrl,
+        });
+
+        const percent = Math.round(((idx + 1) / prepData.plan.tiles.length) * 80);
+        job = await this.updateJob(job, {
+          progressPercent: percent,
+          statusMessage: `Captured tile ${idx + 1} of ${prepData.plan.tiles.length}`,
+        });
+      }
+
+      const composeFn = this.env.composeCaptureImpl ?? composeCaptureFromTiles;
+      const composed = await composeFn({
+        tiles,
+        plan: prepData.plan,
+        exportMime,
+        ...(cropRect ? { cropRect } : {}),
+        ...(annotations ? { annotations } : {}),
+        title:
+          params.initialTitle && params.initialTitle.trim().length > 0
+            ? params.initialTitle
+            : prepData.pageTitle,
+        pageUrl: prepData.pageUrl,
+        quality,
+      });
+
+      const verified = verifyCaptureBinaryAndDimensions(composed.dataUrl);
+
+      await this.updateJob(job, {
+        status: 'completed',
+        progressPercent: 100,
+        statusMessage: `Captured ${verified.width}x${verified.height} (${verified.mimeType})`,
+      });
+      await this.recordActivityLifecycle({
+        activityId: msg.requestId,
+        tool: 'capture',
+        actionLabel: `Capture (${mode})`,
+        rawUrl: prepData.pageUrl || capturePageUrl,
+        rawTitle: prepData.pageTitle || capturePageTitle,
+        status: 'completed',
+        durationMs: performance.now() - startedMono,
+        optionsSummary: { mode, exportMime, ...(selector ? { selector } : {}) },
+        resultSummary: `Captured ${verified.width}x${verified.height} (${verified.mimeType}, ${tiles.length} tile${tiles.length === 1 ? '' : 's'})`,
+      });
+
+      return createSuccessResponse(
+        msg,
+        {
+          dataUrl: composed.dataUrl,
+          ...(composed.previewPngDataUrl ? { previewPngDataUrl: composed.previewPngDataUrl } : {}),
+          verified,
+          plan: prepData.plan,
+          tilesCaptured: tiles.length,
+          nestedScrollDetected,
+          pageTitle: prepData.pageTitle,
+          pageUrl: prepData.pageUrl,
+          jobId: job.id,
+        },
+        boundDocumentId,
+      );
+    } catch (err: unknown) {
+      const cancelled = abortCtrl.signal.aborted;
+      const errMsg = err instanceof Error ? err.message : 'Capture failed';
+      await this.updateJob(job, {
+        status: cancelled ? 'cancelled' : 'failed',
+        statusMessage: errMsg,
+      });
+      await this.recordActivityLifecycle({
+        activityId: msg.requestId,
+        tool: 'capture',
+        actionLabel: `Capture (${mode})`,
+        rawUrl: capturePageUrl,
+        rawTitle: capturePageTitle,
+        status: cancelled ? 'cancelled' : 'failed',
+        durationMs: performance.now() - startedMono,
+        errorCategory: cancelled ? 'JOB_CANCELLED' : 'TOOL_EXECUTION_ERROR',
+        resultSummary: errMsg,
+      });
+      return createErrorResponse(
+        msg.requestId,
+        cancelled ? 'JOB_CANCELLED' : 'TOOL_EXECUTION_ERROR',
+        errMsg,
+        msg.operation,
+      );
+    } finally {
+      if (preparedDom) {
+        await this.env
+          .sendToTab(tabId, {
+            schemaVersion: 1,
+            requestId: `${msg.requestId}-restore`,
+            operation: 'CAPTURE_RESTORE',
+            tabId,
+            payload: {},
+          })
+          .catch(() => undefined);
+      }
+      const { senderTabId } = params;
+      if (
+        typeof senderTabId === 'number' &&
+        senderTabId !== tabId &&
+        this.env.getTabInfo &&
+        this.env.activateTabAndWindow
+      ) {
+        const senderTab = await this.env.getTabInfo(senderTabId).catch(() => null);
+        if (senderTab) {
+          await this.env
+            .activateTabAndWindow(senderTab.id, senderTab.windowId)
+            .catch(() => undefined);
+        }
+      }
+      this.activeJobControllers.delete(msg.requestId);
+      this.activeJobTabs.delete(msg.requestId);
     }
   }
 
@@ -2207,6 +2295,26 @@ function bootstrapServiceWorker(): void {
         ? chromeApi.runtime.getURL(relativeUrl)
         : relativeUrl;
       await chromeApi.tabs.create({ url: fullUrl });
+    },
+    openDashboardWindow: async (relativeUrl, width, height) => {
+      if (!chromeApi.windows?.create) {
+        return null;
+      }
+      const fullUrl = chromeApi.runtime?.getURL
+        ? chromeApi.runtime.getURL(relativeUrl)
+        : relativeUrl;
+      const win = await chromeApi.windows.create({
+        url: fullUrl,
+        type: 'popup',
+        width,
+        height,
+        focused: true,
+      });
+      const tabId = win.tabs?.[0]?.id;
+      if (typeof win.id !== 'number' || typeof tabId !== 'number') {
+        return null;
+      }
+      return { windowId: win.id, tabId };
     },
   });
 

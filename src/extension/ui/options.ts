@@ -4,6 +4,7 @@ import type {
   RuntimeMessageEnvelope,
 } from '../protocol/messages.js';
 import { AI_PROVIDER_PRESETS, type AiProviderPreset } from '../storage/settings-storage.js';
+import { pushMacNotification } from './notifications.js';
 import {
   applyThemePreference,
   bindGlobalTapFeedback,
@@ -37,11 +38,17 @@ async function sendOptionsMessage(
 
 function setBanner(message: string, tone: 'neutral' | 'success' | 'error' = 'neutral'): void {
   const el = document.getElementById('options-status-banner');
-  if (!el) {
-    return;
+  if (el) {
+    el.textContent = message;
+    el.className = tone === 'neutral' ? 'status-line' : `status-line ${tone}`;
   }
-  el.textContent = message;
-  el.className = tone === 'neutral' ? 'status-line' : `status-line ${tone}`;
+  if (tone === 'success' || tone === 'error') {
+    pushMacNotification({
+      title: tone === 'success' ? 'Settings Updated' : 'Settings Error',
+      message,
+      tone,
+    });
+  }
 }
 
 function formatBytes(bytes: number): string {

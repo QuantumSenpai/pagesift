@@ -260,7 +260,12 @@ const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = 
   }),
   RUN_NVIDIA_ENHANCEMENT: z.strictObject({
     previewOnly: z.boolean().default(true),
-    taskType: z.enum(['enhance_clone_prompt', 'interpret_design_review', 'explain_tech_stack']),
+    taskType: z.enum([
+      'enhance_clone_prompt',
+      'interpret_design_review',
+      'explain_tech_stack',
+      'extract_features',
+    ]),
     modelId: z.string().trim().max(160).optional(),
     sourceTool: z
       .enum([
@@ -271,6 +276,7 @@ const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = 
         'fonts',
         'inspect',
         'tech_stack',
+        'feature_extract',
       ])
       .default('clone_prompt'),
     toolOutput: z.record(z.string(), z.unknown()).default({}),
@@ -289,6 +295,15 @@ const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = 
     tool: toolIdSchema.optional(),
     autorun: z.boolean().optional(),
     section: z.enum(['tools', 'history', 'saved', 'settings']).optional(),
+    mode: z.enum(['tab', 'pip']).default('tab'),
+    aiTask: z
+      .enum([
+        'extract_features',
+        'enhance_clone_prompt',
+        'interpret_design_review',
+        'explain_tech_stack',
+      ])
+      .optional(),
   }),
   OPEN_OPTIONS_PAGE: z.strictObject({}),
   OPEN_SITE_RESPONSIVE_WINDOWS: z.strictObject({
@@ -297,6 +312,7 @@ const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = 
   }),
   CAPTURE_OWN_TAB: z.strictObject({
     format: z.enum(['image/png', 'image/jpeg']).default('image/png'),
+    mode: z.enum(['visible', 'full_page']).default('visible'),
   }),
   FETCH_SITE_ASSETS: z.strictObject({
     urls: z.array(httpUrlSchema).min(1).max(150),

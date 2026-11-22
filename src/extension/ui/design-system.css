@@ -70,13 +70,13 @@
   --ink-btn: #18181b;
   --ink-btn-hover: #27272a;
   --ink-btn-fg: #ffffff;
-  --accent: #2563eb;
-  --accent-hover: #1d4ed8;
+  --accent: #0f766e;
+  --accent-hover: #0d9488;
   --accent-fg: #ffffff;
-  --accent-text: #1d4ed8;
-  --accent-surface: #eff6ff;
-  --accent-border: #bfdbfe;
-  --focus-ring: #2563eb;
+  --accent-text: #0f766e;
+  --accent-surface: #f0fdfa;
+  --accent-border: #99f6e4;
+  --focus-ring: #0d9488;
   --positive: #0f766e;
   --positive-surface: #f0fdfa;
   --positive-border: #99f6e4;
@@ -104,26 +104,26 @@
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg-canvas: #0d0e12;
-  --bg-surface: #15171d;
-  --bg-elevated: #1c1f27;
-  --bg-subtle: #232732;
-  --bg-inset: #101217;
-  --border-subtle: #262a35;
-  --border-strong: #363c4c;
-  --text-primary: #f4f4f5;
-  --text-secondary: #d4d4d8;
-  --text-muted: #9ca3af;
-  --ink-btn: #f4f4f5;
-  --ink-btn-hover: #e4e4e7;
-  --ink-btn-fg: #111827;
-  --accent: #2563eb;
-  --accent-hover: #3b82f6;
+  --bg-canvas: #0f1214;
+  --bg-surface: #15191d;
+  --bg-elevated: #1c2127;
+  --bg-subtle: #242b33;
+  --bg-inset: #0b0e10;
+  --border-subtle: #262d35;
+  --border-strong: #36404c;
+  --text-primary: #f4f5f6;
+  --text-secondary: #d5d8dc;
+  --text-muted: #98a2ad;
+  --ink-btn: #f4f5f6;
+  --ink-btn-hover: #e5e7eb;
+  --ink-btn-fg: #0b0e10;
+  --accent: #0d9488;
+  --accent-hover: #14b8a6;
   --accent-fg: #ffffff;
-  --accent-text: #60a5fa;
-  --accent-surface: #172554;
-  --accent-border: #1e40af;
-  --focus-ring: #60a5fa;
+  --accent-text: #5eead4;
+  --accent-surface: #0b2626;
+  --accent-border: #115e59;
+  --focus-ring: #14b8a6;
   --positive: #14b8a6;
   --positive-surface: #042f2e;
   --positive-border: #115e59;
@@ -1631,6 +1631,152 @@ pre.code-box {
   .control-row > select {
     flex: 1 1 100%;
     min-width: 0;
+  }
+}
+
+.ps-mac-toast-stack {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  width: min(352px, calc(100vw - 32px));
+  z-index: 950;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.ps-mac-toast {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+  animation: ps-mac-toast-in 180ms var(--ease-standard);
+}
+
+.ps-mac-toast.ps-mac-toast-success {
+  border-left-color: var(--positive);
+}
+
+.ps-mac-toast.ps-mac-toast-warning {
+  border-left-color: var(--warning);
+}
+
+.ps-mac-toast.ps-mac-toast-error {
+  border-left-color: var(--danger);
+}
+
+.ps-mac-toast.leaving {
+  opacity: 0;
+  transform: translateX(12px);
+  transition:
+    opacity 160ms var(--ease-standard),
+    transform 160ms var(--ease-standard);
+}
+
+.ps-mac-toast-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ps-mac-toast-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.ps-mac-toast-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.ps-mac-toast-success .ps-mac-toast-dot {
+  background: var(--positive);
+}
+
+.ps-mac-toast-warning .ps-mac-toast-dot {
+  background: var(--warning);
+}
+
+.ps-mac-toast-error .ps-mac-toast-dot {
+  background: var(--danger);
+}
+
+.ps-mac-toast-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ps-mac-toast-close {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  min-height: 20px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.ps-mac-toast-close svg {
+  width: 12px;
+  height: 12px;
+}
+
+.ps-mac-toast-close:hover {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.ps-mac-toast-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ps-mac-toast-body {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.ps-mac-toast-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+@keyframes ps-mac-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 

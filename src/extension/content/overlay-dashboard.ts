@@ -1,4 +1,5 @@
 import type { AssetAvailabilityStatus, AssetKind } from '../engines/assets-engine.js';
+import type { PageFeatureExtractionReport } from '../engines/feature-extract-engine.js';
 import type {
   TechStackDetectionEntry,
   TechStackOrganizedSummary,
@@ -104,7 +105,10 @@ export interface OverlayToolSummary {
   fontsPreviewData?: OverlayFontsSummaryData;
   reviewPreviewData?: OverlayDesignReviewSummaryData;
   inspectPreviewData?: OverlayInspectSummaryData;
+  featuresPreviewData?: PageFeatureExtractionReport;
   imageDataUrl?: string;
+  captureMode?: 'visible' | 'full_page';
+  captureResolution?: string;
   copyableText?: string;
   downloadFilename?: string;
   downloadMime?: string;
@@ -124,6 +128,7 @@ export interface OverlayEditOptions {
   action?: 'move' | 'hide' | 'remove';
   dx?: number;
   dy?: number;
+  captureMode?: 'visible' | 'full_page';
 }
 
 export interface OverlayDashboardCallbacks {
@@ -136,10 +141,17 @@ export interface OverlayDashboardCallbacks {
     tool: ToolId,
     options?: OverlayEditOptions,
   ) => Promise<OverlayToolSummary | null>;
+  onRunFeatureExtract?: () => Promise<OverlayToolSummary | null>;
   onOpenFullDashboard: (options?: {
     tool?: ToolId;
     autorun?: boolean;
     section?: 'tools' | 'history' | 'saved' | 'settings';
+    mode?: 'tab' | 'pip';
+    aiTask?:
+      | 'extract_features'
+      | 'enhance_clone_prompt'
+      | 'interpret_design_review'
+      | 'explain_tech_stack';
   }) => Promise<void>;
   onOpenSettings?: () => Promise<void>;
   onOpenSiteResponsiveWindows?: () => Promise<{ ok: boolean; message: string }>;
@@ -334,6 +346,7 @@ export class OnPageOverlayDashboard {
   private minBar: HTMLElement | null = null;
   private drawer: HTMLElement | null = null;
   private drawerContent: HTMLElement | null = null;
+  private notifyStack: HTMLElement | null = null;
   private allToolsBtn: HTMLButtonElement | null = null;
   private minStatusText: HTMLElement | null = null;
 
@@ -504,8 +517,99 @@ export class OnPageOverlayDashboard {
     this.minBar = null;
     this.drawer = null;
     this.drawerContent = null;
+    this.notifyStack = null;
     this.allToolsBtn = null;
     this.minStatusText = null;
+  }
+
+  public notify(options: {
+    title: string;
+    message: string;
+    tone?: 'info' | 'success' | 'warning' | 'error';
+    durationMs?: number;
+    actionLabel?: string;
+    onAction?: () => void;
+  }): void {
+    if (!this.notifyStack) {
+      return;
+    }
+    while (this.notifyStack.childElementCount >= 3) {
+      this.notifyStack.firstElementChild?.remove();
+    }
+    const tone = options.tone ?? 'info';
+    const card = this.doc.createElement('div');
+    card.className = `ps-mac-toast ps-mac-toast-${tone}`;
+    card.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+
+    const top = this.doc.createElement('div');
+    top.className = 'ps-mac-toast-top';
+    const brand = this.doc.createElement('div');
+    brand.className = 'ps-mac-toast-brand';
+    const dot = this.doc.createElement('span');
+    dot.className = 'ps-mac-toast-dot';
+    brand.append(dot, this.doc.createTextNode('PageSift'));
+
+    const right = this.doc.createElement('div');
+    right.className = 'ps-mac-toast-meta';
+    const closeBtn = this.doc.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'ps-mac-toast-close';
+    closeBtn.setAttribute('aria-label', 'Dismiss notification');
+    closeBtn.appendChild(createSvgIcon('close', '', this.doc));
+    right.append(this.doc.createTextNode('now'), closeBtn);
+    top.append(brand, right);
+
+    const titleEl = this.doc.createElement('div');
+    titleEl.className = 'ps-mac-toast-title';
+    titleEl.textContent = options.title;
+    const msgEl = this.doc.createElement('div');
+    msgEl.className = 'ps-mac-toast-body';
+    msgEl.textContent = options.message;
+    card.append(top, titleEl, msgEl);
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const dismiss = (): void => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      card.classList.add('leaving');
+      setTimeout(() => {
+        card.remove();
+      }, 170);
+    };
+
+    if (options.actionLabel && options.onAction) {
+      const acts = this.doc.createElement('div');
+      acts.className = 'ps-mac-toast-actions';
+      const actBtn = this.createButton(options.actionLabel, 'ps-btn', () => {
+        dismiss();
+        options.onAction?.();
+      });
+      acts.appendChild(actBtn);
+      card.appendChild(acts);
+    }
+
+    closeBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      dismiss();
+    });
+
+    const ttl = options.durationMs ?? (tone === 'error' ? 7500 : 4200);
+    const arm = (): void => {
+      if (ttl > 0) {
+        timer = setTimeout(dismiss, ttl);
+      }
+    };
+    card.addEventListener('mouseenter', () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    });
+    card.addEventListener('mouseleave', arm);
+    this.notifyStack.appendChild(card);
+    arm();
   }
 
   private syncAnchorPlacement(): void {
@@ -562,28 +666,30 @@ export class OnPageOverlayDashboard {
     styleEl.textContent = `
       ${fontsCss}${monoCss}
       .ps-anchor {
-        --bg: #121218;
-        --elevated: #1b1c25;
-        --subtle: #252735;
-        --border: #2c2e3b;
-        --border-strong: #46435e;
-        --text: #f4f4f5;
-        --secondary: #d4d4d8;
-        --muted: #9ca3af;
-        --ink: #f4f4f5;
-        --ink-hover: #e4e4e7;
-        --ink-fg: #111827;
-        --accent: #2563eb;
-        --accent-hover: #3b82f6;
-        --accent-surface: #172554;
-        --accent-border: #1e40af;
-        --accent-text: #93c5fd;
-        --beta-bg: #2a2440;
-        --beta-border: #4c4175;
-        --beta-text: #c4b5fd;
-        --positive: #14b8a6;
-        --positive-surface: #042f2e;
-        --positive-border: #115e59;
+        --bg: #0f1214;
+        --elevated: #171b1f;
+        --subtle: #20262c;
+        --border: #262d35;
+        --border-strong: #343e4a;
+        --text: #f3f4f6;
+        --secondary: #d5d9df;
+        --muted: #94a0ad;
+        --ink: #f3f4f6;
+        --ink-hover: #e5e7eb;
+        --ink-fg: #0b0e10;
+        --accent: #0d9488;
+        --accent-hover: #14b8a6;
+        --accent-surface: #0b2626;
+        --accent-border: #115e59;
+        --accent-text: #5eead4;
+        --beta-bg: #292011;
+        --beta-border: #854d0e;
+        --beta-text: #fcd34d;
+        --positive: #10b981;
+        --positive-surface: #06281e;
+        --positive-border: #047857;
+        --warning: #f59e0b;
+        --danger: #ef4444;
         --shadow-sm: 0 3px 8px rgba(0, 0, 0, 0.36);
         --shadow-md: 0 10px 26px rgba(0, 0, 0, 0.48);
         --shadow-lg: 0 22px 54px rgba(0, 0, 0, 0.68), 0 4px 16px rgba(0, 0, 0, 0.42);
@@ -603,28 +709,30 @@ export class OnPageOverlayDashboard {
         color: var(--text);
       }
       .ps-anchor[data-theme="light"] {
-        --bg: #ffffff;
-        --elevated: #f5f6f8;
-        --subtle: #eef0f4;
-        --border: #e5e7eb;
-        --border-strong: #d1d5db;
-        --text: #111827;
+        --bg: #f8f8f6;
+        --elevated: #ffffff;
+        --subtle: #efefe9;
+        --border: #e1e3dc;
+        --border-strong: #c8cbc1;
+        --text: #11161b;
         --secondary: #374151;
-        --muted: #6b7280;
-        --ink: #18181b;
-        --ink-hover: #27272a;
+        --muted: #64707d;
+        --ink: #11161b;
+        --ink-hover: #242b33;
         --ink-fg: #ffffff;
-        --accent: #2563eb;
-        --accent-hover: #1d4ed8;
-        --accent-surface: #eff6ff;
-        --accent-border: #bfdbfe;
-        --accent-text: #1d4ed8;
-        --beta-bg: #eef2ff;
-        --beta-border: #c7d2fe;
-        --beta-text: #4338ca;
-        --positive: #0f766e;
-        --positive-surface: #f0fdfa;
-        --positive-border: #99f6e4;
+        --accent: #0f766e;
+        --accent-hover: #0d9488;
+        --accent-surface: #f0fdfa;
+        --accent-border: #99f6e4;
+        --accent-text: #0f766e;
+        --beta-bg: #fef3c7;
+        --beta-border: #fcd34d;
+        --beta-text: #92400e;
+        --positive: #059669;
+        --positive-surface: #ecfdf5;
+        --positive-border: #a7f3d0;
+        --warning: #b45309;
+        --danger: #dc2626;
         --shadow-sm: 0 2px 6px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
         --shadow-md: 0 8px 22px rgba(15, 23, 42, 0.1), 0 2px 6px rgba(15, 23, 42, 0.05);
         --shadow-lg: 0 18px 42px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.07);
@@ -655,17 +763,89 @@ export class OnPageOverlayDashboard {
       }
       .ps-dock {
         display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-wrap: nowrap;
-        gap: 4px;
-        padding: 5px 8px;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 6px;
+        padding: 7px 10px 6px;
         background: var(--bg);
         border: 1px solid var(--border-strong);
         border-radius: 10px;
         box-shadow: var(--shadow-lg);
         pointer-events: auto;
         max-width: 100%;
+      }
+      .ps-dock-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding-bottom: 5px;
+        border-bottom: 1px solid var(--border);
+        flex-wrap: wrap;
+      }
+      .ps-dock-identity {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-width: 0;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .ps-dock-identity img {
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+      }
+      .ps-dock-hint {
+        font-size: 11px;
+        font-weight: 400;
+        color: var(--muted);
+      }
+      .ps-dock-modes {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        flex-wrap: wrap;
+      }
+      .ps-pill-btn {
+        min-height: 26px;
+        padding: 3px 9px;
+        border-radius: 5px;
+        border: 1px solid var(--border-strong);
+        background: var(--elevated);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 11.5px;
+        font-weight: 500;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        transition: background 120ms var(--ease), border-color 120ms var(--ease), transform 90ms var(--ease);
+      }
+      .ps-pill-btn:hover {
+        background: var(--subtle);
+        border-color: var(--accent-border);
+      }
+      .ps-pill-btn.accent {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #ffffff;
+        font-weight: 600;
+      }
+      .ps-pill-btn.accent:hover {
+        background: var(--accent-hover);
+      }
+      .ps-pill-btn svg {
+        width: 13px;
+        height: 13px;
+      }
+      .ps-dock-body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
       }
       .ps-tools-strip {
         display: flex;
@@ -1394,6 +1574,105 @@ export class OnPageOverlayDashboard {
         flex-direction: column;
         gap: 4px;
       }
+      .ps-notify-stack {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        width: min(336px, calc(100vw - 24px));
+        z-index: 2147483647;
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+        pointer-events: none;
+      }
+      .ps-mac-toast {
+        pointer-events: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 11px 13px;
+        background: var(--bg);
+        border: 1px solid var(--border-strong);
+        border-left: 3px solid var(--accent);
+        border-radius: 10px;
+        box-shadow: var(--shadow-lg);
+        color: var(--text);
+        animation: ps-enter 180ms var(--ease);
+      }
+      .ps-mac-toast-success { border-left-color: var(--positive); }
+      .ps-mac-toast-warning { border-left-color: var(--warning); }
+      .ps-mac-toast-error { border-left-color: var(--danger); }
+      .ps-mac-toast.leaving {
+        opacity: 0;
+        transform: translateX(10px);
+        transition: opacity 150ms var(--ease), transform 150ms var(--ease);
+      }
+      .ps-mac-toast-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 10.5px;
+        color: var(--muted);
+      }
+      .ps-mac-toast-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--secondary);
+      }
+      .ps-mac-toast-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 2px;
+        background: var(--accent);
+      }
+      .ps-mac-toast-success .ps-mac-toast-dot { background: var(--positive); }
+      .ps-mac-toast-warning .ps-mac-toast-dot { background: var(--warning); }
+      .ps-mac-toast-error .ps-mac-toast-dot { background: var(--danger); }
+      .ps-mac-toast-meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .ps-mac-toast-close {
+        width: 20px;
+        height: 20px;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--muted);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      .ps-mac-toast-close:hover {
+        background: var(--subtle);
+        color: var(--text);
+      }
+      .ps-mac-toast-close svg {
+        width: 12px;
+        height: 12px;
+      }
+      .ps-mac-toast-title {
+        font-size: 12.5px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .ps-mac-toast-body {
+        font-size: 12px;
+        line-height: 1.4;
+        color: var(--secondary);
+        word-break: break-word;
+      }
+      .ps-mac-toast-actions {
+        display: flex;
+        gap: 6px;
+        margin-top: 3px;
+      }
       @media (prefers-reduced-motion: reduce) {
         * { transition: none !important; animation: none !important; }
       }
@@ -1441,6 +1720,81 @@ export class OnPageOverlayDashboard {
     dockBar.setAttribute('role', 'toolbar');
     dockBar.setAttribute('aria-label', 'PageSift Horizontal Command Bar');
 
+    const dockHead = this.doc.createElement('div');
+    dockHead.className = 'ps-dock-header';
+    const dockIdentity = this.doc.createElement('div');
+    dockIdentity.className = 'ps-dock-identity';
+    const brandIconUrl = this.callbacks.getResourceUrl('icons/icon-32.png');
+    if (brandIconUrl) {
+      const bImg = this.doc.createElement('img');
+      bImg.src = brandIconUrl;
+      bImg.alt = 'PageSift';
+      dockIdentity.appendChild(bImg);
+    }
+    const hostTxt = this.createEl(
+      'span',
+      undefined,
+      this.callbacks.getPageInfo().hostname || 'PageSift',
+    );
+    const hintTxt = this.createEl(
+      'span',
+      'ps-dock-hint',
+      'Double-click extension icon for Dashboard',
+    );
+    dockIdentity.append(hostTxt, hintTxt);
+
+    const dockModes = this.doc.createElement('div');
+    dockModes.className = 'ps-dock-modes';
+
+    const pipDashBtn = this.createButton('PiP Dashboard', 'ps-pill-btn', () => {
+      this.notify({
+        title: 'PiP Dashboard',
+        message: 'Opening floating Picture-in-Picture dashboard window.',
+        tone: 'info',
+      });
+      void this.callbacks.onOpenFullDashboard({ mode: 'pip' });
+    });
+    pipDashBtn.setAttribute('data-ps-action', 'open-pip-dashboard');
+    pipDashBtn.title = 'Open compact floating Dashboard window';
+
+    const fullDashBtn = this.createButton('Full Dashboard', 'ps-pill-btn', () => {
+      void this.callbacks.onOpenFullDashboard({ mode: 'tab' });
+    });
+    fullDashBtn.setAttribute('data-ps-action', 'open-dashboard-bar');
+    fullDashBtn.title = 'Open full workspace dashboard tab';
+
+    const aiExtractBtn = this.doc.createElement('button');
+    aiExtractBtn.type = 'button';
+    aiExtractBtn.className = 'ps-pill-btn accent';
+    aiExtractBtn.setAttribute('data-ps-action', 'extract-features');
+    aiExtractBtn.title = 'Extract product features and prepare AI spec';
+    aiExtractBtn.appendChild(createSvgIcon('sparkles', '', this.doc));
+    aiExtractBtn.appendChild(this.doc.createTextNode('Extract Features'));
+    aiExtractBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (!this.callbacks.onRunFeatureExtract || this.busy) {
+        return;
+      }
+      this.busy = true;
+      void this.callbacks
+        .onRunFeatureExtract()
+        .then((summary) => {
+          if (summary) {
+            this.showResultSummary(summary);
+          }
+        })
+        .finally(() => {
+          this.busy = false;
+        });
+    });
+
+    dockModes.append(pipDashBtn, fullDashBtn, aiExtractBtn);
+    dockHead.append(dockIdentity, dockModes);
+    dockBar.appendChild(dockHead);
+
+    const dockBody = this.doc.createElement('div');
+    dockBody.className = 'ps-dock-body';
+
     const toolsStrip = this.doc.createElement('div');
     toolsStrip.className = 'ps-tools-strip';
     for (const def of OVERLAY_TOOLS) {
@@ -1466,11 +1820,11 @@ export class OnPageOverlayDashboard {
       });
       toolsStrip.appendChild(btn);
     }
-    dockBar.appendChild(toolsStrip);
+    dockBody.appendChild(toolsStrip);
 
     const divider = this.doc.createElement('div');
     divider.className = 'ps-dock-divider';
-    dockBar.appendChild(divider);
+    dockBody.appendChild(divider);
 
     const actionsStrip = this.doc.createElement('div');
     actionsStrip.className = 'ps-actions-strip';
@@ -1537,7 +1891,8 @@ export class OnPageOverlayDashboard {
     });
 
     actionsStrip.append(pipBtn, themeBtn, allToolsBtn, minBtn, closeBtn);
-    dockBar.appendChild(actionsStrip);
+    dockBody.appendChild(actionsStrip);
+    dockBar.appendChild(dockBody);
     stage.appendChild(dockBar);
 
     const minBar = this.doc.createElement('div');
@@ -1585,7 +1940,12 @@ export class OnPageOverlayDashboard {
     minBar.append(mDot, minText, expandBtn, minDashBtn, minCloseBtn);
     stage.appendChild(minBar);
 
-    anchor.appendChild(stage);
+    const notifyStack = this.doc.createElement('div');
+    notifyStack.className = 'ps-notify-stack';
+    notifyStack.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+    notifyStack.setAttribute('aria-live', 'polite');
+
+    anchor.append(stage, notifyStack);
     this.shadow.appendChild(anchor);
 
     this.anchor = anchor;
@@ -1598,6 +1958,7 @@ export class OnPageOverlayDashboard {
     this.minBar = minBar;
     this.drawer = drawer;
     this.drawerContent = drawerContent;
+    this.notifyStack = notifyStack;
     this.allToolsBtn = allToolsBtn;
     this.minStatusText = minText;
 
@@ -1660,10 +2021,61 @@ export class OnPageOverlayDashboard {
       }
     });
 
-    addAction('Open Full Dashboard', 'external', 'open-dashboard', () => {
+    addAction('Dashboard (Floating PiP Window)', 'external', 'open-pip-menu', () => {
       this.pipMenuOpen = false;
       this.syncPipVisibility();
-      void this.callbacks.onOpenFullDashboard();
+      this.notify({
+        title: 'PiP Dashboard',
+        message: 'Launching floating Picture-in-Picture Dashboard.',
+        tone: 'info',
+      });
+      void this.callbacks.onOpenFullDashboard({ mode: 'pip' });
+    });
+
+    addAction('Open Full Dashboard Tab', 'external', 'open-dashboard', () => {
+      this.pipMenuOpen = false;
+      this.syncPipVisibility();
+      void this.callbacks.onOpenFullDashboard({ mode: 'tab' });
+    });
+
+    addAction('Full-Page Screenshot (PNG)', 'capture', 'capture-full-page-menu', () => {
+      this.pipMenuOpen = false;
+      this.syncPipVisibility();
+      if (this.busy) return;
+      this.busy = true;
+      this.notify({
+        title: 'Full-Page Capture',
+        message: 'Scrolling and stitching full webpage screenshot...',
+        tone: 'info',
+        durationMs: 3200,
+      });
+      void this.callbacks
+        .onRunOverlayTool('capture', { captureMode: 'full_page' })
+        .then((summary) => {
+          if (summary) {
+            this.showResultSummary(summary);
+          }
+        })
+        .finally(() => {
+          this.busy = false;
+        });
+    });
+
+    addAction('AI Feature Extraction', 'sparkles', 'feature-extract-menu', () => {
+      this.pipMenuOpen = false;
+      this.syncPipVisibility();
+      if (!this.callbacks.onRunFeatureExtract || this.busy) return;
+      this.busy = true;
+      void this.callbacks
+        .onRunFeatureExtract()
+        .then((summary) => {
+          if (summary) {
+            this.showResultSummary(summary);
+          }
+        })
+        .finally(() => {
+          this.busy = false;
+        });
     });
 
     addAction('Responsive Interactive View', 'responsive', 'open-responsive-stage', () => {
@@ -2059,6 +2471,73 @@ export class OnPageOverlayDashboard {
     this.drawerContent.appendChild(grid);
   }
 
+  private renderFeaturesDrawerBody(data: PageFeatureExtractionReport): void {
+    if (!this.drawerContent) return;
+    const actionBar = this.doc.createElement('div');
+    actionBar.className = 'ps-filter-bar';
+    actionBar.appendChild(
+      this.createButton('Run AI Feature Spec (PiP Window)', 'ps-btn primary', () => {
+        this.notify({
+          title: 'AI Feature Extraction',
+          message: 'Opening PiP Dashboard to review AI payload & generate spec.',
+          tone: 'info',
+        });
+        void this.callbacks.onOpenFullDashboard({
+          tool: 'clone_prompt',
+          autorun: true,
+          mode: 'pip',
+          aiTask: 'extract_features',
+        });
+      }),
+    );
+    actionBar.appendChild(
+      this.createButton('Run AI Feature Spec (Full Dashboard)', 'ps-btn', () => {
+        void this.callbacks.onOpenFullDashboard({
+          tool: 'clone_prompt',
+          autorun: true,
+          mode: 'tab',
+          aiTask: 'extract_features',
+        });
+      }),
+    );
+    this.drawerContent.appendChild(actionBar);
+
+    const kvs = this.doc.createElement('div');
+    kvs.className = 'ps-kv-grid';
+    const metaRows: Array<[string, string]> = [
+      ['Hero H1', data.heroHeadline || 'None detected'],
+      ['Primary CTAs', data.primaryCtas.slice(0, 6).join(', ') || 'None detected'],
+      ['Nav Links', data.navigationItems.slice(0, 8).join(', ') || 'None detected'],
+      [
+        'UI Components',
+        `${data.uiPatterns.buttonsCount} buttons, ${data.uiPatterns.formsCount} forms, ${data.uiPatterns.cardsEstimateCount} cards`,
+      ],
+      ['Tech Stack', data.techStackSummary],
+    ];
+    for (const [k, v] of metaRows) {
+      const c = this.doc.createElement('div');
+      c.className = 'ps-kv-card';
+      c.append(this.createEl('div', 'ps-kv-label', k), this.createEl('div', 'ps-kv-value', v));
+      kvs.appendChild(c);
+    }
+    this.drawerContent.appendChild(kvs);
+
+    const fList = this.doc.createElement('div');
+    fList.className = 'ps-finding-list';
+    for (const feat of data.featureBlocks.slice(0, 10)) {
+      const row = this.doc.createElement('div');
+      row.className = 'ps-finding-row';
+      const title = this.doc.createElement('strong');
+      title.textContent = feat.title;
+      row.appendChild(title);
+      if (feat.detail) {
+        row.appendChild(this.createEl('div', 'ps-kv-label', feat.detail));
+      }
+      fList.appendChild(row);
+    }
+    this.drawerContent.appendChild(fList);
+  }
+
   private renderResponsiveStageDrawer(): void {
     if (!this.drawerContent) return;
     const head = this.doc.createElement('div');
@@ -2364,6 +2843,11 @@ export class OnPageOverlayDashboard {
           ev.stopPropagation();
           void navigator.clipboard.writeText(s.copyableText ?? '').then(() => {
             copyBtn.textContent = 'Copied';
+            this.notify({
+              title: 'Copied to Clipboard',
+              message: `${s.title} output copied cleanly.`,
+              tone: 'success',
+            });
             setTimeout(() => {
               copyBtn.textContent = 'Copy';
             }, 1200);
@@ -2375,12 +2859,46 @@ export class OnPageOverlayDashboard {
         acts.appendChild(
           this.createButton('Download', 'ps-btn', () => {
             this.triggerDownloadFromSummary(s);
+            this.notify({
+              title: 'Download Started',
+              message: `Saved ${s.downloadFilename} locally.`,
+              tone: 'success',
+            });
+          }),
+        );
+      }
+      if (s.tool === 'capture') {
+        acts.appendChild(
+          this.createButton('Capture Full Page', 'ps-btn primary', () => {
+            if (this.busy) return;
+            this.busy = true;
+            this.notify({
+              title: 'Full-Page Capture',
+              message: 'Scrolling and stitching full page screenshot...',
+              tone: 'info',
+              durationMs: 3200,
+            });
+            void this.callbacks
+              .onRunOverlayTool('capture', { captureMode: 'full_page' })
+              .then((next) => {
+                if (next) {
+                  this.showResultSummary(next);
+                }
+              })
+              .finally(() => {
+                this.busy = false;
+              });
           }),
         );
       }
       acts.appendChild(
+        this.createButton('Open PiP', 'ps-btn', () => {
+          void this.callbacks.onOpenFullDashboard({ tool: s.tool, autorun: true, mode: 'pip' });
+        }),
+      );
+      acts.appendChild(
         this.createButton('Open in Dashboard', 'ps-btn primary', () => {
-          void this.callbacks.onOpenFullDashboard({ tool: s.tool, autorun: true });
+          void this.callbacks.onOpenFullDashboard({ tool: s.tool, autorun: true, mode: 'tab' });
         }),
       );
       acts.appendChild(
@@ -2400,6 +2918,10 @@ export class OnPageOverlayDashboard {
         img.alt = 'Captured page screenshot preview';
         img.className = 'ps-capture-preview';
         this.drawerContent.appendChild(img);
+      }
+
+      if (s.featuresPreviewData) {
+        this.renderFeaturesDrawerBody(s.featuresPreviewData);
       }
 
       if (s.assetsPreviewData) {
@@ -2764,6 +3286,19 @@ export class OnPageOverlayDashboard {
     try {
       const summary = await this.callbacks.onRunOverlayTool(toolDef.id);
       if (summary) {
+        if (summary.title === 'Action failed') {
+          this.notify({
+            title: `${toolDef.label} Failed`,
+            message: summary.summary,
+            tone: 'error',
+          });
+        } else {
+          this.notify({
+            title: summary.title,
+            message: summary.summary,
+            tone: 'success',
+          });
+        }
         this.showResultSummary(summary);
       }
     } finally {

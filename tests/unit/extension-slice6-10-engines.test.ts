@@ -16,6 +16,7 @@ import {
   runLocalDesignReview,
 } from '../../src/extension/engines/design-review-engine.js';
 import { PageEditController } from '../../src/extension/engines/edit-engine.js';
+import { extractPageFeaturesLocal } from '../../src/extension/engines/feature-extract-engine.js';
 import {
   createResponsiveInspectionPlan,
   ResponsiveScrollSynchronizer,
@@ -410,5 +411,57 @@ describe('Slice 8, 9, and 10 Engines: Responsive, Design Review, Tech Stack, and
         fetchImpl: () => Promise.resolve(new Response('Unauthorized', { status: 401 })),
       }),
     ).rejects.toThrow(/NVIDIA authentication failed \(HTTP 401\)/);
+  });
+
+  it('extracts structured features locally and prepares sanitized AI egress payload for any OpenAI-compatible provider', () => {
+    const dom = new JSDOM(
+      `<!DOCTYPE html>
+      <html>
+        <head>
+          <title>Acme Analytics Suite</title>
+          <meta name="description" content="Fast product telemetry and funnel analytics." />
+        </head>
+        <body>
+          <header><nav><a href="/features">Features</a><a href="/pricing">Pricing</a></nav></header>
+          <main>
+            <h1>Ship faster with real-time funnels</h1>
+            <button type="button">Start Free Trial</button>
+            <section>
+              <h2>Session Replay</h2>
+              <p>Inspect real user sessions with console telemetry.</p>
+            </section>
+            <article class="feature-card">
+              <h3>Cohort Explorer</h3>
+              <p>Slice retention curves by browser or release.</p>
+            </article>
+            <form><input type="search" placeholder="Search events" /></form>
+          </main>
+        </body>
+      </html>`,
+      { url: 'https://acme.example.com/landing?token=ignoreme' },
+    );
+
+    const extracted = extractPageFeaturesLocal(
+      dom.window.document,
+      dom.window as unknown as Window,
+    );
+    expect(extracted.heroHeadline).toBe('Ship faster with real-time funnels');
+    expect(extracted.primaryCtas).toContain('Start Free Trial');
+    expect(extracted.navigationItems).toContain('Features');
+    expect(extracted.featureBlocks.length).toBeGreaterThanOrEqual(2);
+    expect(extracted.uiPatterns.formsCount).toBe(1);
+    expect(extracted.uiPatterns.searchInputsCount).toBe(1);
+    expect(extracted.sourceUrl).toBe('https://acme.example.com/landing');
+
+    const preview = buildNvidiaEgressPreview({
+      modelId: 'gpt-4o-mini',
+      endpoint: 'https://api.openai.com/v1/chat/completions',
+      allowCustomEndpoint: true,
+      taskType: 'extract_features',
+      sanitizedContext: extracted.sanitizedAiContext,
+    });
+    expect(preview.endpoint).toBe('https://api.openai.com/v1/chat/completions');
+    expect(preview.serializedPayloadPreview).not.toContain('ignoreme');
+    expect(preview.serializedPayloadPreview).toContain('Session Replay');
   });
 });

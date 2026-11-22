@@ -359,16 +359,58 @@ describe('Extension Coordinator, Content Script Runtime, Controlled Fixtures, an
         documentId: runtime.documentId,
       });
 
+      const openedTabs: string[] = [];
+      const openedWindows: Array<{ url: string; width: number; height: number }> = [];
       const coordinator = new BackgroundCoordinator({
         extensionId: TEST_EXT_ID,
         storage,
         settingsStore,
+        sendToTab: (_tabId, msg) => runtime.handleMessage(msg),
+        openDashboardTab: (relativeUrl) => {
+          openedTabs.push(relativeUrl);
+          return Promise.resolve();
+        },
+        openDashboardWindow: (relativeUrl, width, height) => {
+          openedWindows.push({ url: relativeUrl, width, height });
+          return Promise.resolve({ windowId: 77, tabId: 88 });
+        },
       });
       const initResult = await coordinator.initialize();
       expect(initResult.recoveredJobsCount).toBe(1);
 
       const recoveredJob = await storage.getJob('job-in-flight-99');
       expect(recoveredJob?.status).toBe('interrupted');
+
+      const click1 = await coordinator.handleActionClicked({
+        id: 7,
+        url: 'https://fixture.example.com/product',
+      });
+      expect(click1.opened).toBe('overlay');
+      const click2 = await coordinator.handleActionClicked({
+        id: 7,
+        url: 'https://fixture.example.com/product',
+      });
+      expect(click2.opened).toBe('dashboard_double_click');
+      expect(openedTabs.some((u) => u.startsWith('workspace.html?tabId=7'))).toBe(true);
+
+      const pipRes = await coordinator.handleRuntimeMessage(
+        {
+          schemaVersion: 1,
+          requestId: 'req-pip-dash-1',
+          operation: 'OPEN_FULL_DASHBOARD',
+          documentId: runtime.documentId,
+          payload: { mode: 'pip', tool: 'clone_prompt', aiTask: 'extract_features' },
+        },
+        {
+          id: TEST_EXT_ID,
+          url: 'https://fixture.example.com/product',
+          tab: { id: 7, url: 'https://fixture.example.com/product' },
+        },
+      );
+      expect(pipRes.ok).toBe(true);
+      expect(openedWindows.length).toBe(1);
+      expect(openedWindows[0]?.url).toContain('pip=1');
+      expect(openedWindows[0]?.url).toContain('aiTask=extract_features');
     } finally {
       runtime.dispose();
       await storage.close();

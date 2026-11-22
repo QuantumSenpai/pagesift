@@ -25,6 +25,7 @@ import {
 import { runLocalDesignReview } from '../engines/design-review-engine.js';
 import { buildShortSelector, isPageSiftElement, PAGESIFT_ROOT_ATTR } from '../engines/dom-utils.js';
 import { PageEditController } from '../engines/edit-engine.js';
+import { extractPageFeaturesLocal } from '../engines/feature-extract-engine.js';
 import { extractPageFonts } from '../engines/fonts-engine.js';
 import { inspectElement } from '../engines/inspect-engine.js';
 import { measureElements } from '../engines/measure-engine.js';
@@ -647,6 +648,7 @@ export class ContentScriptRuntime {
           );
         },
         onRunOverlayTool: (tool, options) => this.executeOverlayTool(tool, options),
+        onRunFeatureExtract: () => this.executeOverlayFeatureExtraction(),
         onEditHistoryCommand: (command) => {
           if (command === 'EDIT_UNDO') this.editController.undo();
           else if (command === 'EDIT_REDO') this.editController.redo();
@@ -738,6 +740,8 @@ export class ContentScriptRuntime {
                 ...(opts?.tool ? { tool: opts.tool } : {}),
                 ...(opts?.autorun ? { autorun: true } : {}),
                 ...(opts?.section ? { section: opts.section } : {}),
+                ...(opts?.mode ? { mode: opts.mode } : {}),
+                ...(opts?.aiTask ? { aiTask: opts.aiTask } : {}),
               },
             })
             .catch(() => undefined);
@@ -954,6 +958,46 @@ export class ContentScriptRuntime {
       Promise.resolve(
         cache.get(url) ?? { ok: false, reason: 'Asset URL was not included in prefetch batch' },
       );
+  }
+
+  private async executeOverlayFeatureExtraction(): Promise<OverlayToolSummary | null> {
+    const startMono = performance.now();
+    const activityId = `ov-features-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    try {
+      const features = extractPageFeaturesLocal(this.doc, this.win);
+      const summaryText = `${features.featureBlocks.length} feature blocks, ${features.primaryCtas.length} CTAs, ${features.navigationItems.length} nav links`;
+      await this.recordOverlayActivity({
+        activityId,
+        tool: 'clone_prompt',
+        actionLabel: 'Extract Page Features',
+        status: 'completed',
+        durationMs: performance.now() - startMono,
+        resultSummary: summaryText,
+      });
+      this.overlayDashboard?.notify({
+        title: 'Features Extracted',
+        message: `${summaryText}. Click "Run AI Feature Spec" for LLM synthesis.`,
+        tone: 'success',
+      });
+      return {
+        tool: 'clone_prompt',
+        title: 'Extracted Page Features',
+        summary: summaryText,
+        featuresPreviewData: features,
+        copyableText: JSON.stringify(features, null, 2),
+        downloadFilename: 'pagesift-features.json',
+        downloadMime: 'application/json;charset=utf-8',
+        downloadText: JSON.stringify(features, null, 2),
+      };
+    } catch (err: unknown) {
+      const msgText = err instanceof Error ? err.message : 'Feature extraction failed';
+      this.overlayDashboard?.notify({
+        title: 'Feature Extraction Failed',
+        message: msgText,
+        tone: 'error',
+      });
+      return { tool: 'clone_prompt', title: 'Action failed', summary: msgText };
+    }
   }
 
   private async executeOverlayTool(
@@ -1194,24 +1238,41 @@ export class ContentScriptRuntime {
         if (!this.adapters.sendBackgroundMessage) {
           throw new Error('Background capture channel unavailable');
         }
+        const captureMode = options?.captureMode === 'full_page' ? 'full_page' : 'visible';
         const capRes = await this.adapters.sendBackgroundMessage({
           schemaVersion: 1,
           requestId: activityId,
           operation: 'CAPTURE_OWN_TAB',
           documentId: this.documentId,
-          payload: { format: 'image/png' },
+          payload: { format: 'image/png', mode: captureMode },
         });
         if (!capRes.ok) {
           throw new Error(capRes.error.message);
         }
-        const capData = capRes.data as { dataUrl: string; mimeType: string };
+        const capData = capRes.data as {
+          dataUrl: string;
+          mimeType: string;
+          verified?: { width?: number; height?: number };
+          tilesCaptured?: number;
+        };
         const base64Part = capData.dataUrl.split(',')[1] ?? '';
+        const dimsText =
+          capData.verified?.width && capData.verified.height
+            ? `${capData.verified.width}x${capData.verified.height}px`
+            : 'PNG';
+        const tilesText =
+          captureMode === 'full_page' && typeof capData.tilesCaptured === 'number'
+            ? ` (${capData.tilesCaptured} tile${capData.tilesCaptured === 1 ? '' : 's'} stitched)`
+            : '';
         return {
           tool,
-          title: 'Page Capture Ready',
-          summary: 'Captured visible viewport as PNG locally.',
+          title: captureMode === 'full_page' ? 'Full-Page Capture Ready' : 'Page Capture Ready',
+          summary: `Captured ${captureMode === 'full_page' ? 'full page' : 'visible viewport'} ${dimsText}${tilesText}.`,
+          captureMode,
+          captureResolution: dimsText,
           imageDataUrl: capData.dataUrl,
-          downloadFilename: 'pagesift-capture.png',
+          downloadFilename:
+            captureMode === 'full_page' ? 'pagesift-full-page.png' : 'pagesift-capture.png',
           downloadMime: capData.mimeType || 'image/png',
           downloadBase64: base64Part,
         };
@@ -1658,7 +1719,12 @@ export class ContentScriptRuntime {
             (msg.payload['targetFramework'] as PromptTargetFramework | undefined) ??
             'react_tailwind';
           const report = generateLocalClonePrompt(this.doc, this.win, framework);
-          return createSuccessResponse(msg, { report }, this.documentId);
+          const features = extractPageFeaturesLocal(this.doc, this.win);
+          return createSuccessResponse(
+            msg,
+            { report: { ...report, ...features.sanitizedAiContext, features } },
+            this.documentId,
+          );
         }
 
         case 'RUN_CLONE_PAGE': {
