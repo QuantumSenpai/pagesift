@@ -213,101 +213,539 @@ export function createSvgIcon(
   return svg;
 }
 
-const TECH_GLYPH_PATHS: Record<string, { paths: string[]; color: string }> = {
-  nextjs: { paths: ['M6 18V6l12 12', 'M18 6v7'], color: 'currentColor' },
-  react: {
-    paths: [
-      'M12 12m-1.8 0a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0 -3.6 0',
-      'M3.5 12c0-2.5 3.8-4.5 8.5-4.5s8.5 2 8.5 4.5-3.8 4.5-8.5 4.5-8.5-2-8.5-4.5z',
-      'M7.8 4.6c2.2-1.2 5.6 1.1 7.9 5.2s2.4 8.3.2 9.6-5.6-1.1-7.9-5.2-2.4-8.3-.2-9.6z',
+interface TechSvgNode {
+  tag: 'path' | 'circle' | 'rect' | 'polygon' | 'ellipse' | 'line';
+  attrs: Record<string, string>;
+}
+
+interface TechBrandLogoDef {
+  viewBox?: string;
+  nodes: TechSvgNode[];
+}
+
+const TECH_GLYPH_PATHS: Record<string, TechBrandLogoDef> = {
+  nextjs: {
+    nodes: [
+      {
+        tag: 'circle',
+        attrs: {
+          cx: '12',
+          cy: '12',
+          r: '10',
+          fill: '#111827',
+          stroke: '#4B5563',
+          'stroke-width': '1',
+        },
+      },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M8.5 16.5V7.5L17 18.8',
+          stroke: '#F9FAFB',
+          'stroke-width': '1.8',
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+        },
+      },
+      {
+        tag: 'line',
+        attrs: {
+          x1: '15.5',
+          y1: '7.5',
+          x2: '15.5',
+          y2: '13.2',
+          stroke: '#F9FAFB',
+          'stroke-width': '1.8',
+          'stroke-linecap': 'round',
+        },
+      },
     ],
-    color: '#38BDF8',
   },
-  vue: { paths: ['M3 5l9 15L21 5', 'M7.5 5L12 12.5 16.5 5'], color: '#10B981' },
-  nuxt: { paths: ['M3 18l6-11 6 11H3z', 'M11 18l5-8 5 8H11z'], color: '#10B981' },
+  react: {
+    nodes: [
+      { tag: 'circle', attrs: { cx: '12', cy: '12', r: '2.1', fill: '#61DAFB' } },
+      {
+        tag: 'ellipse',
+        attrs: {
+          cx: '12',
+          cy: '12',
+          rx: '10',
+          ry: '4',
+          fill: 'none',
+          stroke: '#61DAFB',
+          'stroke-width': '1.45',
+        },
+      },
+      {
+        tag: 'ellipse',
+        attrs: {
+          cx: '12',
+          cy: '12',
+          rx: '10',
+          ry: '4',
+          fill: 'none',
+          stroke: '#61DAFB',
+          'stroke-width': '1.45',
+          transform: 'rotate(60 12 12)',
+        },
+      },
+      {
+        tag: 'ellipse',
+        attrs: {
+          cx: '12',
+          cy: '12',
+          rx: '10',
+          ry: '4',
+          fill: 'none',
+          stroke: '#61DAFB',
+          'stroke-width': '1.45',
+          transform: 'rotate(120 12 12)',
+        },
+      },
+    ],
+  },
+  vue: {
+    nodes: [
+      { tag: 'polygon', attrs: { points: '2,4 12,21 22,4 18,4 12,14.2 6,4', fill: '#41B883' } },
+      {
+        tag: 'polygon',
+        attrs: { points: '6,4 12,14.2 18,4 14.5,4 12,8.4 9.5,4', fill: '#35495E' },
+      },
+    ],
+  },
+  nuxt: {
+    nodes: [
+      {
+        tag: 'path',
+        attrs: { d: 'M2.5 18.5L9.2 6.8a1.2 1.2 0 0 1 2.1 0L18 18.5H2.5z', fill: '#00DC82' },
+      },
+      {
+        tag: 'path',
+        attrs: { d: 'M10.5 18.5L15.4 10a1.1 1.1 0 0 1 1.9 0l4.7 8.5h-11.5z', fill: '#009E5E' },
+      },
+    ],
+  },
   angular: {
-    paths: ['M12 3l8 3.5-1.4 10L12 21l-6.6-4.5L4 6.5 12 3z', 'M9 15l3-7 3 7'],
-    color: '#EF4444',
+    nodes: [
+      {
+        tag: 'polygon',
+        attrs: { points: '12,2 21,5.2 19.6,17 12,21.5 4.4,17 3,5.2', fill: '#DD0031' },
+      },
+      { tag: 'polygon', attrs: { points: '12,2 21,5.2 19.6,17 12,21.5', fill: '#C3002F' } },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M12 6.2L7.2 16.5h1.9l1-2.3h3.8l1 2.3h1.9L12 6.2zm1.2 6.3h-2.4L12 9.4l1.2 3.1z',
+          fill: '#FFFFFF',
+        },
+      },
+    ],
   },
   svelte: {
-    paths: [
-      'M15 5c2.2 1 3 3.4 1.8 5.2L9.5 16.5c-1.8 1.2-4 .2-4-2',
-      'M9 19c-2.2-1-3-3.4-1.8-5.2l7.3-6.3',
+    nodes: [
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M18.6 4.8C16.8 2.3 13.3 1.7 10.7 3.3L6.2 6.1A5.2 5.2 0 0 0 4 12.1a5.4 5.4 0 0 0 .3 4.6c1.8 2.5 5.3 3.1 7.9 1.5l4.5-2.8a5.2 5.2 0 0 0 2.2-6 5.4 5.4 0 0 0-.3-4.6z',
+          fill: '#FF3E00',
+        },
+      },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M10.5 15.8c-1.4.8-3.1.2-3.7-1.1a2.7 2.7 0 0 1 .9-3.3l4.2-2.6c1.4-.8 3.1-.2 3.7 1.1',
+          fill: 'none',
+          stroke: '#FFFFFF',
+          'stroke-width': '1.8',
+          'stroke-linecap': 'round',
+        },
+      },
     ],
-    color: '#F97316',
   },
   astro: {
-    paths: ['M7 18l5-13 5 13', 'M9.5 13h5', 'M12 18c-1.5 1.8-1 3 0 3s1.5-1.2 0-3z'],
-    color: '#A855F7',
+    nodes: [
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M8.5 3.5h7l3.5 11.2c-2-.9-4.1-1.3-7-1.3s-5 .4-7 1.3L8.5 3.5zm3.5 4l-1.5 4.4h3L12 7.5z',
+          fill: '#FFFFFF',
+        },
+      },
+      {
+        tag: 'path',
+        attrs: { d: 'M12 14.5c2 2.2 1.8 5.2 0 6.8-1.8-1.6-2-4.6 0-6.8z', fill: '#FF5D01' },
+      },
+    ],
   },
   tailwind: {
-    paths: [
-      'M6 10c1.3-2.7 3.3-4 6-4 4 0 4.5 3 6.5 3.5 1.3.3 2.5-.2 3.5-1.5-1.3 2.7-3.3 4-6 4-4 0-4.5-3-6.5-3.5C8.2 8.2 7 8.7 6 10z',
-      'M3 16c1.3-2.7 3.3-4 6-4 4 0 4.5 3 6.5 3.5 1.3.3 2.5-.2 3.5-1.5-1.3 2.7-3.3 4-6 4-4 0-4.5-3-6.5-3.5C5.2 14.2 4 14.7 3 16z',
+    nodes: [
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M12 6C8.8 6 6.8 7.6 6 10.8c1.2-1.6 2.6-2.2 4.2-1.8.9.2 1.6.9 2.3 1.6 1.2 1.2 2.5 2.6 5.5 2.6 3.2 0 5.2-1.6 6-4.8-1.2 1.6-2.6 2.2-4.2 1.8-.9-.2-1.6-.9-2.3-1.6C16.3 7.4 15 6 12 6zM6 13.2C2.8 13.2.8 14.8 0 18c1.2-1.6 2.6-2.2 4.2-1.8.9.2 1.6.9 2.3 1.6 1.2 1.2 2.5 2.6 5.5 2.6 3.2 0 5.2-1.6 6-4.8-1.2 1.6-2.6 2.2-4.2 1.8-.9-.2-1.6-.9-2.3-1.6-1.2-1.2-2.5-2.6-5.5-2.6z',
+          fill: '#38BDF8',
+        },
+      },
     ],
-    color: '#0EA5E9',
   },
-  vite: { paths: ['M4 5l8 15L20 5l-8 3-8-3z', 'M11 9l2 4 3-3'], color: '#EAB308' },
+  vite: {
+    nodes: [
+      { tag: 'polygon', attrs: { points: '21.5,4.2 12.2,21 2.5,4.2 12,6.2', fill: '#41D1FF' } },
+      {
+        tag: 'polygon',
+        attrs: {
+          points: '16.5,2.5 10.2,3.8 9.2,12.2 12.5,11.3 11.4,17.2 17.5,7.2 13.6,8.1',
+          fill: '#FFD028',
+        },
+      },
+    ],
+  },
   webpack: {
-    paths: ['M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z', 'M12 3v18', 'M4 7.5l8 4.5 8-4.5'],
-    color: '#60A5FA',
+    nodes: [
+      {
+        tag: 'polygon',
+        attrs: { points: '12,2.2 20.5,7.1 20.5,16.9 12,21.8 3.5,16.9 3.5,7.1', fill: '#8DD6F9' },
+      },
+      {
+        tag: 'polygon',
+        attrs: { points: '12,6.5 16.8,9.2 16.8,14.8 12,17.5 7.2,14.8 7.2,9.2', fill: '#1C78C0' },
+      },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M12 2.2V6.5M12 17.5V21.8M3.5 7.1L7.2 9.2M16.8 14.8l3.7 2.1M20.5 7.1L16.8 9.2M7.2 14.8l-3.7 2.1',
+          stroke: '#FFFFFF',
+          'stroke-width': '1.1',
+        },
+      },
+    ],
   },
   bootstrap: {
-    paths: ['M6 5h7a3 3 0 0 1 0 6H6V5z', 'M6 11h8a3 3 0 0 1 0 6H6v-6z'],
-    color: '#8B5CF6',
+    nodes: [
+      {
+        tag: 'rect',
+        attrs: { x: '2.5', y: '3.5', width: '19', height: '17', rx: '4', fill: '#7952B3' },
+      },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M9 7h4.2c1.8 0 3 .9 3 2.4 0 1-.6 1.8-1.6 2.1 1.2.3 2 1.2 2 2.4 0 1.7-1.3 2.7-3.4 2.7H9V7zm2 4h2c.9 0 1.4-.4 1.4-1.2s-.5-1.2-1.4-1.2h-2V11zm0 4h2.2c1 0 1.6-.4 1.6-1.3 0-.8-.6-1.3-1.6-1.3H11V15z',
+          fill: '#FFFFFF',
+        },
+      },
+    ],
   },
   cloudflare: {
-    paths: ['M6.5 17H18a3.5 3.5 0 0 0 .5-7A5 5 0 0 0 8.5 8.5 4 4 0 0 0 6.5 17z'],
-    color: '#F97316',
+    nodes: [
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M16.9 16.5H6.4a3.2 3.2 0 0 1-.4-6.3 4.8 4.8 0 0 1 9.1-1.3 3.4 3.4 0 0 1 1.8 7.6z',
+          fill: '#F38020',
+        },
+      },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M18.2 16.5h2.2a2.1 2.1 0 0 0 0-4.2h-.6a3 3 0 0 0-3-2.5c-.6 0-1.1.2-1.5.5',
+          fill: '#FAAE40',
+        },
+      },
+    ],
   },
-  vercel: { paths: ['M12 4l9 16H3L12 4z'], color: 'currentColor' },
-  netlify: { paths: ['M12 3l9 9-9 9-9-9 9-9z', 'M8 12h8'], color: '#14B8A6' },
+  vercel: {
+    nodes: [{ tag: 'polygon', attrs: { points: '12,3.5 21.5,19.5 2.5,19.5', fill: '#F9FAFB' } }],
+  },
+  netlify: {
+    nodes: [
+      { tag: 'polygon', attrs: { points: '12,2.2 21.8,12 12,21.8 2.2,12', fill: '#00C7B7' } },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M7.5 12h9M12 7.5v9M8.8 8.8l6.4 6.4',
+          stroke: '#0F172A',
+          'stroke-width': '1.6',
+          'stroke-linecap': 'round',
+        },
+      },
+    ],
+  },
   stripe: {
-    paths: [
-      'M16.5 8.5c-1.2-.8-2.8-1.2-4.3-1.2-2.2 0-3.7 1-3.7 2.6 0 3 7.5 1.7 7.5 5 0 1.8-1.7 3-4.3 3-1.8 0-3.6-.5-4.7-1.3',
+    nodes: [
+      {
+        tag: 'rect',
+        attrs: { x: '3', y: '3', width: '18', height: '18', rx: '4', fill: '#635BFF' },
+      },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M15.4 9.1c-1-.5-2-.7-3-.7-1.8 0-3.1.8-3.1 2.3 0 2.5 5.4 1.6 5.4 3.8 0 .9-.8 1.4-2 1.4-1.3 0-2.6-.5-3.6-1.1v2.2c1 .5 2.3.8 3.6.8 2.3 0 3.9-1 3.9-2.8 0-2.7-5.4-1.8-5.4-3.8 0-.7.7-1.1 1.7-1.1 1.1 0 2.2.3 3.1.8V9.1h-.6z',
+          fill: '#FFFFFF',
+        },
+      },
     ],
-    color: '#6366F1',
   },
-  shopify: { paths: ['M6 8l1-4h10l1 4v12H6V8z', 'M9 8V6a3 3 0 0 1 6 0v2'], color: '#22C55E' },
+  shopify: {
+    nodes: [
+      { tag: 'polygon', attrs: { points: '6.5,7.2 17.5,7.2 19,20.5 5,20.5', fill: '#95BF47' } },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M9.2 7.2V5.8a2.8 2.8 0 0 1 5.6 0v1.4',
+          fill: 'none',
+          stroke: '#95BF47',
+          'stroke-width': '1.8',
+        },
+      },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M13.8 11.4c-.5-.2-1-.3-1.6-.3-1 0-1.6.5-1.6 1.2 0 1.4 3 1 3 2.5 0 .9-.8 1.5-2 1.5-.8 0-1.5-.2-2-.5',
+          fill: 'none',
+          stroke: '#FFFFFF',
+          'stroke-width': '1.6',
+          'stroke-linecap': 'round',
+        },
+      },
+    ],
+  },
   wordpress: {
-    paths: ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z', 'M7 9l3.2 9 2.3-6.5L15 18l2.5-8'],
-    color: '#38BDF8',
-  },
-  google: {
-    paths: ['M4 19h4v-7H4v7z', 'M10 19h4V9h-4v10z', 'M16 19h4V5h-4v14z'],
-    color: '#F59E0B',
-  },
-  sentry: { paths: ['M12 4a8 8 0 0 1 8 8v5h-3v-5a5 5 0 0 0-5-5V4z', 'M6 17h6'], color: '#EC4899' },
-  typescript: {
-    paths: [
-      'M4 4h16v16H4V4z',
-      'M7 10h6',
-      'M10 10v7',
-      'M15 17c1.8 0 2.5-.8 2.5-2s-2.5-1.5-2.5-3 1-2 2.5-2',
+    nodes: [
+      { tag: 'circle', attrs: { cx: '12', cy: '12', r: '9.5', fill: '#21759B' } },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M6.2 8.2l3.4 9.2 2.4-6.4 2.4 6.4 3.4-9.2',
+          fill: 'none',
+          stroke: '#FFFFFF',
+          'stroke-width': '1.7',
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+        },
+      },
     ],
-    color: '#3B82F6',
   },
-  framer: { paths: ['M6 4h12v6h-6l6 6H6v-6h6L6 4z', 'M6 16h6v5l-6-5z'], color: '#0EA5E9' },
-  rolldown: { paths: ['M4 7h12', 'M4 12h16l-4 5', 'M4 17h8'], color: '#F97316' },
+  googleTagManager: {
+    nodes: [
+      { tag: 'polygon', attrs: { points: '12,2.5 15.2,5.7 5.7,15.2 2.5,12', fill: '#8AB4F8' } },
+      { tag: 'polygon', attrs: { points: '12,2.5 21.5,12 18.3,15.2 8.8,5.7', fill: '#4285F4' } },
+      { tag: 'polygon', attrs: { points: '18.3,8.8 21.5,12 12,21.5 8.8,18.3', fill: '#246FDB' } },
+      { tag: 'circle', attrs: { cx: '12', cy: '18.3', r: '2.1', fill: '#8AB4F8' } },
+    ],
+  },
+  googleAnalytics: {
+    nodes: [
+      {
+        tag: 'rect',
+        attrs: { x: '15.5', y: '3.5', width: '4.5', height: '17', rx: '2.2', fill: '#E37400' },
+      },
+      {
+        tag: 'rect',
+        attrs: { x: '9.8', y: '9.5', width: '4.4', height: '11', rx: '2.2', fill: '#F9AB00' },
+      },
+      { tag: 'circle', attrs: { cx: '6.2', cy: '18.2', r: '2.3', fill: '#F9AB00' } },
+    ],
+  },
+  googleFonts: {
+    nodes: [
+      { tag: 'path', attrs: { d: 'M12.5 5h6v3h-6z', fill: '#EA4335' } },
+      {
+        tag: 'path',
+        attrs: { d: 'M10.2 5L4.5 19h3.4l2.1-5.4h5.5v-3H11.2l1.6-4.2L10.2 5z', fill: '#4285F4' },
+      },
+      { tag: 'circle', attrs: { cx: '17.2', cy: '16.8', r: '2.5', fill: '#34A853' } },
+    ],
+  },
+  sentry: {
+    nodes: [
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M13.5 4.2a1.7 1.7 0 0 0-3 0L3.3 16.8a1.7 1.7 0 0 0 1.5 2.5h3.5v-2.1H6.2l5.8-10.1 2.2 3.8a5.8 5.8 0 0 1 .9 6.3h2.4a8 8 0 0 0-1.3-7.6L13.5 4.2z',
+          fill: '#FB4226',
+        },
+      },
+    ],
+  },
+  typescript: {
+    nodes: [
+      {
+        tag: 'rect',
+        attrs: { x: '2.5', y: '2.5', width: '19', height: '19', rx: '3.2', fill: '#3178C6' },
+      },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M6 11h6M9 11v7.5M14.2 17.5c.8.5 1.8.8 2.8.8 1.5 0 2.5-.8 2.5-2 0-1.3-.9-1.8-2.3-2.3-1-.4-1.5-.7-1.5-1.3s.5-1 1.4-1c.7 0 1.4.2 2 .5',
+          fill: 'none',
+          stroke: '#FFFFFF',
+          'stroke-width': '1.8',
+          'stroke-linecap': 'round',
+        },
+      },
+    ],
+  },
+  framer: {
+    nodes: [
+      { tag: 'polygon', attrs: { points: '5,3 19,3 19,9.5 12,9.5', fill: '#00AAFF' } },
+      { tag: 'polygon', attrs: { points: '5,9.5 12,9.5 19,16 5,16', fill: '#0055FF' } },
+      { tag: 'polygon', attrs: { points: '5,16 12,16 12,21.5', fill: '#0033CC' } },
+    ],
+  },
+  framerMotion: {
+    nodes: [
+      { tag: 'polygon', attrs: { points: '3.5,4.5 9.5,11 3.5,18.5', fill: '#FFF312' } },
+      { tag: 'polygon', attrs: { points: '12,12 18,4.5 18,18.5', fill: '#FF0088' } },
+      { tag: 'polygon', attrs: { points: '9.5,11 12,14 14.5,11 12,8', fill: '#0099FF' } },
+    ],
+  },
+  rolldown: {
+    nodes: [
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M5 6h14l-3 3.5H8.5A1.5 1.5 0 0 0 8.5 12.5H16l-3 3.5H7.5a3 3 0 0 1 0-6H5V6z',
+          fill: '#FF5500',
+        },
+      },
+      { tag: 'polygon', attrs: { points: '12,16 19,16 14.5,20.5', fill: '#FB923C' } },
+    ],
+  },
   opengraph: {
-    paths: ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z', 'M2 12h20', 'M12 2a15 15 0 0 1 0 20'],
-    color: '#38BDF8',
+    nodes: [
+      {
+        tag: 'circle',
+        attrs: {
+          cx: '12',
+          cy: '12',
+          r: '9.2',
+          fill: '#1E3A8A',
+          stroke: '#38BDF8',
+          'stroke-width': '1.6',
+        },
+      },
+      {
+        tag: 'ellipse',
+        attrs: {
+          cx: '12',
+          cy: '12',
+          rx: '4.2',
+          ry: '9.2',
+          fill: 'none',
+          stroke: '#7DD3FC',
+          'stroke-width': '1.4',
+        },
+      },
+      {
+        tag: 'line',
+        attrs: {
+          x1: '3.2',
+          y1: '12',
+          x2: '20.8',
+          y2: '12',
+          stroke: '#7DD3FC',
+          'stroke-width': '1.4',
+        },
+      },
+    ],
   },
-  priorityhints: { paths: ['M13 2L4 14h7l-1 8 9-12h-7l1-8z'], color: '#F59E0B' },
+  priorityhints: {
+    nodes: [
+      {
+        tag: 'polygon',
+        attrs: { points: '13.5,2 4.5,13.5 11.2,13.5 10,22 19.5,10 12.8,10', fill: '#F59E0B' },
+      },
+    ],
+  },
   http3: {
-    paths: ['M4 8l8-4 8 4v8l-8 4-8-4V8z', 'M9 12h6', 'M12 9v6'],
-    color: '#10B981',
+    nodes: [
+      {
+        tag: 'polygon',
+        attrs: { points: '12,2.5 20.5,7.2 20.5,16.8 12,21.5 3.5,16.8 3.5,7.2', fill: '#059669' },
+      },
+      { tag: 'path', attrs: { d: 'M8 9.2h8v2.1H13.1v4.5H11v-4.5H8V9.2z', fill: '#ECFDF5' } },
+    ],
   },
-  schema: { paths: ['M7 8l-4 4 4 4', 'M17 8l4 4-4 4', 'M14 5l-4 14'], color: '#A855F7' },
+  schema: {
+    nodes: [
+      {
+        tag: 'rect',
+        attrs: { x: '2.5', y: '3.5', width: '19', height: '17', rx: '3.5', fill: '#6D28D9' },
+      },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M8.5 8.5L5.2 12l3.3 3.5M15.5 8.5l3.3 3.5-3.3 3.5M13.2 7.5l-2.4 9',
+          fill: 'none',
+          stroke: '#F3E8FF',
+          'stroke-width': '1.8',
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+        },
+      },
+    ],
+  },
   pwa: {
-    paths: ['M3 16l4-10 4 10', 'M5 13h4', 'M13 6l2.5 10L18 6l2.5 10L22 6'],
-    color: '#6366F1',
+    nodes: [
+      {
+        tag: 'rect',
+        attrs: { x: '2', y: '5', width: '20', height: '14', rx: '3', fill: '#4F46E5' },
+      },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M5.5 15V9h2.2a1.8 1.8 0 0 1 0 3.6H5.5M11.5 9l1.2 6 1.3-4.5L15.3 15l1.2-6',
+          fill: 'none',
+          stroke: '#FFFFFF',
+          'stroke-width': '1.6',
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+        },
+      },
+    ],
   },
   lucide: {
-    paths: ['M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3z'],
-    color: '#F43F5E',
+    nodes: [
+      { tag: 'circle', attrs: { cx: '12', cy: '12', r: '9.2', fill: '#F43F5E' } },
+      {
+        tag: 'polygon',
+        attrs: {
+          points: '12,5.5 13.8,10.2 18.5,12 13.8,13.8 12,18.5 10.2,13.8 5.5,12 10.2,10.2',
+          fill: '#FFFFFF',
+        },
+      },
+    ],
   },
-  gsap: { paths: ['M12 4a8 8 0 1 0 8 8h-8'], color: '#22C55E' },
+  gsap: {
+    nodes: [
+      { tag: 'circle', attrs: { cx: '12', cy: '12', r: '9.2', fill: '#15803D' } },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M15.8 9.2A5 5 0 1 0 16.5 14h-4.5v-1.8h6.4v2.6',
+          fill: 'none',
+          stroke: '#88CE02',
+          'stroke-width': '2',
+          'stroke-linecap': 'round',
+        },
+      },
+    ],
+  },
+  webflow: {
+    nodes: [
+      {
+        tag: 'rect',
+        attrs: { x: '2.5', y: '3.5', width: '19', height: '17', rx: '3.5', fill: '#146EF5' },
+      },
+      {
+        tag: 'path',
+        attrs: {
+          d: 'M17.5 8.5l-2.6 7-1.9-4.5-2.6 4.5H7.2l2.1-7h2.4l-1.1 3.9 2.3-3.9h2.2l1.2 4 1.3-4h1.9z',
+          fill: '#FFFFFF',
+        },
+      },
+    ],
+  },
 };
 
 const CATEGORY_ICON_MAP: Record<string, string> = {
@@ -340,7 +778,12 @@ function resolveTechGlyphKey(technology: string): string | null {
   if (norm.includes('stripe')) return 'stripe';
   if (norm.includes('shopify')) return 'shopify';
   if (norm.includes('wordpress')) return 'wordpress';
+  if (norm.includes('webflow')) return 'webflow';
+  if (norm.includes('framermotion')) return 'framerMotion';
   if (norm.includes('framer')) return 'framer';
+  if (norm.includes('googletagmanager') || norm.includes('tagmanager')) return 'googleTagManager';
+  if (norm.includes('googleanalytics') || norm.includes('ga4')) return 'googleAnalytics';
+  if (norm.includes('googlefonts')) return 'googleFonts';
   if (norm.includes('opengraph')) return 'opengraph';
   if (norm.includes('priorityhints')) return 'priorityhints';
   if (norm.includes('http3') || norm.includes('http2')) return 'http3';
@@ -349,7 +792,7 @@ function resolveTechGlyphKey(technology: string): string | null {
   if (norm.includes('pwa') || norm.includes('manifest')) return 'pwa';
   if (norm.includes('lucide')) return 'lucide';
   if (norm.includes('gsap')) return 'gsap';
-  if (norm.includes('google')) return 'google';
+  if (norm.includes('google')) return 'googleAnalytics';
   if (norm.includes('sentry') || norm.includes('posthog') || norm.includes('plausible'))
     return 'sentry';
   if (norm.includes('typescript')) return 'typescript';
@@ -378,18 +821,16 @@ export function createTechIconElement(
   if (glyphKey && TECH_GLYPH_PATHS[glyphKey]) {
     const def = TECH_GLYPH_PATHS[glyphKey];
     const svg = ownerDocument.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('viewBox', def.viewBox ?? '0 0 24 24');
     svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', def.color);
-    svg.setAttribute('stroke-width', '1.9');
-    svg.setAttribute('stroke-linecap', 'round');
-    svg.setAttribute('stroke-linejoin', 'round');
-    svg.style.width = '14px';
-    svg.style.height = '14px';
-    for (const d of def.paths) {
-      const p = ownerDocument.createElementNS(SVG_NS, 'path');
-      p.setAttribute('d', d);
-      svg.appendChild(p);
+    svg.style.width = '16px';
+    svg.style.height = '16px';
+    for (const nodeSpec of def.nodes) {
+      const node = ownerDocument.createElementNS(SVG_NS, nodeSpec.tag);
+      for (const [attr, val] of Object.entries(nodeSpec.attrs)) {
+        node.setAttribute(attr, val);
+      }
+      svg.appendChild(node);
     }
     box.appendChild(svg);
     return box;

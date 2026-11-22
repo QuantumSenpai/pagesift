@@ -1,3 +1,4 @@
+import type { AssetAvailabilityStatus, AssetKind } from '../engines/assets-engine.js';
 import type {
   TechStackDetectionEntry,
   TechStackOrganizedSummary,
@@ -17,12 +18,92 @@ export type OverlayDrawerTab = 'none' | 'tools' | 'result' | 'editor' | 'customi
 export type OverlayPosition = ExtensionSettings['overlayPosition'];
 export type OverlayThemeMode = ExtensionSettings['overlayThemeMode'];
 
+export interface OverlayAssetPreviewItem {
+  id: string;
+  kind: AssetKind;
+  url: string;
+  safeFilename: string;
+  mimeTypeHint: string;
+  width: number | null;
+  height: number | null;
+  altText: string | null;
+  availabilityStatus: AssetAvailabilityStatus;
+  statusNote: string;
+  safeSvgPreview: string | null;
+  packagedByteLength: number | null;
+  archivePath: string | null;
+  skipReason: string | null;
+}
+
+export interface OverlayAssetsSummaryData {
+  totalDiscovered: number;
+  packagedCount: number;
+  skippedCount: number;
+  inaccessibleStylesheets: number;
+  items: OverlayAssetPreviewItem[];
+}
+
+export interface OverlayColorsSummaryData {
+  colors: Array<{ hex: string; rgbString: string; usageCount: number }>;
+  customProperties: Array<{ name: string; rawValue: string; normalizedHex: string | null }>;
+}
+
+export interface OverlayFontsSummaryData {
+  families: Array<{
+    primaryFamily: string;
+    totalUsageCount: number;
+    verifiedLoadedInFontFaceSet: boolean | 'unsupported';
+    sampleSizes: string[];
+    sampleWeights: string[];
+  }>;
+  fontFaceCount: number;
+}
+
+export interface OverlayDesignReviewSummaryData {
+  metrics: {
+    h1Count: number;
+    headingScaleRatio: number;
+    contrastFailuresCount: number;
+    heavyEffectElementsCount: number;
+    distinctSpacingValuesCount: number;
+  };
+  findings: Array<{
+    severity: 'high' | 'medium' | 'low';
+    title: string;
+    evidence: string;
+    suggestion: string;
+  }>;
+}
+
+export interface OverlayInspectSummaryData {
+  selector: string;
+  tagName: string;
+  width: number;
+  height: number;
+  display: string;
+  position: string;
+  fontFamily: string;
+  fontSize: string;
+  fontWeight: string;
+  textColor: string;
+  backgroundColor: string;
+  marginSummary: string;
+  paddingSummary: string;
+  borderRadius: string;
+  accessibleName: string | null;
+}
+
 export interface OverlayToolSummary {
   tool: ToolId;
   title: string;
   summary: string;
   techStackSummary?: TechStackOrganizedSummary;
   techStackDetections?: TechStackDetectionEntry[];
+  assetsPreviewData?: OverlayAssetsSummaryData;
+  colorsPreviewData?: OverlayColorsSummaryData;
+  fontsPreviewData?: OverlayFontsSummaryData;
+  reviewPreviewData?: OverlayDesignReviewSummaryData;
+  inspectPreviewData?: OverlayInspectSummaryData;
   imageDataUrl?: string;
   copyableText?: string;
   downloadFilename?: string;
@@ -1170,6 +1251,149 @@ export class OnPageOverlayDashboard {
         border: 1px solid var(--border-strong);
         box-shadow: var(--shadow-md);
       }
+      .ps-filter-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .ps-filter-btn {
+        min-height: 27px;
+        padding: 3px 9px;
+        border-radius: 5px;
+        border: 1px solid var(--border-strong);
+        background: var(--elevated);
+        color: var(--secondary);
+        font-family: inherit;
+        font-size: 11.5px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 120ms ease, border-color 120ms ease, color 120ms ease, transform 90ms ease;
+      }
+      .ps-filter-btn.active {
+        background: var(--accent-surface);
+        border-color: var(--accent-border);
+        color: var(--accent-text);
+        font-weight: 600;
+      }
+      .ps-asset-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .ps-asset-card {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 8px;
+        border-radius: 7px;
+        border: 1px solid var(--border);
+        background: var(--elevated);
+        box-shadow: var(--shadow-sm);
+      }
+      .ps-asset-thumb {
+        height: 68px;
+        border-radius: 5px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        padding: 6px;
+      }
+      .ps-asset-thumb img {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+      }
+      .ps-asset-name {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .ps-asset-meta {
+        font-size: 11px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+      }
+      .ps-asset-actions {
+        display: flex;
+        gap: 6px;
+        margin-top: auto;
+      }
+      .ps-swatch-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+        gap: 7px;
+        margin-top: 10px;
+      }
+      .ps-swatch-btn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--elevated);
+        color: var(--text);
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        font-size: 11.5px;
+        cursor: pointer;
+        text-align: left;
+      }
+      .ps-swatch-tile {
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        border: 1px solid var(--border-strong);
+        flex: 0 0 auto;
+      }
+      .ps-kv-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 7px;
+        margin-top: 10px;
+      }
+      .ps-kv-card {
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--elevated);
+      }
+      .ps-kv-label {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 2px;
+      }
+      .ps-kv-value {
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        font-size: 12px;
+        color: var(--text);
+        word-break: break-word;
+      }
+      .ps-finding-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .ps-finding-row {
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--elevated);
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
       @media (prefers-reduced-motion: reduce) {
         * { transition: none !important; animation: none !important; }
       }
@@ -1507,6 +1731,332 @@ export class OnPageOverlayDashboard {
     setTimeout(() => {
       URL.revokeObjectURL(url);
     }, 15000);
+  }
+
+  private renderAssetsDrawerBody(data: OverlayAssetsSummaryData): void {
+    if (!this.drawerContent) return;
+    let activeFilter: 'all' | 'image' | 'svg' | 'font' | 'icon' | 'media' | 'skipped' = 'all';
+
+    const statsRow = this.doc.createElement('div');
+    statsRow.className = 'ps-filter-bar';
+    const stat1 = this.createEl('span', 'ps-tag positive', `Packaged: ${data.packagedCount}`);
+    const stat2 = this.createEl('span', 'ps-tag', `Discovered: ${data.totalDiscovered}`);
+    statsRow.append(stat1, stat2);
+    if (data.skippedCount > 0) {
+      statsRow.appendChild(this.createEl('span', 'ps-tag accent', `Skipped: ${data.skippedCount}`));
+    }
+    if (data.inaccessibleStylesheets > 0) {
+      statsRow.appendChild(
+        this.createEl('span', 'ps-tag', `Cross-origin CSS: ${data.inaccessibleStylesheets}`),
+      );
+    }
+    this.drawerContent.appendChild(statsRow);
+
+    const filterBar = this.doc.createElement('div');
+    filterBar.className = 'ps-filter-bar';
+    const grid = this.doc.createElement('div');
+    grid.className = 'ps-asset-grid';
+
+    const filterOptions: Array<{
+      id: 'all' | 'image' | 'svg' | 'font' | 'icon' | 'media' | 'skipped';
+      label: string;
+    }> = [
+      { id: 'all', label: `All (${data.items.length})` },
+      {
+        id: 'image',
+        label: `Images (${data.items.filter((a) => a.kind === 'image' || a.kind === 'background' || a.kind === 'poster').length})`,
+      },
+      { id: 'svg', label: `SVGs (${data.items.filter((a) => a.kind === 'svg').length})` },
+      { id: 'font', label: `Fonts (${data.items.filter((a) => a.kind === 'font').length})` },
+      { id: 'icon', label: `Icons (${data.items.filter((a) => a.kind === 'icon').length})` },
+      {
+        id: 'media',
+        label: `Media (${data.items.filter((a) => a.kind === 'video' || a.kind === 'audio').length})`,
+      },
+      {
+        id: 'skipped',
+        label: `Skipped (${data.items.filter((a) => a.skipReason !== null).length})`,
+      },
+    ];
+
+    const renderGrid = (): void => {
+      grid.textContent = '';
+      for (const btn of Array.from(filterBar.querySelectorAll('button'))) {
+        const bid = btn.getAttribute('data-asset-filter');
+        btn.classList.toggle('active', bid === activeFilter);
+      }
+      const matched = data.items.filter((item) => {
+        if (activeFilter === 'all') return true;
+        if (activeFilter === 'image') {
+          return item.kind === 'image' || item.kind === 'background' || item.kind === 'poster';
+        }
+        if (activeFilter === 'media') {
+          return item.kind === 'video' || item.kind === 'audio';
+        }
+        if (activeFilter === 'skipped') {
+          return item.skipReason !== null;
+        }
+        return item.kind === activeFilter;
+      });
+      for (const item of matched.slice(0, 60)) {
+        const card = this.doc.createElement('div');
+        card.className = 'ps-asset-card';
+        const thumb = this.doc.createElement('div');
+        thumb.className = 'ps-asset-thumb';
+        if (item.safeSvgPreview) {
+          const previewImg = this.doc.createElement('img');
+          previewImg.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(item.safeSvgPreview)}`;
+          previewImg.alt = item.safeFilename;
+          thumb.appendChild(previewImg);
+        } else if (
+          (item.kind === 'image' ||
+            item.kind === 'icon' ||
+            item.kind === 'background' ||
+            item.kind === 'poster' ||
+            item.kind === 'svg') &&
+          (item.url.startsWith('http://') ||
+            item.url.startsWith('https://') ||
+            item.url.startsWith('data:image/'))
+        ) {
+          const previewImg = this.doc.createElement('img');
+          previewImg.src = item.url;
+          previewImg.alt = item.altText || item.safeFilename;
+          previewImg.loading = 'lazy';
+          previewImg.addEventListener('error', () => {
+            thumb.textContent = '';
+            thumb.appendChild(this.createEl('span', 'ps-tag', item.kind.toUpperCase()));
+          });
+          thumb.appendChild(previewImg);
+        } else {
+          thumb.appendChild(this.createEl('span', 'ps-tag', item.kind.toUpperCase()));
+        }
+
+        const nameEl = this.createEl('div', 'ps-asset-name', item.safeFilename);
+        nameEl.title = item.url;
+        const metaEl = this.doc.createElement('div');
+        metaEl.className = 'ps-asset-meta';
+        const sizeLabel =
+          item.packagedByteLength !== null
+            ? `${(item.packagedByteLength / 1024).toFixed(1)} KiB`
+            : item.kind;
+        const dimLabel =
+          item.width && item.height
+            ? `${item.width}x${item.height}`
+            : item.skipReason
+              ? 'skipped'
+              : item.mimeTypeHint;
+        metaEl.append(
+          this.createEl('span', undefined, sizeLabel),
+          this.createEl('span', undefined, dimLabel),
+        );
+
+        card.append(thumb, nameEl, metaEl);
+        if (item.skipReason) {
+          const skipEl = this.createEl('span', 'ps-tag', item.skipReason);
+          skipEl.style.fontSize = '10.5px';
+          card.appendChild(skipEl);
+        }
+
+        const acts = this.doc.createElement('div');
+        acts.className = 'ps-asset-actions';
+        const copyUrlBtn = this.createButton('Copy URL', 'ps-btn', () => {
+          void navigator.clipboard.writeText(item.url).then(() => {
+            copyUrlBtn.textContent = 'Copied';
+            setTimeout(() => {
+              copyUrlBtn.textContent = 'Copy URL';
+            }, 1000);
+          });
+        });
+        acts.appendChild(copyUrlBtn);
+        if (item.safeSvgPreview) {
+          acts.appendChild(
+            this.createButton('Save SVG', 'ps-btn', () => {
+              this.triggerDownloadFromSummary({
+                tool: 'assets',
+                title: item.safeFilename,
+                summary: '',
+                downloadFilename: item.safeFilename.endsWith('.svg')
+                  ? item.safeFilename
+                  : `${item.safeFilename}.svg`,
+                downloadMime: 'image/svg+xml;charset=utf-8',
+                downloadText: item.safeSvgPreview ?? '',
+              });
+            }),
+          );
+        }
+        card.appendChild(acts);
+        grid.appendChild(card);
+      }
+      if (matched.length === 0) {
+        grid.appendChild(this.createEl('span', 'muted', 'No assets matched this filter.'));
+      }
+    };
+
+    for (const opt of filterOptions) {
+      const fBtn = this.createButton(opt.label, 'ps-filter-btn', () => {
+        activeFilter = opt.id;
+        renderGrid();
+      });
+      fBtn.setAttribute('data-asset-filter', opt.id);
+      filterBar.appendChild(fBtn);
+    }
+
+    renderGrid();
+    this.drawerContent.append(filterBar, grid);
+  }
+
+  private renderColorsDrawerBody(data: OverlayColorsSummaryData): void {
+    if (!this.drawerContent) return;
+    const grid = this.doc.createElement('div');
+    grid.className = 'ps-swatch-grid';
+    for (const c of data.colors.slice(0, 24)) {
+      const btn = this.doc.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ps-swatch-btn';
+      btn.title = `${c.hex} (${c.usageCount} uses)`;
+      const tile = this.doc.createElement('span');
+      tile.className = 'ps-swatch-tile';
+      tile.style.backgroundColor = c.hex;
+      const label = this.createEl('span', undefined, c.hex);
+      btn.append(tile, label);
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        void navigator.clipboard.writeText(c.hex).then(() => {
+          label.textContent = 'Copied';
+          setTimeout(() => {
+            label.textContent = c.hex;
+          }, 900);
+        });
+      });
+      grid.appendChild(btn);
+    }
+    this.drawerContent.appendChild(grid);
+
+    if (data.customProperties.length > 0) {
+      const varsGrid = this.doc.createElement('div');
+      varsGrid.className = 'ps-kv-grid';
+      for (const prop of data.customProperties.slice(0, 8)) {
+        const card = this.doc.createElement('div');
+        card.className = 'ps-kv-card';
+        card.append(
+          this.createEl('div', 'ps-kv-label', prop.name),
+          this.createEl('div', 'ps-kv-value', prop.normalizedHex ?? prop.rawValue),
+        );
+        varsGrid.appendChild(card);
+      }
+      this.drawerContent.appendChild(varsGrid);
+    }
+  }
+
+  private renderFontsDrawerBody(data: OverlayFontsSummaryData): void {
+    if (!this.drawerContent) return;
+    const list = this.doc.createElement('div');
+    list.className = 'ps-finding-list';
+    for (const fam of data.families.slice(0, 12)) {
+      const row = this.doc.createElement('div');
+      row.className = 'ps-finding-row';
+      const top = this.doc.createElement('div');
+      top.style.display = 'flex';
+      top.style.alignItems = 'center';
+      top.style.justifyContent = 'space-between';
+      top.style.gap = '8px';
+      const name = this.doc.createElement('strong');
+      name.textContent = fam.primaryFamily;
+      name.style.fontFamily = fam.primaryFamily;
+      const meta = this.createEl(
+        'span',
+        'ps-tag',
+        `${fam.totalUsageCount} elements | ${fam.sampleSizes.slice(0, 3).join(', ')}`,
+      );
+      top.append(name, meta);
+      const sub = this.createEl(
+        'div',
+        'ps-kv-label',
+        `Weights: ${fam.sampleWeights.join(', ') || '400'} | FontFaceSet: ${String(fam.verifiedLoadedInFontFaceSet)}`,
+      );
+      row.append(top, sub);
+      list.appendChild(row);
+    }
+    this.drawerContent.appendChild(list);
+  }
+
+  private renderReviewDrawerBody(data: OverlayDesignReviewSummaryData): void {
+    if (!this.drawerContent) return;
+    const stats = this.doc.createElement('div');
+    stats.className = 'ps-filter-bar';
+    stats.append(
+      this.createEl('span', 'ps-tag', `H1 count: ${data.metrics.h1Count}`),
+      this.createEl('span', 'ps-tag', `Scale: ${data.metrics.headingScaleRatio}x`),
+      this.createEl(
+        'span',
+        data.metrics.contrastFailuresCount > 0 ? 'ps-tag accent' : 'ps-tag positive',
+        `Contrast issues: ${data.metrics.contrastFailuresCount}`,
+      ),
+      this.createEl('span', 'ps-tag', `Spacing tokens: ${data.metrics.distinctSpacingValuesCount}`),
+    );
+    this.drawerContent.appendChild(stats);
+
+    const list = this.doc.createElement('div');
+    list.className = 'ps-finding-list';
+    for (const finding of data.findings.slice(0, 10)) {
+      const row = this.doc.createElement('div');
+      row.className = 'ps-finding-row';
+      const top = this.doc.createElement('div');
+      top.style.display = 'flex';
+      top.style.alignItems = 'center';
+      top.style.justifyContent = 'space-between';
+      top.style.gap = '8px';
+      const titleEl = this.doc.createElement('strong');
+      titleEl.textContent = finding.title;
+      const sevEl = this.createEl(
+        'span',
+        finding.severity === 'high' ? 'ps-tag accent' : 'ps-tag',
+        finding.severity,
+      );
+      top.append(titleEl, sevEl);
+      row.append(
+        top,
+        this.createEl('div', 'ps-kv-label', finding.evidence),
+        this.createEl('div', undefined, finding.suggestion),
+      );
+      list.appendChild(row);
+    }
+    if (data.findings.length === 0) {
+      list.appendChild(
+        this.createEl('span', 'ps-tag positive', 'No structural design issues detected.'),
+      );
+    }
+    this.drawerContent.appendChild(list);
+  }
+
+  private renderInspectDrawerBody(data: OverlayInspectSummaryData): void {
+    if (!this.drawerContent) return;
+    const grid = this.doc.createElement('div');
+    grid.className = 'ps-kv-grid';
+    const items: Array<[string, string]> = [
+      [
+        'Element',
+        `${data.tagName.toLowerCase()} (${Math.round(data.width)}x${Math.round(data.height)}px)`,
+      ],
+      ['Display / Position', `${data.display} / ${data.position}`],
+      [
+        'Typography',
+        `${data.fontSize} / ${data.fontWeight} ${data.fontFamily.split(',')[0] ?? ''}`,
+      ],
+      ['Colors', `Text: ${data.textColor} | Bg: ${data.backgroundColor}`],
+      ['Margin', data.marginSummary],
+      ['Padding', data.paddingSummary],
+    ];
+    if (data.accessibleName) {
+      items.push(['Accessible Name', data.accessibleName]);
+    }
+    for (const [k, v] of items) {
+      const card = this.doc.createElement('div');
+      card.className = 'ps-kv-card';
+      card.append(this.createEl('div', 'ps-kv-label', k), this.createEl('div', 'ps-kv-value', v));
+      grid.appendChild(card);
+    }
+    this.drawerContent.appendChild(grid);
   }
 
   private renderResponsiveStageDrawer(): void {
@@ -1850,6 +2400,26 @@ export class OnPageOverlayDashboard {
         img.alt = 'Captured page screenshot preview';
         img.className = 'ps-capture-preview';
         this.drawerContent.appendChild(img);
+      }
+
+      if (s.assetsPreviewData) {
+        this.renderAssetsDrawerBody(s.assetsPreviewData);
+      }
+
+      if (s.colorsPreviewData) {
+        this.renderColorsDrawerBody(s.colorsPreviewData);
+      }
+
+      if (s.fontsPreviewData) {
+        this.renderFontsDrawerBody(s.fontsPreviewData);
+      }
+
+      if (s.reviewPreviewData) {
+        this.renderReviewDrawerBody(s.reviewPreviewData);
+      }
+
+      if (s.inspectPreviewData) {
+        this.renderInspectDrawerBody(s.inspectPreviewData);
       }
 
       if (s.techStackSummary && s.techStackSummary.groups.length > 0) {

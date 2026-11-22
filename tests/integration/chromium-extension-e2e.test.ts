@@ -1396,9 +1396,89 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
     await fixturePage.waitForFunction(
       () => {
         const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
-        return (sr?.querySelector('.ps-drawer-content')?.textContent ?? '').includes(
-          'Color Palette',
+        return (
+          (sr?.querySelector('.ps-drawer-content')?.textContent ?? '').includes('Color Palette') &&
+          (sr?.querySelectorAll('.ps-swatch-btn').length ?? 0) > 0
         );
+      },
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-ps-action="toggle-tools"]')?.click();
+    });
+    await fixturePage.waitForFunction(
+      () =>
+        Boolean(
+          document
+            .getElementById('pagesift-root-host')
+            ?.shadowRoot?.querySelector('button[data-overlay-tool-drawer="assets"]'),
+        ),
+      undefined,
+      { polling: 100, timeout: 5000 },
+    );
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-overlay-tool-drawer="assets"]')?.click();
+    });
+    await fixturePage.waitForFunction(
+      () => {
+        const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        const text = sr?.querySelector('.ps-drawer-content')?.textContent ?? '';
+        return text.includes('Assets Extracted') && text.includes('assets packaged from');
+      },
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
+    const overlayAssetsState = await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const content = sr?.querySelector('.ps-drawer-content');
+      const text = content?.textContent ?? '';
+      const cardsCount = content?.querySelectorAll('.ps-asset-card').length ?? 0;
+      const packagedMatch = text.match(/(\d+)\s+assets packaged from\s+(\d+)\s+discovered/);
+      const svgFilterBtn = content?.querySelector<HTMLButtonElement>(
+        'button[data-asset-filter="svg"]',
+      );
+      svgFilterBtn?.click();
+      const filteredCardsAfterSvg = content?.querySelectorAll('.ps-asset-card').length ?? 0;
+      return {
+        packagedCount: packagedMatch ? Number.parseInt(packagedMatch[1] ?? '0', 10) : 0,
+        discoveredCount: packagedMatch ? Number.parseInt(packagedMatch[2] ?? '0', 10) : 0,
+        cardsCount,
+        filteredCardsAfterSvg,
+      };
+    });
+    expect(overlayAssetsState.discoveredCount).toBeGreaterThan(0);
+    expect(overlayAssetsState.packagedCount).toBeGreaterThan(0);
+    expect(overlayAssetsState.cardsCount).toBeGreaterThan(0);
+
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>('button[data-ps-action="toggle-tools"]')?.click();
+    });
+    await fixturePage.waitForFunction(
+      () =>
+        Boolean(
+          document
+            .getElementById('pagesift-root-host')
+            ?.shadowRoot?.querySelector('button[data-overlay-tool-drawer="clone_page"]'),
+        ),
+      undefined,
+      { polling: 100, timeout: 5000 },
+    );
+    await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      sr?.querySelector<HTMLButtonElement>(
+        'button[data-overlay-tool-drawer="clone_page"]',
+      )?.click();
+    });
+    await fixturePage.waitForFunction(
+      () => {
+        const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+        const text = sr?.querySelector('.ps-drawer-content')?.textContent ?? '';
+        return text.includes('Clone Page ZIP Ready') && text.includes('packaged files');
       },
       undefined,
       { polling: 100, timeout: 10000 },
@@ -1417,6 +1497,15 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       undefined,
       { polling: 100, timeout: 10000 },
     );
+    const hasRichTechLogoShapes = await fixturePage.evaluate(() => {
+      const sr = document.getElementById('pagesift-root-host')?.shadowRoot;
+      return (
+        (sr?.querySelectorAll(
+          '.tech-badge-icon svg polygon, .tech-badge-icon svg circle, .tech-badge-icon svg ellipse, .tech-badge-icon svg rect',
+        ).length ?? 0) > 0
+      );
+    });
+    expect(hasRichTechLogoShapes).toBe(true);
 
     await fixturePage.evaluate(() => {
       const sr = document.getElementById('pagesift-root-host')?.shadowRoot;

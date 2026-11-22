@@ -6,7 +6,15 @@ import {
   isPageSiftElement,
 } from './dom-utils.js';
 
-export type AssetKind = 'image' | 'svg' | 'icon' | 'background' | 'video' | 'poster' | 'font';
+export type AssetKind =
+  | 'image'
+  | 'svg'
+  | 'icon'
+  | 'background'
+  | 'video'
+  | 'poster'
+  | 'font'
+  | 'audio';
 
 export type AssetAvailabilityStatus =
   | 'inline_available'
@@ -67,6 +75,10 @@ const MIME_TO_EXTENSION: Record<string, string> = {
   'application/font-woff': 'woff',
   'video/mp4': 'mp4',
   'video/webm': 'webm',
+  'audio/mpeg': 'mp3',
+  'audio/wav': 'wav',
+  'audio/ogg': 'ogg',
+  'audio/mp4': 'm4a',
 };
 
 export function extensionFromMimeType(mimeType: string | undefined, fallbackExt: string): string {
@@ -307,11 +319,26 @@ function inferMimeTypeHint(url: string, kind: AssetKind): string {
   if (lower.endsWith('.webm')) {
     return 'video/webm';
   }
+  if (lower.endsWith('.mp3')) {
+    return 'audio/mpeg';
+  }
+  if (lower.endsWith('.wav')) {
+    return 'audio/wav';
+  }
+  if (lower.endsWith('.ogg')) {
+    return 'audio/ogg';
+  }
+  if (lower.endsWith('.m4a')) {
+    return 'audio/mp4';
+  }
   if (kind === 'font') {
     return 'font/woff2';
   }
   if (kind === 'video') {
     return 'video/mp4';
+  }
+  if (kind === 'audio') {
+    return 'audio/mpeg';
   }
   return 'image/png';
 }
@@ -377,8 +404,47 @@ export function extractPageAssets(doc: Document, win: Window): AssetExtractionRe
     }
     const rel = (link.getAttribute('rel') ?? '').toLowerCase();
     const href = link.getAttribute('href');
-    if (href && (rel.includes('icon') || rel.includes('apple-touch-icon'))) {
+    if (!href) {
+      continue;
+    }
+    if (rel.includes('icon') || rel.includes('apple-touch-icon') || rel.includes('mask-icon')) {
       addDiscoveredUrl({ kind: 'icon', rawUrl: href });
+    } else if (rel.includes('preload') || rel.includes('prefetch')) {
+      const asAttr = (link.getAttribute('as') ?? '').toLowerCase();
+      if (asAttr === 'image') {
+        addDiscoveredUrl({
+          kind: href.toLowerCase().split('?')[0]?.endsWith('.svg') ? 'svg' : 'image',
+          rawUrl: href,
+        });
+      } else if (asAttr === 'font') {
+        addDiscoveredUrl({ kind: 'font', rawUrl: href });
+      } else if (asAttr === 'video') {
+        addDiscoveredUrl({ kind: 'video', rawUrl: href });
+      } else if (asAttr === 'audio') {
+        addDiscoveredUrl({ kind: 'audio', rawUrl: href });
+      }
+    }
+  }
+
+  for (const meta of Array.from(doc.querySelectorAll('meta[content]'))) {
+    const prop = (meta.getAttribute('property') ?? meta.getAttribute('name') ?? '').toLowerCase();
+    const content = meta.getAttribute('content');
+    if (!content) {
+      continue;
+    }
+    if (
+      prop === 'og:image' ||
+      prop === 'og:image:url' ||
+      prop === 'og:image:secure_url' ||
+      prop === 'twitter:image' ||
+      prop === 'twitter:image:src' ||
+      prop === 'msapplication-tileimage'
+    ) {
+      addDiscoveredUrl({
+        kind: content.toLowerCase().split('?')[0]?.endsWith('.svg') ? 'svg' : 'image',
+        rawUrl: content,
+        altText: prop,
+      });
     }
   }
 
@@ -415,7 +481,10 @@ export function extractPageAssets(doc: Document, win: Window): AssetExtractionRe
           altText: alt,
         });
       }
-      const srcset = img.getAttribute('srcset') ?? img.getAttribute('data-srcset');
+      const srcset =
+        img.getAttribute('srcset') ??
+        img.getAttribute('data-srcset') ??
+        img.getAttribute('data-lazy-srcset');
       if (srcset) {
         for (const candidateUrl of parseSrcsetUrls(srcset)) {
           addDiscoveredUrl({ kind: 'image', rawUrl: candidateUrl, altText: alt });
@@ -423,19 +492,28 @@ export function extractPageAssets(doc: Document, win: Window): AssetExtractionRe
       }
     } else if (tag === 'source') {
       const parentTag = element.parentElement?.tagName.toLowerCase();
-      const srcset = element.getAttribute('srcset');
-      const src = element.getAttribute('src');
+      const srcset =
+        element.getAttribute('srcset') ??
+        element.getAttribute('data-srcset') ??
+        element.getAttribute('data-lazy-srcset');
+      const src = element.getAttribute('src') ?? element.getAttribute('data-src');
       if (srcset) {
         for (const candidateUrl of parseSrcsetUrls(srcset)) {
           addDiscoveredUrl({ kind: 'image', rawUrl: candidateUrl });
         }
       }
-      if (src && parentTag === 'video') {
-        addDiscoveredUrl({ kind: 'video', rawUrl: src });
+      if (src) {
+        if (parentTag === 'video') {
+          addDiscoveredUrl({ kind: 'video', rawUrl: src });
+        } else if (parentTag === 'audio') {
+          addDiscoveredUrl({ kind: 'audio', rawUrl: src });
+        } else {
+          addDiscoveredUrl({ kind: 'image', rawUrl: src });
+        }
       }
     } else if (tag === 'video') {
       const video = element as HTMLVideoElement;
-      const src = video.getAttribute('src');
+      const src = video.getAttribute('src') ?? video.getAttribute('data-src');
       const poster = video.getAttribute('poster');
       if (src) {
         addDiscoveredUrl({
@@ -448,7 +526,30 @@ export function extractPageAssets(doc: Document, win: Window): AssetExtractionRe
       if (poster) {
         addDiscoveredUrl({ kind: 'poster', rawUrl: poster });
       }
+    } else if (tag === 'audio') {
+      const src = element.getAttribute('src') ?? element.getAttribute('data-src');
+      if (src) {
+        addDiscoveredUrl({ kind: 'audio', rawUrl: src });
+      }
+    } else if (tag === 'object' || tag === 'embed') {
+      const rawRef = element.getAttribute('data') ?? element.getAttribute('src');
+      const mediaType = (element.getAttribute('type') ?? '').toLowerCase();
+      if (
+        rawRef &&
+        (mediaType.startsWith('image/') || /\.(svg|png|jpe?g|webp|gif|avif)(\?|$)/i.test(rawRef))
+      ) {
+        addDiscoveredUrl({
+          kind: mediaType.includes('svg') || /\.svg(\?|$)/i.test(rawRef) ? 'svg' : 'image',
+          rawUrl: rawRef,
+        });
+      }
     } else if (tag === 'svg') {
+      for (const useEl of Array.from(element.querySelectorAll('use'))) {
+        const useRef = useEl.getAttribute('href') ?? useEl.getAttribute('xlink:href');
+        if (useRef && !useRef.startsWith('#')) {
+          addDiscoveredUrl({ kind: 'svg', rawUrl: useRef.split('#')[0] ?? useRef });
+        }
+      }
       const parentSvg = element.parentElement?.closest('svg');
       if (!parentSvg) {
         inlineSvgCounter += 1;
@@ -478,16 +579,21 @@ export function extractPageAssets(doc: Document, win: Window): AssetExtractionRe
     }
 
     const computed = win.getComputedStyle(element);
-    const bgImage = computed.backgroundImage;
-    if (bgImage && bgImage !== 'none') {
-      const urlRegex = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
-      let match = urlRegex.exec(bgImage);
-      while (match) {
-        const extractedUrl = match[2]?.trim() ?? '';
-        if (extractedUrl && !extractedUrl.startsWith('data:')) {
-          addDiscoveredUrl({ kind: 'background', rawUrl: extractedUrl });
+    for (const cssVal of [
+      computed.backgroundImage,
+      computed.getPropertyValue('mask-image'),
+      computed.getPropertyValue('-webkit-mask-image'),
+    ]) {
+      if (cssVal && cssVal !== 'none') {
+        const urlRegex = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+        let match = urlRegex.exec(cssVal);
+        while (match) {
+          const extractedUrl = match[2]?.trim() ?? '';
+          if (extractedUrl && !extractedUrl.startsWith('data:')) {
+            addDiscoveredUrl({ kind: 'background', rawUrl: extractedUrl });
+          }
+          match = urlRegex.exec(cssVal);
         }
-        match = urlRegex.exec(bgImage);
       }
     }
   }
@@ -513,6 +619,73 @@ export function extractPageAssets(doc: Document, win: Window): AssetExtractionRe
           }
           match = urlRegex.exec(src);
         }
+      } else if ('style' in rule) {
+        const styledRule = rule as CSSStyleRule;
+        const cssCandidates = [
+          styledRule.style.getPropertyValue('background-image'),
+          styledRule.style.getPropertyValue('mask-image'),
+          styledRule.style.getPropertyValue('-webkit-mask-image'),
+          styledRule.style.getPropertyValue('list-style-image'),
+        ];
+        for (const cssVal of cssCandidates) {
+          if (!cssVal || cssVal === 'none') {
+            continue;
+          }
+          const urlRegex = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+          let match = urlRegex.exec(cssVal);
+          while (match) {
+            const bgUrl = match[2]?.trim() ?? '';
+            if (bgUrl && !bgUrl.startsWith('data:')) {
+              addDiscoveredUrl({ kind: 'background', rawUrl: bgUrl, resolveBase: sheetBase });
+            }
+            match = urlRegex.exec(cssVal);
+          }
+        }
+      }
+    }
+  }
+
+  const perfApi = win.performance as { getEntriesByType?: (type: string) => unknown[] } | undefined;
+  if (perfApi && typeof perfApi.getEntriesByType === 'function') {
+    const resourceEntries = perfApi.getEntriesByType('resource') as Array<{
+      name?: string;
+      initiatorType?: string;
+    }>;
+    for (const perfEntry of resourceEntries) {
+      const resUrl = perfEntry.name ?? '';
+      if (!resUrl || resUrl.startsWith('data:') || resUrl.startsWith('chrome-extension://')) {
+        continue;
+      }
+      const lowerUrl = resUrl.toLowerCase();
+      if (
+        lowerUrl.includes('google-analytics.com') ||
+        lowerUrl.includes('googletagmanager.com') ||
+        lowerUrl.includes('doubleclick.net') ||
+        lowerUrl.includes('/g/collect')
+      ) {
+        continue;
+      }
+      const cleanPath = lowerUrl.split('?')[0]?.split('#')[0] ?? '';
+      const initType = (perfEntry.initiatorType ?? '').toLowerCase();
+      if (/\.(woff2?|ttf|otf)$/.test(cleanPath) || lowerUrl.includes('fonts.gstatic.com/s/')) {
+        addDiscoveredUrl({ kind: 'font', rawUrl: resUrl });
+      } else if (/\.svg$/.test(cleanPath)) {
+        addDiscoveredUrl({ kind: 'svg', rawUrl: resUrl });
+      } else if (
+        /\.ico$/.test(cleanPath) ||
+        (initType === 'link' && cleanPath.includes('favicon'))
+      ) {
+        addDiscoveredUrl({ kind: 'icon', rawUrl: resUrl });
+      } else if (/\.(mp4|webm)$/.test(cleanPath) || initType === 'video') {
+        addDiscoveredUrl({ kind: 'video', rawUrl: resUrl });
+      } else if (/\.(mp3|wav|ogg|m4a)$/.test(cleanPath) || initType === 'audio') {
+        addDiscoveredUrl({ kind: 'audio', rawUrl: resUrl });
+      } else if (
+        /\.(png|jpe?g|webp|gif|avif|bmp)$/.test(cleanPath) ||
+        initType === 'img' ||
+        initType === 'image'
+      ) {
+        addDiscoveredUrl({ kind: 'image', rawUrl: resUrl });
       }
     }
   }

@@ -79,6 +79,7 @@ export const messageOperationSchema = z.enum([
   'OPEN_OPTIONS_PAGE',
   'OPEN_SITE_RESPONSIVE_WINDOWS',
   'CAPTURE_OWN_TAB',
+  'FETCH_SITE_ASSETS',
   'RECORD_LOCAL_ACTIVITY',
   'QUERY_ACTIVITY_HISTORY',
   'LIST_SITE_ACTIVITY',
@@ -296,6 +297,9 @@ const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = 
   }),
   CAPTURE_OWN_TAB: z.strictObject({
     format: z.enum(['image/png', 'image/jpeg']).default('image/png'),
+  }),
+  FETCH_SITE_ASSETS: z.strictObject({
+    urls: z.array(httpUrlSchema).min(1).max(150),
   }),
   RECORD_LOCAL_ACTIVITY: z.strictObject({
     activityId: z.string().trim().min(4).max(128),

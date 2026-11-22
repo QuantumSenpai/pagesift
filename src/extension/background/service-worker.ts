@@ -1073,6 +1073,78 @@ export class BackgroundCoordinator {
           });
         }
 
+        case 'FETCH_SITE_ASSETS': {
+          const senderUrl = sender.tab?.url;
+          if (!senderUrl || !isHttpOrHttpsUrl(senderUrl)) {
+            return createErrorResponse(
+              msg.requestId,
+              'PERMISSION_DENIED',
+              'Site assets can only be prefetched for active http/https pages',
+              msg.operation,
+            );
+          }
+          const rawUrls = Array.isArray(msg.payload['urls'])
+            ? (msg.payload['urls'] as unknown[]).filter(
+                (u): u is string => typeof u === 'string' && isHttpOrHttpsUrl(u),
+              )
+            : [];
+          const uniqueUrls = Array.from(new Set(rawUrls)).slice(0, 150);
+          if (uniqueUrls.length === 0) {
+            return createErrorResponse(
+              msg.requestId,
+              'INVALID_MESSAGE',
+              'At least one valid HTTP(S) asset URL is required',
+              msg.operation,
+            );
+          }
+
+          const prefetched = await prefetchAssetsBatch(uniqueUrls, {
+            maxTotalBytes: 20 * 1024 * 1024,
+            maxSingleAssetBytes: 4 * 1024 * 1024,
+            ...(this.env.fetchImpl ? { fetchImpl: this.env.fetchImpl } : {}),
+          });
+
+          const assets: Record<
+            string,
+            {
+              ok: boolean;
+              mimeType?: string;
+              base64?: string;
+              byteLength?: number;
+              reason?: string;
+            }
+          > = {};
+          const maxSerializedBytes = 12 * 1024 * 1024;
+          let runningSerializedBytes = 0;
+
+          for (const url of uniqueUrls) {
+            const res = prefetched.get(url);
+            if (!res || !res.ok || !res.bytes) {
+              assets[url] = {
+                ok: false,
+                reason: res?.reason ?? 'Asset fetch failed or blocked',
+              };
+              continue;
+            }
+            if (runningSerializedBytes + res.bytes.byteLength > maxSerializedBytes) {
+              assets[url] = {
+                ok: false,
+                reason: 'Overlay IPC transfer budget reached (open Dashboard for larger archives)',
+              };
+              continue;
+            }
+            runningSerializedBytes += res.bytes.byteLength;
+            assets[url] = {
+              ok: true,
+              ...(res.mimeType ? { mimeType: res.mimeType } : {}),
+              base64: encodeBytesToBase64(res.bytes),
+              byteLength: res.bytes.byteLength,
+            };
+          }
+
+          return createSuccessResponse(msg, { assets });
+        }
+
         case 'OPEN_FULL_DASHBOARD': {
           const tool = typeof msg.payload['tool'] === 'string' ? msg.payload['tool'] : undefined;
           const autorun = msg.payload['autorun'] === true;

@@ -3,6 +3,7 @@ import {
   buildAssetsZipArchive,
   extractPageAssets,
   type AssetBinaryFetcher,
+  type AssetBinaryFetchResult,
 } from '../engines/assets-engine.js';
 import {
   buildCapturePlan,
@@ -100,6 +101,18 @@ function uint8ToBase64(bytes: Uint8Array): string {
     binary += part;
   }
   return btoa(binary);
+}
+
+function base64ToUint8(base64: string): Uint8Array {
+  if (typeof Buffer !== 'undefined') {
+    return new Uint8Array(Buffer.from(base64, 'base64'));
+  }
+  const binary = atob(base64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
 }
 
 export class ContentScriptRuntime {
@@ -883,6 +896,66 @@ export class ContentScriptRuntime {
       .catch(() => undefined);
   }
 
+  private async createOverlayAssetFetcher(urls: string[]): Promise<AssetBinaryFetcher | undefined> {
+    if (this.adapters.fetchAssetBinary) {
+      return this.adapters.fetchAssetBinary;
+    }
+    const httpUrls = Array.from(
+      new Set(urls.filter((u) => u.startsWith('http://') || u.startsWith('https://'))),
+    );
+    if (httpUrls.length === 0 || !this.adapters.sendBackgroundMessage) {
+      return undefined;
+    }
+
+    const cache = new Map<string, AssetBinaryFetchResult>();
+    const chunkSize = 150;
+    for (let i = 0; i < httpUrls.length; i += chunkSize) {
+      const batch = httpUrls.slice(i, i + chunkSize);
+      const res = await this.adapters
+        .sendBackgroundMessage({
+          schemaVersion: 1,
+          requestId: `ov-fetch-${Date.now()}-${i}`,
+          operation: 'FETCH_SITE_ASSETS',
+          documentId: this.documentId,
+          payload: { urls: batch },
+        })
+        .catch(() => null);
+      if (!res || !res.ok) {
+        const errMsg = res ? res.error.message : 'Background asset fetch failed';
+        for (const u of batch) {
+          cache.set(u, { ok: false, reason: errMsg });
+        }
+        continue;
+      }
+      const data = res.data as {
+        assets?: Record<
+          string,
+          { ok: boolean; mimeType?: string; base64?: string; reason?: string }
+        >;
+      };
+      for (const u of batch) {
+        const entry = data.assets?.[u];
+        if (entry?.ok && typeof entry.base64 === 'string') {
+          cache.set(u, {
+            ok: true,
+            bytes: base64ToUint8(entry.base64),
+            ...(entry.mimeType ? { mimeType: entry.mimeType } : {}),
+          });
+        } else {
+          cache.set(u, {
+            ok: false,
+            reason: entry?.reason ?? 'Asset fetch failed or blocked by network policy',
+          });
+        }
+      }
+    }
+
+    return (url: string): Promise<AssetBinaryFetchResult> =>
+      Promise.resolve(
+        cache.get(url) ?? { ok: false, reason: 'Asset URL was not included in prefetch batch' },
+      );
+  }
+
   private async executeOverlayTool(
     tool: ToolId,
     options?: OverlayEditOptions,
@@ -893,7 +966,7 @@ export class ContentScriptRuntime {
       if (tool === 'inspect') {
         const target = this.resolveTargetElement();
         const report = inspectElement(target, this.win);
-        const summaryText = `${report.selector} · ${Math.round(report.boundingBox.width)}×${Math.round(report.boundingBox.height)}px · ${report.typography.fontSize} ${report.typography.fontFamily.split(',')[0] ?? ''}`;
+        const summaryText = `${report.selector} · ${Math.round(report.boundingBox.width)}x${Math.round(report.boundingBox.height)}px · ${report.typography.fontSize} ${report.typography.fontFamily.split(',')[0] ?? ''}`;
         await this.recordOverlayActivity({
           activityId,
           tool,
@@ -907,6 +980,23 @@ export class ContentScriptRuntime {
           tool,
           title: `Inspected ${report.selector}`,
           summary: summaryText,
+          inspectPreviewData: {
+            selector: report.selector,
+            tagName: report.tagName,
+            width: report.boundingBox.width,
+            height: report.boundingBox.height,
+            display: report.layout.display,
+            position: report.layout.position,
+            fontFamily: report.typography.fontFamily,
+            fontSize: report.typography.fontSize,
+            fontWeight: report.typography.fontWeight,
+            textColor: report.colors.textColor,
+            backgroundColor: report.colors.backgroundColor,
+            marginSummary: `${report.spacing.margin.top}px ${report.spacing.margin.right}px ${report.spacing.margin.bottom}px ${report.spacing.margin.left}px`,
+            paddingSummary: `${report.spacing.padding.top}px ${report.spacing.padding.right}px ${report.spacing.padding.bottom}px ${report.spacing.padding.left}px`,
+            borderRadius: report.bordersAndEffects.borderRadius,
+            accessibleName: report.accessibility.accessibleName,
+          },
           copyableText: report.safeHtml,
         };
       }
@@ -948,6 +1038,14 @@ export class ContentScriptRuntime {
           tool,
           title: 'Color Palette',
           summary: summaryText,
+          colorsPreviewData: {
+            colors: report.colors.slice(0, 24).map((c) => ({
+              hex: c.hex,
+              rgbString: c.rgbString,
+              usageCount: c.usageCount,
+            })),
+            customProperties: report.customProperties.slice(0, 12),
+          },
           copyableText: report.exports.cssVariables,
           downloadFilename: 'pagesift-colors.css',
           downloadMime: 'text/css;charset=utf-8',
@@ -973,14 +1071,34 @@ export class ContentScriptRuntime {
           tool,
           title: 'Typography',
           summary: summaryText,
+          fontsPreviewData: {
+            families: report.families.slice(0, 12).map((fam) => ({
+              primaryFamily: fam.primaryFamily,
+              totalUsageCount: fam.totalUsageCount,
+              verifiedLoadedInFontFaceSet: fam.verifiedLoadedInFontFaceSet,
+              sampleSizes: Array.from(new Set(fam.combinations.map((c) => c.fontSize))).slice(0, 4),
+              sampleWeights: Array.from(new Set(fam.combinations.map((c) => c.fontWeight))).slice(
+                0,
+                4,
+              ),
+            })),
+            fontFaceCount: report.fontFaceDeclarations.length,
+          },
           copyableText: JSON.stringify(report, null, 2),
         };
       }
       if (tool === 'clone_page') {
+        const prepared = prepareStaticPageClone(this.doc, this.win, {});
+        const candidateUrls = prepared.candidateAssetUrls.map((c) => c.url);
+        const fetcher = await this.createOverlayAssetFetcher(candidateUrls);
         const cloned = await exportStaticPageClone(this.doc, this.win, {
-          ...(this.adapters.fetchAssetBinary ? { fetcher: this.adapters.fetchAssetBinary } : {}),
+          ...(fetcher ? { fetcher } : {}),
         });
-        const summaryText = `${cloned.manifest.files.length} packaged files (${(cloned.zipBytes.byteLength / 1024).toFixed(1)} KiB sanitized ZIP)`;
+        const missingSuffix =
+          cloned.manifest.missingResources.length > 0
+            ? `, ${cloned.manifest.missingResources.length} missing`
+            : '';
+        const summaryText = `${cloned.manifest.files.length} packaged files (${(cloned.zipBytes.byteLength / 1024).toFixed(1)} KiB sanitized ZIP${missingSuffix})`;
         await this.recordOverlayActivity({
           activityId,
           tool,
@@ -1000,8 +1118,18 @@ export class ContentScriptRuntime {
       }
       if (tool === 'assets') {
         const report = extractPageAssets(this.doc, this.win);
-        const archived = await buildAssetsZipArchive(report, this.adapters.fetchAssetBinary);
-        const summaryText = `${archived.packagedFilesCount} assets packaged from ${report.summary.totalDiscovered} discovered`;
+        const httpUrls = report.assets
+          .filter((a) => a.availabilityStatus === 'http_reference')
+          .map((a) => a.url);
+        const fetcher = await this.createOverlayAssetFetcher(httpUrls);
+        const archived = await buildAssetsZipArchive(report, fetcher);
+        const packagedById = new Map(archived.packagedAssets.map((p) => [p.id, p]));
+        const skippedById = new Map(archived.skippedOrUnavailable.map((s) => [s.id, s]));
+        const skipSuffix =
+          archived.skippedOrUnavailable.length > 0
+            ? ` (${archived.skippedOrUnavailable.length} skipped)`
+            : '';
+        const summaryText = `${archived.packagedFilesCount} assets packaged from ${report.summary.totalDiscovered} discovered${skipSuffix}`;
         await this.recordOverlayActivity({
           activityId,
           tool,
@@ -1014,7 +1142,49 @@ export class ContentScriptRuntime {
           tool,
           title: 'Assets Extracted',
           summary: summaryText,
-          copyableText: JSON.stringify(report, null, 2),
+          assetsPreviewData: {
+            totalDiscovered: report.summary.totalDiscovered,
+            packagedCount: archived.packagedFilesCount,
+            skippedCount: archived.skippedOrUnavailable.length,
+            inaccessibleStylesheets: report.diagnostics.inaccessibleStylesheets.length,
+            items: report.assets.map((a) => {
+              const pkg = packagedById.get(a.id);
+              const skip = skippedById.get(a.id);
+              return {
+                id: a.id,
+                kind: a.kind,
+                url: a.url,
+                safeFilename: a.safeFilename,
+                mimeTypeHint: a.mimeTypeHint,
+                width: a.width,
+                height: a.height,
+                altText: a.altText,
+                availabilityStatus: a.availabilityStatus,
+                statusNote: a.statusNote,
+                safeSvgPreview: a.safeSvgPreview,
+                packagedByteLength: pkg ? pkg.byteLength : null,
+                archivePath: pkg ? pkg.archivePath : null,
+                skipReason: skip ? skip.reason : null,
+              };
+            }),
+          },
+          copyableText: JSON.stringify(
+            {
+              summary: report.summary,
+              packagedFilesCount: archived.packagedFilesCount,
+              skippedOrUnavailable: archived.skippedOrUnavailable,
+              assets: report.assets.map((a) => ({
+                id: a.id,
+                kind: a.kind,
+                url: a.url,
+                safeFilename: a.safeFilename,
+                mimeTypeHint: a.mimeTypeHint,
+                availabilityStatus: a.availabilityStatus,
+              })),
+            },
+            null,
+            2,
+          ),
           downloadFilename: 'pagesift-assets.zip',
           downloadMime: 'application/zip',
           downloadBase64: encodeBytesToBase64(archived.zipBytes),
@@ -1105,6 +1275,21 @@ export class ContentScriptRuntime {
           tool,
           title: 'Design Review',
           summary: summaryText,
+          reviewPreviewData: {
+            metrics: {
+              h1Count: report.metrics.h1Count,
+              headingScaleRatio: report.metrics.headingScaleRatio,
+              contrastFailuresCount: report.metrics.contrastFailuresCount,
+              heavyEffectElementsCount: report.metrics.heavyEffectElementsCount,
+              distinctSpacingValuesCount: report.metrics.distinctSpacingValuesCount,
+            },
+            findings: report.findings.slice(0, 12).map((f) => ({
+              severity: f.severity,
+              title: f.title,
+              evidence: f.evidence,
+              suggestion: f.suggestion,
+            })),
+          },
           copyableText: report.localFixPrompt,
         };
       }

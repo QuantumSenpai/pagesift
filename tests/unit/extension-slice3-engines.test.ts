@@ -1,5 +1,6 @@
 import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
+import { extractPageAssets } from '../../src/extension/engines/assets-engine.js';
 import {
   extractPageColors,
   parseCssColorToRgba,
@@ -207,5 +208,56 @@ describe('Slice 3 Engines: Inspect, Colors, Fonts, and Measure', () => {
     expect(measured.distance?.horizontalGap).toBe(40);
     expect(measured.distance?.verticalGap).toBe(30);
     expect(measured.distance?.isOverlapping).toBe(false);
+  });
+
+  it('extracts meta og:image, preload fonts, mask-icon, audio, lazy srcset, and resource-timing assets while ignoring tracking pixels', () => {
+    const dom = new JSDOM(
+      `<!DOCTYPE html>
+      <html>
+        <head>
+          <meta property="og:image" content="https://cdn.example.com/social-card.png" />
+          <link rel="mask-icon" href="https://cdn.example.com/safari-pinned.svg" color="#000" />
+          <link rel="preload" as="font" href="https://cdn.example.com/fonts/preload.woff2" />
+        </head>
+        <body>
+          <img data-lazy-srcset="https://cdn.example.com/lazy-1x.webp 1x, https://cdn.example.com/lazy-2x.webp 2x" alt="Lazy" />
+          <audio src="https://cdn.example.com/chime.mp3"></audio>
+          <svg width="24" height="24"><circle cx="12" cy="12" r="8"></circle></svg>
+        </body>
+      </html>`,
+      { url: 'https://example.com/' },
+    );
+
+    const { document, window } = dom.window;
+    Object.defineProperty(window, 'performance', {
+      configurable: true,
+      value: {
+        getEntriesByType: (entryType: string) =>
+          entryType === 'resource'
+            ? [
+                { name: 'https://cdn.example.com/cors-hidden/inter.woff2', initiatorType: 'css' },
+                { name: 'https://framerusercontent.com/images/heroBanner', initiatorType: 'img' },
+                {
+                  name: 'https://www.google-analytics.com/g/collect?v=2',
+                  initiatorType: 'img',
+                },
+              ]
+            : [],
+      },
+    });
+
+    const report = extractPageAssets(document, window as unknown as Window);
+    const urls = new Set(report.assets.map((a) => a.url));
+    expect(urls.has('https://cdn.example.com/social-card.png')).toBe(true);
+    expect(urls.has('https://cdn.example.com/safari-pinned.svg')).toBe(true);
+    expect(urls.has('https://cdn.example.com/fonts/preload.woff2')).toBe(true);
+    expect(urls.has('https://cdn.example.com/lazy-2x.webp')).toBe(true);
+    expect(urls.has('https://cdn.example.com/chime.mp3')).toBe(true);
+    expect(urls.has('https://cdn.example.com/cors-hidden/inter.woff2')).toBe(true);
+    expect(urls.has('https://framerusercontent.com/images/heroBanner')).toBe(true);
+    expect(urls.has('https://www.google-analytics.com/g/collect?v=2')).toBe(false);
+    expect(
+      report.assets.some((a) => a.kind === 'svg' && a.availabilityStatus === 'inline_available'),
+    ).toBe(true);
   });
 });
