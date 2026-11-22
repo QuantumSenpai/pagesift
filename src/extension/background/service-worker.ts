@@ -119,15 +119,32 @@ export class BackgroundCoordinator {
   private readonly previewCache = new Map<string, CachedNvidiaPreview>();
   private responsiveSession: ResponsiveSessionState | null = null;
   private lastCaptureTimestampMs = 0;
+  private initializationPromise: Promise<{ recoveredJobsCount: number }> | null = null;
 
   public constructor(env: BackgroundEnvironmentAdapters) {
     this.env = env;
   }
 
+  public ensureInitialized(): Promise<{ recoveredJobsCount: number }> {
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+    const pending = (async (): Promise<{ recoveredJobsCount: number }> => {
+      try {
+        const recoveredJobsCount = await this.env.storage.recoverInterruptedJobs();
+        await this.restoreResponsiveSession();
+        return { recoveredJobsCount };
+      } catch (err: unknown) {
+        this.initializationPromise = null;
+        throw err;
+      }
+    })();
+    this.initializationPromise = pending;
+    return pending;
+  }
+
   public async initialize(): Promise<{ recoveredJobsCount: number }> {
-    const recoveredJobsCount = await this.env.storage.recoverInterruptedJobs();
-    await this.restoreResponsiveSession();
-    return { recoveredJobsCount };
+    return this.ensureInitialized();
   }
 
   private async persistResponsiveSession(): Promise<void> {
@@ -156,9 +173,7 @@ export class BackgroundCoordinator {
   }
 
   public async handleManagedTabRemoved(tabId: number): Promise<void> {
-    if (!this.responsiveSession) {
-      await this.restoreResponsiveSession();
-    }
+    await this.ensureInitialized().catch(() => undefined);
     this.scrollSync.unregisterTab(tabId);
     if (!this.responsiveSession) {
       return;
@@ -176,9 +191,7 @@ export class BackgroundCoordinator {
   }
 
   public async handleManagedWindowRemoved(windowId: number): Promise<void> {
-    if (!this.responsiveSession) {
-      await this.restoreResponsiveSession();
-    }
+    await this.ensureInitialized().catch(() => undefined);
     if (!this.responsiveSession) {
       return;
     }
@@ -202,9 +215,7 @@ export class BackgroundCoordinator {
     if (status !== 'complete') {
       return;
     }
-    if (!this.responsiveSession) {
-      await this.restoreResponsiveSession();
-    }
+    await this.ensureInitialized().catch(() => undefined);
     if (!this.responsiveSession) {
       return;
     }
@@ -347,6 +358,16 @@ export class BackgroundCoordinator {
         senderAuth.reason ?? 'Sender is not authorized for this operation',
         msg.operation,
       );
+    }
+
+    try {
+      await this.ensureInitialized();
+    } catch (initErr: unknown) {
+      const initMessage =
+        initErr instanceof Error
+          ? initErr.message
+          : 'Background service worker initialization failed';
+      return createErrorResponse(msg.requestId, 'STORAGE_ERROR', initMessage, msg.operation);
     }
 
     try {
@@ -1532,25 +1553,36 @@ function bootstrapServiceWorker(): void {
   });
 
   chromeApi.runtime.onInstalled?.addListener(() => {
-    void coordinator.initialize();
+    void coordinator.initialize().catch(() => undefined);
   });
   chromeApi.runtime.onStartup?.addListener(() => {
-    void coordinator.initialize();
+    void coordinator.initialize().catch(() => undefined);
   });
   chromeApi.tabs?.onRemoved?.addListener((tabId) => {
-    void coordinator.handleManagedTabRemoved(tabId);
+    void coordinator.handleManagedTabRemoved(tabId).catch(() => undefined);
   });
   chromeApi.windows?.onRemoved?.addListener((windowId) => {
-    void coordinator.handleManagedWindowRemoved(windowId);
+    void coordinator.handleManagedWindowRemoved(windowId).catch(() => undefined);
   });
   chromeApi.tabs?.onUpdated?.addListener((tabId, changeInfo) => {
-    void coordinator.handleManagedTabUpdated(tabId, changeInfo.status);
+    void coordinator.handleManagedTabUpdated(tabId, changeInfo.status).catch(() => undefined);
   });
 
   chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    void coordinator.handleRuntimeMessage(message, sender).then((res) => {
-      sendResponse(res);
-    });
+    void coordinator
+      .handleRuntimeMessage(message, sender)
+      .then((res) => {
+        sendResponse(res);
+      })
+      .catch((err: unknown) => {
+        sendResponse(
+          createErrorResponse(
+            'runtime-error',
+            'TOOL_EXECUTION_ERROR',
+            err instanceof Error ? err.message : 'Unexpected runtime error',
+          ),
+        );
+      });
     return true;
   });
 }

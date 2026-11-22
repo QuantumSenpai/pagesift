@@ -652,4 +652,154 @@ describe('Confirmed Problem Regressions (Slices 1-6 and Connected Paths)', () =>
       await storage.close();
     }
   });
+
+  it('recovers previously running jobs on first wake message without explicit initialize(), deduplicates concurrent init, and reports structured init failures', async () => {
+    const dbName = `pagesift_worker_wake_${Date.now()}`;
+    const storage = new LocalExtensionStorage(dbName);
+    const sessionArea = new InMemoryKeyValueArea();
+    const settingsStore = new ExtensionSettingsStore(new InMemoryKeyValueArea(), sessionArea);
+    const extId = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+    const sender = { id: extId, url: `chrome-extension://${extId}/workspace.html` };
+
+    try {
+      await storage.StartToolJob({
+        id: 'job-stuck-running-1',
+        tool: 'clone_page',
+        tabId: 42,
+        documentId: 'doc-before-stop',
+      });
+      await sessionArea.set({
+        pagesift_responsive_session_v1: {
+          sessionId: 'resp-before-stop',
+          targetUrl: 'https://example.com',
+          syncEnabled: true,
+          windows: [
+            {
+              presetId: 'mobile-sm',
+              label: 'Mobile 375x812',
+              windowId: 901,
+              tabId: 801,
+              requestedWidth: 375,
+              requestedHeight: 812,
+              actualInnerWidth: 375,
+              actualInnerHeight: 812,
+              chromeDeltaWidth: 0,
+              chromeDeltaHeight: 0,
+              sizeConstrainedByBrowser: false,
+            },
+          ],
+          createdAt: new Date().toISOString(),
+        },
+      });
+
+      let recoverCalls = 0;
+      const originalRecover = storage.recoverInterruptedJobs.bind(storage);
+      storage.recoverInterruptedJobs = async () => {
+        recoverCalls += 1;
+        await new Promise((r) => setTimeout(r, 25));
+        return originalRecover();
+      };
+
+      const freshCoordinator = new BackgroundCoordinator({
+        extensionId: extId,
+        storage,
+        settingsStore,
+        sessionStateArea: sessionArea,
+      });
+
+      const [jobStatusRes, listJobsRes, respSessionRes] = await Promise.all([
+        freshCoordinator.handleRuntimeMessage(
+          {
+            schemaVersion: 1,
+            requestId: 'req-wake-job-status',
+            operation: 'GET_JOB_STATUS',
+            payload: { jobId: 'job-stuck-running-1' },
+          },
+          sender,
+        ),
+        freshCoordinator.handleRuntimeMessage(
+          {
+            schemaVersion: 1,
+            requestId: 'req-wake-list-jobs',
+            operation: 'LIST_JOBS',
+            payload: {},
+          },
+          sender,
+        ),
+        freshCoordinator.handleRuntimeMessage(
+          {
+            schemaVersion: 1,
+            requestId: 'req-wake-resp-session',
+            operation: 'GET_RESPONSIVE_SESSION',
+            payload: {},
+          },
+          sender,
+        ),
+      ]);
+
+      expect(recoverCalls).toBe(1);
+      expect(jobStatusRes.ok).toBe(true);
+      if (jobStatusRes.ok) {
+        const data = jobStatusRes.data as { job: { status: string } | null };
+        expect(data.job?.status).toBe('interrupted');
+      }
+      expect(listJobsRes.ok).toBe(true);
+      if (listJobsRes.ok) {
+        const data = listJobsRes.data as { jobs: Array<{ id: string; status: string }> };
+        expect(data.jobs.find((j) => j.id === 'job-stuck-running-1')?.status).toBe('interrupted');
+      }
+      expect(respSessionRes.ok).toBe(true);
+      if (respSessionRes.ok) {
+        const data = respSessionRes.data as { session: { sessionId: string } | null };
+        expect(data.session?.sessionId).toBe('resp-before-stop');
+      }
+
+      let failOnce = true;
+      const flakyStorage = new LocalExtensionStorage(`pagesift_worker_fail_${Date.now()}`);
+      const baseRecover = flakyStorage.recoverInterruptedJobs.bind(flakyStorage);
+      flakyStorage.recoverInterruptedJobs = async () => {
+        if (failOnce) {
+          failOnce = false;
+          throw new Error('Simulated IndexedDB open failure');
+        }
+        return baseRecover();
+      };
+      const flakyCoordinator = new BackgroundCoordinator({
+        extensionId: extId,
+        storage: flakyStorage,
+        settingsStore,
+      });
+      try {
+        const failedRes = await flakyCoordinator.handleRuntimeMessage(
+          {
+            schemaVersion: 1,
+            requestId: 'req-init-fail-1',
+            operation: 'LIST_JOBS',
+            payload: {},
+          },
+          sender,
+        );
+        expect(failedRes.ok).toBe(false);
+        if (!failedRes.ok) {
+          expect(failedRes.error.code).toBe('STORAGE_ERROR');
+          expect(failedRes.error.message).toContain('Simulated IndexedDB open failure');
+        }
+
+        const recoveredRetryRes = await flakyCoordinator.handleRuntimeMessage(
+          {
+            schemaVersion: 1,
+            requestId: 'req-init-retry-2',
+            operation: 'LIST_JOBS',
+            payload: {},
+          },
+          sender,
+        );
+        expect(recoveredRetryRes.ok).toBe(true);
+      } finally {
+        await flakyStorage.close();
+      }
+    } finally {
+      await storage.close();
+    }
+  });
 });
