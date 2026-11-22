@@ -5,6 +5,7 @@ export const ALLOWED_NVIDIA_ENDPOINTS = [
 ] as const;
 
 export const extensionSettingsSchema = z.strictObject({
+  theme: z.enum(['system', 'light', 'dark']).default('system'),
   defaultExportFormat: z.enum(['markdown', 'json', 'html_css']).default('markdown'),
   colorFormat: z.enum(['hex', 'rgb', 'hsl', 'oklch']).default('hex'),
   spacingUnit: z.enum(['px', 'rem']).default('px'),

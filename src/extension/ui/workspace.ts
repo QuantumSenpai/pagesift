@@ -19,6 +19,15 @@ import type {
   ToolId,
 } from '../protocol/messages.js';
 import type { LocalArtifactKind } from '../storage/idb-storage.js';
+import {
+  applyThemePreference,
+  createSvgIcon,
+  formatThemeLabel,
+  nextThemePreference,
+  readCachedTheme,
+  type ThemePreference,
+} from './theme.js';
+import { renderStructuredToolResult } from './tool-renderers.js';
 
 interface ChromeWorkspaceApis {
   runtime?: {
@@ -29,13 +38,9 @@ interface ChromeWorkspaceApis {
     query: (q: {
       active: boolean;
       currentWindow: boolean;
-    }) => Promise<Array<{ id?: number; url?: string }>>;
+    }) => Promise<Array<{ id?: number; url?: string; title?: string }>>;
     create?: (props: { url: string }) => Promise<unknown>;
     sendMessage: (tabId: number, msg: RuntimeMessageEnvelope) => Promise<ExtensionMessageResponse>;
-  };
-  permissions?: {
-    contains: (perms: { origins: string[] }) => Promise<boolean>;
-    request: (perms: { origins: string[] }) => Promise<boolean>;
   };
 }
 
@@ -62,18 +67,41 @@ const TOOL_TITLES: Record<ToolId, string> = {
   inspect: '1. Inspect Element & Computed Styles',
   clone_page: '2. Clone Page (Static HTML/CSS Snapshot ZIP)',
   clone_prompt: '3. Clone Prompt Generator (Observations vs. Assumptions)',
-  design_md: '4. DESIGN.md Generator (Multi-Page Deduplication & Conflict Report)',
-  assets: '5. Assets Extractor (Images, Inline SVGs, Videos, Fonts & ZIP)',
-  colors: '6. Color Palette & Custom Properties (CSS / JSON / SCSS / Tailwind)',
+  design_md: '4. DESIGN.md Generator',
+  assets: '5. Assets Extractor (Images, SVGs, Fonts & ZIP)',
+  colors: '6. Color Palette & Design Tokens',
   fonts: '7. Typography & @font-face Inspector',
   measure: '8. Box & Element Gap Measurement',
   edit_text: '9. Reversible In-Place Text Editor',
-  capture: '10. Screenshot Capture (Visible / Area / Element / Full Page · PNG/JPEG/WebP/PDF)',
-  responsive: '11. Responsive Multi-Viewport Inspector & Scroll Sync',
+  capture: '10. Screenshot Capture (PNG / JPEG / WebP / PDF)',
+  responsive: '11. Responsive Multi-Viewport Inspector',
   swap_font: '12. Reversible Font Swap Preview',
-  arrange: '13. Reversible Element Arrange (Move / Hide / Remove)',
-  design_review: '14. Evidence-Based Design & WCAG Contrast Review',
+  arrange: '13. Reversible Element Arrange',
+  design_review: '14. Evidence-Based Design & Contrast Review',
   tech_stack: '15. Public Tech Stack Detector',
+};
+
+const TOOL_SUBTITLES: Record<ToolId, string> = {
+  inspect: 'Examine dimensions, box model, computed styles, and accessibility attributes locally.',
+  clone_page: 'Export a DOMPurify-sanitized static HTML/CSS snapshot with bundled local assets.',
+  clone_prompt:
+    'Build a structured local implementation brief distinguishing facts from assumptions.',
+  design_md: 'Extract deduplicated colors, typography, spacing, and components into DESIGN.md.',
+  assets:
+    'Discover page images, SVGs, backgrounds, and fonts, then download individually or as ZIP.',
+  colors: 'Inspect rendered swatches, custom properties, and export CSS, Tailwind, SCSS, or JSON.',
+  fonts: 'Inspect declared stacks, size/weight hierarchy, @font-face rules, and loaded status.',
+  measure: 'Measure element bounding boxes and horizontal/vertical gaps between two selectors.',
+  edit_text: 'Preview copy changes locally in the active tab with full undo, redo, and reset.',
+  capture:
+    'Capture real visible, element, cropped area, or stitched full-page screenshots and PDFs.',
+  responsive:
+    'Open extension-managed viewport windows, measure actual inner size, and sync scroll.',
+  swap_font: 'Preview alternative font families on a selected element without modifying the site.',
+  arrange: 'Move, hide, or temporarily remove elements locally to test layout changes.',
+  design_review: 'Audit typographic hierarchy, spacing scale, and WCAG contrast with evidence.',
+  tech_stack:
+    'Detect public frontend frameworks, CSS libraries, and platforms with confidence notes.',
 };
 
 const TOOL_TO_ARTIFACT_KIND: Record<ToolId, LocalArtifactKind> = {
@@ -94,6 +122,19 @@ const TOOL_TO_ARTIFACT_KIND: Record<ToolId, LocalArtifactKind> = {
   tech_stack: 'tech_stack',
 };
 
+const TOOLS_WITH_SELECTOR = new Set<ToolId>([
+  'inspect',
+  'measure',
+  'edit_text',
+  'swap_font',
+  'arrange',
+  'capture',
+]);
+const TOOLS_WITH_SECONDARY = new Set<ToolId>(['measure', 'edit_text', 'swap_font']);
+const TOOLS_WITH_MODE = new Set<ToolId>(['clone_prompt', 'arrange']);
+const TOOLS_WITH_EDIT_HISTORY = new Set<ToolId>(['edit_text', 'swap_font', 'arrange']);
+const TOOLS_WITH_AI_ENHANCE = new Set<ToolId>(['clone_prompt', 'design_md', 'design_review']);
+
 let currentTool: ToolId = 'inspect';
 let lastResultTool: ToolId | null = null;
 let lastResultData: Record<string, unknown> | null = null;
@@ -106,6 +147,8 @@ let confirmedNvidiaDigest: string | null = null;
 let confirmedNvidiaTaskType: 'enhance_clone_prompt' | 'interpret_design_review' | null = null;
 let activeJobRequestId: string | null = null;
 let pickerActive = false;
+let currentThemePref: ThemePreference = readCachedTheme();
+let lastFocusedBeforeModal: HTMLElement | null = null;
 const activeObjectUrls = new Set<string>();
 
 function getChromeApi(): ChromeWorkspaceApis {
@@ -115,7 +158,7 @@ function getChromeApi(): ChromeWorkspaceApis {
 function makeSlug(rawTitle: string): string {
   const cleaned = rawTitle
     .normalize('NFC')
-    .replace(/[/\\?%*:|"<>#]/g, '-')
+    .replace(/[/\\?%*:|"<>#\u2013\u2014]+/g, '-')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
@@ -123,16 +166,16 @@ function makeSlug(rawTitle: string): string {
   return cleaned || 'pagesift';
 }
 
-function setStatus(message: string, variant: 'neutral' | 'error' | 'success' = 'neutral'): void {
+function setStatus(
+  message: string,
+  variant: 'neutral' | 'error' | 'success' | 'warning' = 'neutral',
+): void {
   const statusEl = document.getElementById('status-message');
   if (!statusEl) {
     return;
   }
   statusEl.textContent = message;
-  statusEl.classList.remove('error', 'success');
-  if (variant !== 'neutral') {
-    statusEl.classList.add(variant);
-  }
+  statusEl.className = variant === 'neutral' ? 'status-banner' : `status-banner ${variant}`;
 }
 
 function clearNvidiaConfirmation(): void {
@@ -148,21 +191,101 @@ function setActiveJobState(requestId: string | null): void {
   activeJobRequestId = requestId;
   const cancelBtn = document.getElementById('cancel-job-btn') as HTMLButtonElement | null;
   const runBtn = document.getElementById('run-tool-btn') as HTMLButtonElement | null;
+  const progressTrack = document.getElementById('job-progress-track');
   if (cancelBtn) {
     cancelBtn.disabled = requestId === null;
   }
   if (runBtn) {
     runBtn.disabled = requestId !== null;
   }
+  progressTrack?.classList.toggle('active', requestId !== null);
 }
 
 function updateSubPanelsForTool(tool: ToolId): void {
-  const capturePanel = document.getElementById('capture-controls');
-  const responsivePanel = document.getElementById('responsive-controls');
-  const colorsPanel = document.getElementById('colors-controls');
-  capturePanel?.classList.toggle('visible', tool === 'capture');
-  responsivePanel?.classList.toggle('visible', tool === 'responsive');
-  colorsPanel?.classList.toggle('visible', tool === 'colors');
+  const selectorRow = document.getElementById('selector-controls-row');
+  const selectorInput = document.getElementById('target-selector-input') as HTMLInputElement | null;
+  const secondaryInput = document.getElementById('secondary-input') as HTMLInputElement | null;
+  const modeSelect = document.getElementById('mode-select') as HTMLSelectElement | null;
+
+  const showSelector = TOOLS_WITH_SELECTOR.has(tool);
+  const showSecondary = TOOLS_WITH_SECONDARY.has(tool);
+  const showMode = TOOLS_WITH_MODE.has(tool);
+
+  if (selectorInput) {
+    selectorInput.style.display = showSelector ? '' : 'none';
+    selectorInput.placeholder =
+      tool === 'capture'
+        ? 'Element selector for Element capture (e.g. #green-box)'
+        : tool === 'measure'
+          ? 'Primary CSS selector (e.g. #hero)'
+          : 'Target CSS selector (optional, e.g. h1, #hero, .card)';
+  }
+  if (secondaryInput) {
+    secondaryInput.style.display = showSecondary ? '' : 'none';
+    secondaryInput.placeholder =
+      tool === 'measure'
+        ? 'Secondary CSS selector (for distance measurement)'
+        : tool === 'edit_text'
+          ? 'Replacement text (reversible local preview)'
+          : 'Font family (e.g. Georgia, serif)';
+  }
+  if (modeSelect) {
+    modeSelect.style.display = showMode ? '' : 'none';
+    Array.from(modeSelect.options).forEach((opt) => {
+      const val = opt.value;
+      if (tool === 'clone_prompt') {
+        opt.hidden = !['default', 'react_tailwind', 'html_css', 'vue_css', 'generic'].includes(val);
+      } else if (tool === 'arrange') {
+        opt.hidden = !['default', 'move', 'hide', 'remove'].includes(val);
+      } else {
+        opt.hidden = false;
+      }
+    });
+  }
+  const hasSelectorRow = showSelector || showSecondary || showMode;
+  if (selectorRow) {
+    selectorRow.style.display = hasSelectorRow ? 'flex' : 'none';
+  }
+
+  const showCapture = tool === 'capture';
+  const showResponsive = tool === 'responsive';
+  const showColors = tool === 'colors';
+  const showEditHistory = TOOLS_WITH_EDIT_HISTORY.has(tool);
+  const showAi = TOOLS_WITH_AI_ENHANCE.has(tool);
+
+  const subPairs: Array<[string, boolean]> = [
+    ['capture-controls', showCapture],
+    ['responsive-controls', showResponsive],
+    ['colors-controls', showColors],
+    ['edit-history-controls', showEditHistory],
+    ['ai-controls', showAi],
+  ];
+  for (const [id, visible] of subPairs) {
+    const node = document.getElementById(id);
+    node?.classList.toggle('visible', visible);
+    node?.classList.toggle('with-divider', visible && hasSelectorRow);
+  }
+
+  const paramsCard = document.getElementById('tool-params-card');
+  if (paramsCard) {
+    const anyParamVisible =
+      hasSelectorRow || showCapture || showResponsive || showColors || showEditHistory || showAi;
+    paramsCard.style.display = anyParamVisible ? '' : 'none';
+  }
+
+  const pickerBtn = document.getElementById('toggle-picker-btn');
+  if (pickerBtn) {
+    pickerBtn.style.display = showSelector ? '' : 'none';
+  }
+
+  const titleEl = document.getElementById('active-tool-title');
+  const subtitleEl = document.getElementById('active-tool-subtitle');
+  if (titleEl) {
+    titleEl.textContent = TOOL_TITLES[tool];
+  }
+  if (subtitleEl) {
+    subtitleEl.textContent = TOOL_SUBTITLES[tool];
+  }
 }
 
 function updateActionButtons(): void {
@@ -171,12 +294,22 @@ function updateActionButtons(): void {
   const metaEl = document.getElementById('download-meta');
   if (dlBtn) {
     dlBtn.disabled = lastDownloadable === null;
-    dlBtn.textContent = lastDownloadable
-      ? `Download ${lastDownloadable.filename}`
-      : 'Download File';
+    if (lastDownloadable) {
+      const dotIdx = lastDownloadable.filename.lastIndexOf('.');
+      const extLabel =
+        dotIdx !== -1 ? lastDownloadable.filename.slice(dotIdx).toUpperCase() : 'FILE';
+      dlBtn.textContent = `Download ${extLabel}`;
+      dlBtn.title = lastDownloadable.filename;
+    } else {
+      dlBtn.textContent = 'Download File';
+      dlBtn.title = '';
+    }
+    dlBtn.prepend(createSvgIcon('download'));
   }
   if (copyBtn) {
     copyBtn.disabled = lastCopyableText === null;
+    copyBtn.textContent = 'Copy Output';
+    copyBtn.prepend(createSvgIcon('copy'));
   }
   if (metaEl) {
     if (lastDownloadable) {
@@ -199,12 +332,8 @@ function updateCapturePreviewUi(): void {
 
   if (!lastCaptureState) {
     wrap?.classList.remove('visible');
-    if (cropBtn) {
-      cropBtn.disabled = true;
-    }
-    if (annBtn) {
-      annBtn.disabled = true;
-    }
+    if (cropBtn) cropBtn.disabled = true;
+    if (annBtn) annBtn.disabled = true;
     return;
   }
 
@@ -216,14 +345,71 @@ function updateCapturePreviewUi(): void {
         : lastCaptureState.currentDataUrl;
   }
   if (meta) {
-    meta.textContent = `Captured ${lastCaptureState.width}×${lastCaptureState.height}px (${lastCaptureState.mimeType}) · Annotations: ${lastCaptureState.annotations.length}`;
+    meta.textContent = `Captured ${lastCaptureState.width}×${lastCaptureState.height}px (${lastCaptureState.mimeType}) · Callouts: ${lastCaptureState.annotations.length}`;
   }
-  if (cropBtn) {
-    cropBtn.disabled = false;
+  if (cropBtn) cropBtn.disabled = false;
+  if (annBtn) annBtn.disabled = false;
+}
+
+function triggerFileDownload(artifact: DownloadableArtifact): void {
+  const blobParts: BlobPart[] = [];
+  if (artifact.bytes) {
+    const copy = new Uint8Array(artifact.bytes.byteLength);
+    copy.set(artifact.bytes);
+    blobParts.push(copy);
+  } else {
+    blobParts.push(artifact.textContent ?? '');
   }
-  if (annBtn) {
-    annBtn.disabled = false;
+  const blob = new Blob(blobParts, { type: artifact.mimeType });
+  const objectUrl = URL.createObjectURL(blob);
+  activeObjectUrls.add(objectUrl);
+
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = artifact.filename;
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+
+  setTimeout(() => {
+    URL.revokeObjectURL(objectUrl);
+    activeObjectUrls.delete(objectUrl);
+  }, 30000);
+}
+
+async function copyTextWithFeedback(text: string, label: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    setStatus(`Copied ${label} to clipboard.`, 'success');
+  } catch (err: unknown) {
+    setStatus(
+      `Clipboard copy failed: ${err instanceof Error ? err.message : 'Permission denied'}`,
+      'error',
+    );
   }
+}
+
+function renderCurrentStructuredOutput(tool: ToolId, data: Record<string, unknown>): void {
+  const container = document.getElementById('structured-result-container');
+  if (!container) {
+    return;
+  }
+  container.textContent = '';
+  const view = renderStructuredToolResult(tool, data, {
+    onCopyText: (text, label) => {
+      void copyTextWithFeedback(text, label);
+    },
+    onDownloadSingleAsset: (filename, mimeType, bytes) => {
+      triggerFileDownload({ filename, mimeType, bytes });
+      setStatus(`Download started: ${filename}`, 'success');
+    },
+    getSelectedColorFormat: () => {
+      const sel = document.getElementById('colors-export-format') as HTMLSelectElement | null;
+      return sel?.value ?? 'cssVariables';
+    },
+  });
+  container.appendChild(view);
 }
 
 function buildDownloadableForTool(
@@ -286,15 +472,19 @@ function buildDownloadableForTool(
     const rep = data['report'] as { exports?: Record<string, string> } | undefined;
     const formatSel = document.getElementById('colors-export-format') as HTMLSelectElement | null;
     const selected = formatSel?.value ?? 'cssVariables';
-    const extMap: Record<string, { ext: string; mime: string }> = {
-      cssVariables: { ext: 'css', mime: 'text/css;charset=utf-8' },
-      tailwindV4: { ext: 'css', mime: 'text/css;charset=utf-8' },
-      tailwindV3: { ext: 'js', mime: 'text/javascript;charset=utf-8' },
-      scss: { ext: 'scss', mime: 'text/plain;charset=utf-8' },
-      json: { ext: 'json', mime: 'application/json;charset=utf-8' },
+    const exportKeyMap: Record<string, { key: string; ext: string; mime: string }> = {
+      cssVariables: { key: 'cssVariables', ext: 'css', mime: 'text/css;charset=utf-8' },
+      tailwindV4: { key: 'tailwindV4Theme', ext: 'css', mime: 'text/css;charset=utf-8' },
+      tailwindV3: { key: 'tailwindV3Config', ext: 'js', mime: 'text/javascript;charset=utf-8' },
+      scss: { key: 'scss', ext: 'scss', mime: 'text/plain;charset=utf-8' },
+      json: { key: 'json', ext: 'json', mime: 'application/json;charset=utf-8' },
     };
-    const meta = extMap[selected] ?? { ext: 'css', mime: 'text/css;charset=utf-8' };
-    const text = rep?.exports?.[selected] ?? JSON.stringify(data, null, 2);
+    const meta = exportKeyMap[selected] ?? {
+      key: 'cssVariables',
+      ext: 'css',
+      mime: 'text/css;charset=utf-8',
+    };
+    const text = rep?.exports?.[meta.key] ?? JSON.stringify(data, null, 2);
     return {
       downloadable: {
         filename: `pagesift-colors-${slug}.${meta.ext}`,
@@ -306,11 +496,9 @@ function buildDownloadableForTool(
   }
 
   if (tool === 'design_review') {
-    const rep = data['report'] as { remediationPrompt?: string } | undefined;
+    const rep = data['report'] as { localFixPrompt?: string } | undefined;
     const md =
-      typeof rep?.remediationPrompt === 'string'
-        ? rep.remediationPrompt
-        : JSON.stringify(data, null, 2);
+      typeof rep?.localFixPrompt === 'string' ? rep.localFixPrompt : JSON.stringify(data, null, 2);
     return {
       downloadable: {
         filename: `pagesift-design-review-${slug}.md`,
@@ -354,33 +542,6 @@ function buildDownloadableForTool(
   };
 }
 
-function triggerFileDownload(artifact: DownloadableArtifact): void {
-  const blobParts: BlobPart[] = [];
-  if (artifact.bytes) {
-    const copy = new Uint8Array(artifact.bytes.byteLength);
-    copy.set(artifact.bytes);
-    blobParts.push(copy);
-  } else {
-    blobParts.push(artifact.textContent ?? '');
-  }
-  const blob = new Blob(blobParts, { type: artifact.mimeType });
-  const objectUrl = URL.createObjectURL(blob);
-  activeObjectUrls.add(objectUrl);
-
-  const anchor = document.createElement('a');
-  anchor.href = objectUrl;
-  anchor.download = artifact.filename;
-  anchor.style.display = 'none';
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-
-  setTimeout(() => {
-    URL.revokeObjectURL(objectUrl);
-    activeObjectUrls.delete(objectUrl);
-  }, 30000);
-}
-
 async function resolveTargetTabId(): Promise<{ tabId: number | null; url: string }> {
   const params = new URLSearchParams(window.location.search);
   const explicitTabId = params.get('tabId');
@@ -405,24 +566,30 @@ async function resolveTargetTabId(): Promise<{ tabId: number | null; url: string
   return { tabId: null, url: 'https://example.com' };
 }
 
-async function ensureOptionalOriginPermissionIfNeeded(targetUrl: string): Promise<boolean> {
-  const chromeApi = getChromeApi();
-  if (!chromeApi.permissions) {
-    return true;
+async function updateTargetPageIdentity(): Promise<void> {
+  const labelEl = document.getElementById('target-page-label');
+  const { tabId, url } = await resolveTargetTabId();
+  if (!labelEl) {
+    return;
+  }
+  if (tabId === null) {
+    labelEl.textContent = 'No target tab bound (open from popup)';
+    return;
   }
   try {
-    const parsed = new URL(targetUrl);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return false;
-    }
-    const originPattern = `${parsed.origin}/*`;
-    const alreadyGranted = await chromeApi.permissions.contains({ origins: [originPattern] });
-    if (alreadyGranted) {
-      return true;
-    }
-    return await chromeApi.permissions.request({ origins: [originPattern] });
+    const parsed = new URL(url);
+    labelEl.textContent = `${parsed.host}${parsed.pathname} (Tab #${tabId})`;
   } catch {
-    return false;
+    labelEl.textContent = `${url} (Tab #${tabId})`;
+  }
+  try {
+    const ctx = await getBoundDocumentContext(tabId);
+    lastTargetPageUrl = ctx.pageUrl || url;
+    lastTargetPageTitle = ctx.pageTitle || 'pagesift';
+    const host = new URL(lastTargetPageUrl).host;
+    labelEl.textContent = `${ctx.pageTitle || host} · ${host}`;
+  } catch {
+    return;
   }
 }
 
@@ -590,22 +757,139 @@ function summarizeOutputForDisplay(tool: ToolId, data: Record<string, unknown>):
 
 async function refreshProjectsDropdown(): Promise<void> {
   const select = document.getElementById('project-select') as HTMLSelectElement | null;
-  if (!select) {
+  const savedList = document.getElementById('saved-work-list');
+  const selectedProjectId = select?.value || undefined;
+
+  const [projRes, jobsRes] = await Promise.all([
+    sendBackgroundMessage(
+      'LIST_PROJECTS_FROM_IDB',
+      selectedProjectId ? { projectId: selectedProjectId } : {},
+    ),
+    sendBackgroundMessage('LIST_JOBS'),
+  ]);
+
+  if (!projRes.ok) {
     return;
   }
-  const res = await sendBackgroundMessage('LIST_PROJECTS_FROM_IDB');
-  if (!res.ok) {
-    return;
-  }
-  const data = res.data as {
+  const data = projRes.data as {
     projects: Array<{ id: string; name: string }>;
+    artifacts: Array<{ id: string; title: string; kind: string; createdAt: string }>;
+    captures: Array<{
+      id: string;
+      pageTitle: string;
+      mimeType: string;
+      width: number;
+      height: number;
+      dataUrl: string;
+    }>;
   };
-  select.innerHTML = '';
-  for (const proj of data.projects) {
-    const opt = document.createElement('option');
-    opt.value = proj.id;
-    opt.textContent = proj.name;
-    select.appendChild(opt);
+  if (select) {
+    const prev = select.value;
+    select.innerHTML = '';
+    for (const proj of data.projects) {
+      const opt = document.createElement('option');
+      opt.value = proj.id;
+      opt.textContent = proj.name;
+      select.appendChild(opt);
+    }
+    if (prev && data.projects.some((p) => p.id === prev)) {
+      select.value = prev;
+    }
+  }
+
+  if (savedList) {
+    savedList.textContent = '';
+
+    const artCard = document.createElement('div');
+    artCard.className = 'card';
+    const artTitle = document.createElement('h3');
+    artTitle.className = 'card-title';
+    artTitle.textContent = `Saved Artifacts (${data.artifacts.length}) & Captures (${data.captures.length})`;
+    artCard.appendChild(artTitle);
+
+    if (data.artifacts.length === 0 && data.captures.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'muted';
+      empty.textContent = 'No saved items in this project yet.';
+      artCard.appendChild(empty);
+    } else {
+      for (const art of data.artifacts.slice(0, 6)) {
+        const row = document.createElement('div');
+        row.className = 'popup-recent-item';
+        const lbl = document.createElement('span');
+        lbl.className = 'truncate';
+        lbl.textContent = art.title;
+        const pill = document.createElement('span');
+        pill.className = 'pill';
+        pill.textContent = art.kind;
+        row.append(lbl, pill);
+        artCard.appendChild(row);
+      }
+      for (const cap of data.captures.slice(0, 4)) {
+        const row = document.createElement('div');
+        row.className = 'popup-recent-item';
+        const lbl = document.createElement('span');
+        lbl.className = 'truncate';
+        lbl.textContent = `${cap.pageTitle} (${cap.width}×${cap.height})`;
+        const dlBtn = document.createElement('button');
+        dlBtn.type = 'button';
+        dlBtn.className = 'secondary sm';
+        dlBtn.textContent = 'Download';
+        dlBtn.addEventListener('click', () => {
+          const commaIdx = cap.dataUrl.indexOf(',');
+          const bytes = decodeBase64ToBytes(cap.dataUrl.slice(commaIdx + 1));
+          const ext =
+            cap.mimeType === 'application/pdf' ? 'pdf' : (cap.mimeType.split('/')[1] ?? 'png');
+          triggerFileDownload({
+            filename: `${makeSlug(cap.pageTitle)}.${ext}`,
+            mimeType: cap.mimeType,
+            bytes,
+          });
+        });
+        row.append(lbl, dlBtn);
+        artCard.appendChild(row);
+      }
+    }
+    savedList.appendChild(artCard);
+
+    if (jobsRes.ok) {
+      const jobs = (
+        jobsRes.data as {
+          jobs: Array<{ id: string; tool: string; status: string; statusMessage: string }>;
+        }
+      ).jobs;
+      const jobsCard = document.createElement('div');
+      jobsCard.className = 'card';
+      const jt = document.createElement('h3');
+      jt.className = 'card-title';
+      jt.textContent = `Recent Background Jobs (${jobs.length})`;
+      jobsCard.appendChild(jt);
+      if (jobs.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'muted';
+        empty.textContent = 'No persisted background jobs recorded yet.';
+        jobsCard.appendChild(empty);
+      } else {
+        for (const job of jobs.slice(0, 6)) {
+          const row = document.createElement('div');
+          row.className = 'popup-recent-item';
+          const lbl = document.createElement('span');
+          lbl.className = 'truncate';
+          lbl.textContent = `${job.tool}: ${job.statusMessage}`;
+          const pill = document.createElement('span');
+          pill.className =
+            job.status === 'completed'
+              ? 'pill success'
+              : job.status === 'interrupted' || job.status === 'failed'
+                ? 'pill warning'
+                : 'pill accent';
+          pill.textContent = job.status;
+          row.append(lbl, pill);
+          jobsCard.appendChild(row);
+        }
+      }
+      savedList.appendChild(jobsCard);
+    }
   }
 }
 
@@ -694,6 +978,7 @@ async function runResponsiveOpenAction(): Promise<void> {
     lastResultData = data;
     clearNvidiaConfirmation();
     renderResponsiveSessionStatus(data['session']);
+    renderCurrentStructuredOutput('responsive', data);
     outputEl.textContent = JSON.stringify(data, null, 2);
     const built = buildDownloadableForTool('responsive', data, makeSlug(lastTargetPageTitle));
     lastDownloadable = built.downloadable;
@@ -708,6 +993,9 @@ async function runResponsiveOpenAction(): Promise<void> {
 }
 
 async function executeSelectedTool(): Promise<void> {
+  if (activeJobRequestId !== null) {
+    return;
+  }
   const outputEl = document.getElementById('tool-output');
   const selectorInput = document.getElementById('target-selector-input') as HTMLInputElement | null;
   const secondaryInput = document.getElementById('secondary-input') as HTMLInputElement | null;
@@ -796,7 +1084,6 @@ async function executeSelectedTool(): Promise<void> {
       const data = res.data as Record<string, unknown>;
       const dataUrl = typeof data['dataUrl'] === 'string' ? data['dataUrl'] : '';
       const verified = verifyCaptureBinaryAndDimensions(dataUrl);
-
       const basePngDataUrl =
         verified.mimeType === 'application/pdf'
           ? typeof data['previewPngDataUrl'] === 'string'
@@ -823,6 +1110,7 @@ async function executeSelectedTool(): Promise<void> {
       lastDownloadable = built.downloadable;
       lastCopyableText = built.copyableText;
       updateActionButtons();
+      renderCurrentStructuredOutput('capture', data);
       outputEl.textContent = summarizeOutputForDisplay('capture', data);
       setStatus(
         `Captured ${verified.width}×${verified.height}px (${verified.mimeType}, ${verified.byteLength.toLocaleString()} bytes).`,
@@ -832,7 +1120,6 @@ async function executeSelectedTool(): Promise<void> {
     }
 
     if (currentTool === 'clone_page') {
-      await ensureOptionalOriginPermissionIfNeeded(lastTargetPageUrl);
       const res = await sendBackgroundMessage(
         'RUN_CLONE_PAGE',
         {},
@@ -848,13 +1135,13 @@ async function executeSelectedTool(): Promise<void> {
       lastDownloadable = built.downloadable;
       lastCopyableText = built.copyableText;
       updateActionButtons();
+      renderCurrentStructuredOutput('clone_page', data);
       outputEl.textContent = summarizeOutputForDisplay('clone_page', data);
       setStatus('Static HTML/CSS snapshot ZIP ready to download.', 'success');
       return;
     }
 
     if (currentTool === 'assets') {
-      await ensureOptionalOriginPermissionIfNeeded(lastTargetPageUrl);
       const res = await sendBackgroundMessage(
         'RUN_ASSETS_EXTRACT',
         { includeZip: true },
@@ -870,6 +1157,7 @@ async function executeSelectedTool(): Promise<void> {
       lastDownloadable = built.downloadable;
       lastCopyableText = built.copyableText;
       updateActionButtons();
+      renderCurrentStructuredOutput('assets', data);
       outputEl.textContent = summarizeOutputForDisplay('assets', data);
       const packagedCount =
         typeof data['packagedFilesCount'] === 'number' ? data['packagedFilesCount'] : 0;
@@ -906,12 +1194,8 @@ async function executeSelectedTool(): Promise<void> {
       payload['selector'] = selector;
     }
     if (currentTool === 'measure') {
-      if (selector) {
-        payload['primarySelector'] = selector;
-      }
-      if (secondary) {
-        payload['secondarySelector'] = secondary;
-      }
+      if (selector) payload['primarySelector'] = selector;
+      if (secondary) payload['secondarySelector'] = secondary;
     }
     if (currentTool === 'edit_text') {
       payload['text'] = secondary ?? 'Edited Preview Text';
@@ -944,6 +1228,7 @@ async function executeSelectedTool(): Promise<void> {
     lastDownloadable = built.downloadable;
     lastCopyableText = built.copyableText;
     updateActionButtons();
+    renderCurrentStructuredOutput(currentTool, data);
     outputEl.textContent = summarizeOutputForDisplay(currentTool, data);
     setStatus(`Completed ${TOOL_TITLES[currentTool]} locally.`, 'success');
   } catch (err: unknown) {
@@ -1006,6 +1291,7 @@ async function applyCaptureTransform(
     lastCopyableText = null;
     updateCapturePreviewUi();
     updateActionButtons();
+    renderCurrentStructuredOutput('capture', updatedData);
     outputEl.textContent = summarizeOutputForDisplay('capture', updatedData);
     setStatus(
       `Updated capture (${verified.width}×${verified.height}px, ${verified.mimeType}).`,
@@ -1017,9 +1303,98 @@ async function applyCaptureTransform(
   }
 }
 
-function initWorkspaceUi(): void {
+function closeMobileRail(): void {
+  const rail = document.getElementById('tool-dock');
+  const backdrop = document.getElementById('rail-backdrop');
+  const menuBtn = document.getElementById('mobile-menu-btn');
+  rail?.classList.remove('open');
+  backdrop?.classList.remove('open');
+  menuBtn?.setAttribute('aria-expanded', 'false');
+}
+
+function openNvidiaModal(digest: string, previewText: string): void {
+  const modal = document.getElementById('nvidia-preview-modal');
+  const digestEl = document.getElementById('nvidia-modal-digest');
+  const payloadEl = document.getElementById('nvidia-modal-payload');
+  const closeBtn = document.getElementById('nvidia-modal-close-btn');
+  lastFocusedBeforeModal =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  if (digestEl) {
+    digestEl.textContent = `Payload Digest: ${digest.slice(0, 24)}...`;
+  }
+  if (payloadEl) {
+    payloadEl.textContent = previewText;
+  }
+  modal?.classList.add('open');
+  closeBtn?.focus();
+}
+
+function closeNvidiaModal(): void {
+  const modal = document.getElementById('nvidia-preview-modal');
+  modal?.classList.remove('open');
+  lastFocusedBeforeModal?.focus();
+  lastFocusedBeforeModal = null;
+}
+
+function selectActiveTool(tool: ToolId): void {
+  currentTool = tool;
   const dock = document.getElementById('tool-dock');
-  const titleEl = document.getElementById('active-tool-title');
+  dock?.querySelectorAll('button[data-tool]').forEach((b) => {
+    const isSelected = b.getAttribute('data-tool') === tool;
+    b.classList.toggle('active', isSelected);
+    b.setAttribute('aria-current', isSelected ? 'page' : 'false');
+  });
+  updateSubPanelsForTool(tool);
+  if (tool !== 'capture') {
+    document.getElementById('capture-preview-wrap')?.classList.remove('visible');
+  } else if (lastCaptureState) {
+    updateCapturePreviewUi();
+  }
+  closeMobileRail();
+}
+
+function attachNavIcons(): void {
+  document.querySelectorAll<HTMLButtonElement>('#tool-dock button[data-tool]').forEach((btn) => {
+    const tool = btn.getAttribute('data-tool');
+    if (tool) {
+      btn.prepend(createSvgIcon(tool));
+    }
+  });
+  const menuBtn = document.getElementById('mobile-menu-btn');
+  menuBtn?.prepend(createSvgIcon('menu'));
+}
+
+function updateThemeButton(): void {
+  const btn = document.getElementById('theme-toggle-btn');
+  if (btn) {
+    btn.textContent = formatThemeLabel(currentThemePref);
+  }
+}
+
+async function syncThemeFromSettings(): Promise<void> {
+  applyThemePreference(currentThemePref);
+  updateThemeButton();
+  try {
+    const res = await sendBackgroundMessage('GET_SETTINGS');
+    if (res.ok) {
+      const s = (res.data as { settings?: { theme?: ThemePreference } }).settings;
+      if (s?.theme === 'system' || s?.theme === 'light' || s?.theme === 'dark') {
+        currentThemePref = s.theme;
+        applyThemePreference(currentThemePref);
+        updateThemeButton();
+      }
+    }
+  } catch {
+    return;
+  }
+}
+
+function initWorkspaceUi(): void {
+  attachNavIcons();
+  void syncThemeFromSettings();
+  void updateTargetPageIdentity();
+
+  const dock = document.getElementById('tool-dock');
   const outputEl = document.getElementById('tool-output');
 
   window.addEventListener('pagehide', () => {
@@ -1027,6 +1402,58 @@ function initWorkspaceUi(): void {
       URL.revokeObjectURL(url);
     }
     activeObjectUrls.clear();
+  });
+
+  document.getElementById('mobile-menu-btn')?.addEventListener('click', () => {
+    const rail = document.getElementById('tool-dock');
+    const backdrop = document.getElementById('rail-backdrop');
+    const menuBtn = document.getElementById('mobile-menu-btn');
+    const nextOpen = !rail?.classList.contains('open');
+    rail?.classList.toggle('open', nextOpen);
+    backdrop?.classList.toggle('open', nextOpen);
+    menuBtn?.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+    if (nextOpen) {
+      rail?.querySelector<HTMLButtonElement>('button[data-tool].active')?.focus();
+    }
+  });
+
+  document.getElementById('rail-backdrop')?.addEventListener('click', () => {
+    closeMobileRail();
+  });
+
+  document.getElementById('theme-toggle-btn')?.addEventListener('click', () => {
+    void (async () => {
+      currentThemePref = nextThemePreference(currentThemePref);
+      applyThemePreference(currentThemePref);
+      updateThemeButton();
+      await sendBackgroundMessage('UPDATE_SETTINGS', {
+        settings: { theme: currentThemePref },
+      }).catch(() => undefined);
+    })();
+  });
+
+  document.getElementById('toggle-projects-btn')?.addEventListener('click', () => {
+    const drawer = document.getElementById('projects-drawer');
+    const btn = document.getElementById('toggle-projects-btn');
+    const nextOpen = !drawer?.classList.contains('visible');
+    drawer?.classList.toggle('visible', nextOpen);
+    btn?.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+    if (nextOpen) {
+      void refreshProjectsDropdown();
+    }
+  });
+
+  document.getElementById('close-projects-btn')?.addEventListener('click', () => {
+    document.getElementById('projects-drawer')?.classList.remove('visible');
+    document.getElementById('toggle-projects-btn')?.setAttribute('aria-expanded', 'false');
+  });
+
+  document.getElementById('refresh-projects-btn')?.addEventListener('click', () => {
+    void refreshProjectsDropdown();
+  });
+
+  document.getElementById('project-select')?.addEventListener('change', () => {
+    void refreshProjectsDropdown();
   });
 
   dock?.addEventListener('click', (e) => {
@@ -1038,15 +1465,7 @@ function initWorkspaceUi(): void {
     if (!tool) {
       return;
     }
-    currentTool = tool;
-    clearNvidiaConfirmation();
-    for (const b of Array.from(dock.querySelectorAll('button[data-tool]'))) {
-      b.classList.toggle('active', b === btn);
-    }
-    if (titleEl) {
-      titleEl.textContent = TOOL_TITLES[tool];
-    }
-    updateSubPanelsForTool(tool);
+    selectActiveTool(tool);
   });
 
   document.getElementById('run-tool-btn')?.addEventListener('click', () => {
@@ -1072,7 +1491,9 @@ function initWorkspaceUi(): void {
         ? chromeApi.runtime.getURL('workspace.html')
         : 'workspace.html';
       const target =
-        tabId !== null ? `${base}?tabId=${tabId}&targetUrl=${encodeURIComponent(url)}` : base;
+        tabId !== null
+          ? `${base}?tabId=${tabId}&targetUrl=${encodeURIComponent(url)}&tool=${currentTool}`
+          : base;
       if (chromeApi.tabs?.create) {
         await chromeApi.tabs.create({ url: target });
       } else {
@@ -1098,21 +1519,11 @@ function initWorkspaceUi(): void {
   });
 
   document.getElementById('copy-result-btn')?.addEventListener('click', () => {
-    void (async () => {
-      if (!lastCopyableText) {
-        setStatus('No text output available to copy.', 'error');
-        return;
-      }
-      try {
-        await navigator.clipboard.writeText(lastCopyableText);
-        setStatus('Copied output text to clipboard.', 'success');
-      } catch (err: unknown) {
-        setStatus(
-          `Clipboard copy failed: ${err instanceof Error ? err.message : 'Permission denied'}`,
-          'error',
-        );
-      }
-    })();
+    if (!lastCopyableText) {
+      setStatus('No text output available to copy.', 'error');
+      return;
+    }
+    void copyTextWithFeedback(lastCopyableText, 'output text');
   });
 
   document.getElementById('colors-export-format')?.addEventListener('change', () => {
@@ -1125,6 +1536,7 @@ function initWorkspaceUi(): void {
       lastDownloadable = built.downloadable;
       lastCopyableText = built.copyableText;
       updateActionButtons();
+      renderCurrentStructuredOutput('colors', lastResultData);
     }
   });
 
@@ -1173,7 +1585,7 @@ function initWorkspaceUi(): void {
     const label =
       (document.getElementById('ann-label') as HTMLInputElement | null)?.value.trim() || 'Note';
     const color =
-      (document.getElementById('ann-color') as HTMLInputElement | null)?.value || '#ef4444';
+      (document.getElementById('ann-color') as HTMLInputElement | null)?.value || '#0f766e';
     void applyCaptureTransform(undefined, {
       x: Math.max(0, Number.isFinite(x) ? x : 16),
       y: Math.max(0, Number.isFinite(y) ? y : 16),
@@ -1195,6 +1607,7 @@ function initWorkspaceUi(): void {
       if (res.ok) {
         const d = res.data as { session?: unknown };
         renderResponsiveSessionStatus(d.session);
+        renderCurrentStructuredOutput('responsive', d);
         setStatus(`Responsive scroll sync ${enabled ? 'enabled' : 'disabled'}.`, 'success');
       }
     })();
@@ -1206,6 +1619,7 @@ function initWorkspaceUi(): void {
       if (res.ok) {
         const d = res.data as { closedWindowIds: number[] };
         renderResponsiveSessionStatus(null);
+        renderCurrentStructuredOutput('responsive', { session: null });
         setStatus(
           `Closed ${d.closedWindowIds.length} extension-managed responsive preview window(s).`,
           'success',
@@ -1231,8 +1645,9 @@ function initWorkspaceUi(): void {
       if (res.ok) {
         setStatus(
           pickerActive
-            ? `On-page picker active for ${currentTool} (press Escape on page to cancel).`
+            ? `On-page picker & dock active for ${currentTool} (press Escape on page to dismiss).`
             : 'On-page picker deactivated.',
+          'success',
         );
       }
     })();
@@ -1251,6 +1666,10 @@ function initWorkspaceUi(): void {
         }
         const docCtx = await getBoundDocumentContext(tabId);
         const res = await sendContentMessage(tabId, op, {}, docCtx.documentId);
+        if (res.ok) {
+          renderCurrentStructuredOutput(currentTool, res.data as Record<string, unknown>);
+          setStatus(`Applied ${op.replace('EDIT_', '').toLowerCase()} locally.`, 'success');
+        }
         if (outputEl) {
           outputEl.textContent = JSON.stringify(res, null, 2);
         }
@@ -1297,6 +1716,7 @@ function initWorkspaceUi(): void {
             : `Save error: ${res.error.message}`,
           res.ok ? 'success' : 'error',
         );
+        void refreshProjectsDropdown();
         return;
       }
 
@@ -1314,6 +1734,7 @@ function initWorkspaceUi(): void {
         res.ok ? 'Saved tool result to local IndexedDB.' : `Save error: ${res.error.message}`,
         res.ok ? 'success' : 'error',
       );
+      void refreshProjectsDropdown();
     })();
   });
 
@@ -1325,6 +1746,31 @@ function initWorkspaceUi(): void {
     'fonts',
     'inspect',
   ]);
+
+  const executeConfirmedNvidiaSend = async (): Promise<void> => {
+    if (!confirmedNvidiaDigest || !confirmedNvidiaTaskType) {
+      setStatus('Preview NVIDIA data egress first before transmitting.', 'error');
+      return;
+    }
+    const sourceTool =
+      lastResultTool && supportedNvidiaSourceTools.has(lastResultTool)
+        ? lastResultTool
+        : 'clone_prompt';
+    const res = await sendBackgroundMessage('RUN_NVIDIA_ENHANCEMENT', {
+      previewOnly: false,
+      taskType: confirmedNvidiaTaskType,
+      sourceTool,
+      toolOutput: lastResultData ?? { pageTitle: lastTargetPageTitle },
+      confirmedPayloadDigest: confirmedNvidiaDigest,
+    });
+    if (outputEl) {
+      outputEl.textContent = JSON.stringify(res, null, 2);
+    }
+    setStatus(
+      res.ok ? 'Optional NVIDIA AI enhancement completed.' : `NVIDIA error: ${res.error.message}`,
+      res.ok ? 'success' : 'error',
+    );
+  };
 
   document.getElementById('preview-nvidia-btn')?.addEventListener('click', () => {
     void (async () => {
@@ -1343,15 +1789,21 @@ function initWorkspaceUi(): void {
         toolOutput: lastResultData ?? { pageTitle: lastTargetPageTitle },
       });
       if (res.ok) {
-        const data = res.data as { payloadDigest: string };
+        const data = res.data as {
+          payloadDigest: string;
+          egressPreview?: { serializedPayloadPreview?: string };
+        };
         confirmedNvidiaDigest = data.payloadDigest;
         confirmedNvidiaTaskType = taskType;
         const runBtn = document.getElementById('run-nvidia-btn') as HTMLButtonElement | null;
         if (runBtn) {
           runBtn.disabled = false;
         }
+        const previewText =
+          data.egressPreview?.serializedPayloadPreview ?? JSON.stringify(res.data, null, 2);
+        openNvidiaModal(data.payloadDigest, previewText);
         setStatus(
-          'Reviewed exact NVIDIA data egress payload. Click Confirm & Enhance to transmit.',
+          'Reviewed exact NVIDIA data egress payload. Confirm in dialog or click Confirm & Enhance.',
           'success',
         );
       } else {
@@ -1365,41 +1817,68 @@ function initWorkspaceUi(): void {
   });
 
   document.getElementById('run-nvidia-btn')?.addEventListener('click', () => {
-    void (async () => {
-      if (!confirmedNvidiaDigest || !confirmedNvidiaTaskType) {
-        setStatus('Preview NVIDIA data egress first before transmitting.', 'error');
-        return;
-      }
-      const sourceTool =
-        lastResultTool && supportedNvidiaSourceTools.has(lastResultTool)
-          ? lastResultTool
-          : 'clone_prompt';
-      const res = await sendBackgroundMessage('RUN_NVIDIA_ENHANCEMENT', {
-        previewOnly: false,
-        taskType: confirmedNvidiaTaskType,
-        sourceTool,
-        toolOutput: lastResultData ?? { pageTitle: lastTargetPageTitle },
-        confirmedPayloadDigest: confirmedNvidiaDigest,
-      });
-      if (outputEl) {
-        outputEl.textContent = JSON.stringify(res, null, 2);
-      }
-      setStatus(
-        res.ok ? 'Optional NVIDIA AI enhancement completed.' : `NVIDIA error: ${res.error.message}`,
-        res.ok ? 'success' : 'error',
-      );
-    })();
+    void executeConfirmedNvidiaSend();
   });
 
-  updateSubPanelsForTool(currentTool);
+  document.getElementById('nvidia-modal-confirm-btn')?.addEventListener('click', () => {
+    closeNvidiaModal();
+    void executeConfirmedNvidiaSend();
+  });
+
+  document.getElementById('nvidia-modal-close-btn')?.addEventListener('click', () => {
+    closeNvidiaModal();
+  });
+
+  document.getElementById('nvidia-modal-cancel-btn')?.addEventListener('click', () => {
+    closeNvidiaModal();
+  });
+
+  document.getElementById('nvidia-preview-modal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      closeNvidiaModal();
+    }
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      if (document.getElementById('nvidia-preview-modal')?.classList.contains('open')) {
+        event.preventDefault();
+        closeNvidiaModal();
+        return;
+      }
+      if (document.getElementById('tool-dock')?.classList.contains('open')) {
+        event.preventDefault();
+        closeMobileRail();
+        document.getElementById('mobile-menu-btn')?.focus();
+      }
+    }
+  });
+
+  const params = new URLSearchParams(window.location.search);
+  const initialToolParam = params.get('tool') as ToolId | null;
+  if (initialToolParam && initialToolParam in TOOL_TITLES) {
+    selectActiveTool(initialToolParam);
+  } else {
+    selectActiveTool(currentTool);
+  }
+
   updateActionButtons();
   void refreshProjectsDropdown();
   void sendBackgroundMessage('GET_RESPONSIVE_SESSION').then((res) => {
     if (res.ok) {
       const d = res.data as { session?: unknown };
       renderResponsiveSessionStatus(d.session);
+      if (currentTool === 'responsive' && d.session) {
+        renderCurrentStructuredOutput('responsive', d);
+      }
     }
   });
+
+  if (params.get('autorun') === '1' && initialToolParam && initialToolParam !== 'responsive') {
+    setTimeout(() => {
+      void executeSelectedTool();
+    }, 120);
+  }
 }
 
 if (typeof document !== 'undefined') {

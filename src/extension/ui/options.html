@@ -3,133 +3,206 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PageSift Options — Local Preferences, Storage &amp; Optional NVIDIA AI</title>
-    <style>
-      :root {
-        --bg: #0f172a;
-        --panel: #1e293b;
-        --border: #334155;
-        --text: #f8fafc;
-        --muted: #94a3b8;
-        --accent: #3b82f6;
-      }
-      body {
-        margin: 0;
-        padding: 24px;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        background: var(--bg);
-        color: var(--text);
-        font-size: 13px;
-        max-width: 880px;
-      }
-      section {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 16px;
-        margin-bottom: 16px;
-      }
-      h1 {
-        font-size: 20px;
-        margin-top: 0;
-      }
-      h2 {
-        font-size: 15px;
-        margin-top: 0;
-      }
-      .row {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-        margin-bottom: 10px;
-        flex-wrap: wrap;
-      }
-      select,
-      input,
-      button,
-      textarea {
-        background: #0f172a;
-        color: var(--text);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 7px 10px;
-        font-size: 12px;
-      }
-      button {
-        cursor: pointer;
-        background: var(--accent);
-        border-color: var(--accent);
-        font-weight: 600;
-      }
-      pre {
-        background: #020617;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 10px;
-        overflow: auto;
-        max-height: 240px;
-      }
-    </style>
+    <title>PageSift Options — Preferences, Storage &amp; Optional AI</title>
+    <link rel="stylesheet" href="design-system.css" />
   </head>
   <body>
-    <h1>PageSift Extension Options</h1>
+    <a class="skip-link" href="#options-main">Skip to options</a>
+    <div class="options-container">
+      <header class="options-header">
+        <div class="brand-lockup">
+          <img class="brand-icon" src="icons/icon-48.png" alt="PageSift icon" width="28" height="28" style="width: 28px; height: 28px;" />
+          <div>
+            <div class="brand-name" style="font-size: 18px;">PageSift Options</div>
+            <div class="muted" style="font-size: 12px;">
+              Free, open-source, local-first web inspection toolkit
+            </div>
+          </div>
+        </div>
+        <div class="control-row">
+          <a class="btn-link" href="workspace.html">Open Workspace</a>
+        </div>
+      </header>
 
-    <section>
-      <h2>1. Default Tool &amp; Export Preferences (chrome.storage.local)</h2>
-      <div class="row">
-        <label for="opt-export-format">Export Format:</label>
-        <select id="opt-export-format">
-          <option value="markdown">Markdown</option>
-          <option value="json">JSON</option>
-          <option value="html_css">HTML + CSS</option>
-        </select>
+      <main id="options-main" style="display: flex; flex-direction: column; gap: 14px;">
+        <div id="options-status-banner" class="status-banner" role="status" aria-live="polite">
+          Settings are stored locally in extension-owned storage. All 15 tools work offline without login.
+        </div>
 
-        <label for="opt-color-format">Color Format:</label>
-        <select id="opt-color-format">
-          <option value="hex">HEX</option>
-          <option value="rgb">RGB</option>
-          <option value="hsl">HSL</option>
-          <option value="oklch">OKLCH</option>
-        </select>
+        <section class="card" aria-labelledby="sec-prefs-title">
+          <div class="card-header">
+            <h2 id="sec-prefs-title" class="card-title">1. Appearance &amp; Tool Preferences</h2>
+            <span class="pill">chrome.storage.local</span>
+          </div>
+          <div class="options-grid">
+            <div class="field-group">
+              <label for="opt-theme">Color Theme</label>
+              <select id="opt-theme">
+                <option value="system">System Default</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="opt-export-format">Default Export Format</label>
+              <select id="opt-export-format">
+                <option value="markdown">Markdown</option>
+                <option value="json">JSON</option>
+                <option value="html_css">HTML + CSS</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="opt-color-format">Preferred Color Format</label>
+              <select id="opt-color-format">
+                <option value="hex">HEX</option>
+                <option value="rgb">RGB</option>
+                <option value="hsl">HSL</option>
+                <option value="oklch">OKLCH</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="opt-tailwind-version">Tailwind Token Export</label>
+              <select id="opt-tailwind-version">
+                <option value="v4">Tailwind v4 (@theme)</option>
+                <option value="v3">Tailwind v3 (theme.extend)</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="opt-prompt-target">Default Clone Prompt Target</label>
+              <select id="opt-prompt-target">
+                <option value="react_tailwind">React + Tailwind</option>
+                <option value="html_css">HTML + CSS</option>
+                <option value="vue_css">Vue 3 + CSS</option>
+                <option value="generic">Generic</option>
+              </select>
+            </div>
+          </div>
+          <div class="control-row" style="margin-top: 12px;">
+            <div class="field-group" style="flex: 1 1 260px;">
+              <label for="opt-nvidia-model">Optional NVIDIA Catalog Model ID</label>
+              <input
+                id="opt-nvidia-model"
+                type="text"
+                placeholder="e.g. meta/llama-3.1-70b-instruct"
+              />
+            </div>
+            <button id="save-settings-btn" type="button" style="align-self: flex-end;">
+              Save Preferences
+            </button>
+          </div>
+        </section>
 
-        <label for="opt-tailwind-version">Tailwind Export:</label>
-        <select id="opt-tailwind-version">
-          <option value="v4">Tailwind v4 (@theme)</option>
-          <option value="v3">Tailwind v3 (theme.extend)</option>
-        </select>
+        <section class="card" aria-labelledby="sec-nvidia-title">
+          <div class="card-header">
+            <h2 id="sec-nvidia-title" class="card-title">2. Optional NVIDIA NIM API Key (BYOK)</h2>
+            <span id="nvidia-key-status" class="pill">Status: Checking...</span>
+          </div>
+          <p class="muted" style="margin: 0 0 10px;">
+            Every local PageSift tool works with zero AI credentials. If you optionally configure your own NVIDIA API key, it is stored solely in in-memory <code>chrome.storage.session</code> for this browser session, clears when the browser closes, and is never written to inspected pages, backups, or logs. Browser session storage is not a hardware vault.
+          </p>
+          <div class="control-row">
+            <label class="sr-only" for="nvidia-api-key-input">NVIDIA API key</label>
+            <input
+              id="nvidia-api-key-input"
+              type="password"
+              autocomplete="off"
+              placeholder="Enter user-owned NVIDIA API key (nvapi-...)"
+              style="flex: 1 1 280px;"
+            />
+            <button id="set-nvidia-key-btn" type="button">Set Session Key</button>
+            <button id="clear-nvidia-key-btn" class="secondary" type="button">Clear Key</button>
+          </div>
+        </section>
+
+        <section class="card" aria-labelledby="sec-storage-title">
+          <div class="card-header">
+            <h2 id="sec-storage-title" class="card-title">3. Local IndexedDB Storage, Backup &amp; Reset</h2>
+            <span class="pill">Extension-Owned IndexedDB</span>
+          </div>
+          <div class="stat-grid" id="options-usage-grid" style="margin-bottom: 12px;">
+            <div class="stat-tile">
+              <span class="stat-label">Projects</span>
+              <span class="stat-value" id="stat-projects">-</span>
+            </div>
+            <div class="stat-tile">
+              <span class="stat-label">Saved Artifacts</span>
+              <span class="stat-value" id="stat-artifacts">-</span>
+            </div>
+            <div class="stat-tile">
+              <span class="stat-label">Saved Captures</span>
+              <span class="stat-value" id="stat-captures">-</span>
+            </div>
+            <div class="stat-tile">
+              <span class="stat-label">Estimated Size</span>
+              <span class="stat-value" id="stat-bytes">-</span>
+            </div>
+          </div>
+
+          <div class="control-row" style="margin-bottom: 10px;">
+            <button id="refresh-usage-btn" class="secondary" type="button">Refresh Usage</button>
+            <button id="export-backup-btn" class="secondary" type="button">Load Backup JSON</button>
+            <button id="download-backup-btn" type="button">Download Backup File</button>
+            <label class="btn-link" for="import-backup-file" style="cursor: pointer;">
+              Choose Backup File
+              <input id="import-backup-file" type="file" accept="application/json,.json" class="sr-only" />
+            </label>
+            <button id="import-backup-btn" class="secondary" type="button">Import JSON Backup</button>
+            <button id="clear-all-data-btn" class="danger-outline" type="button">Clear All Local Data</button>
+          </div>
+
+          <div class="field-group" style="margin-bottom: 10px;">
+            <label for="backup-json-textarea">Backup JSON Payload (excludes session NVIDIA API keys)</label>
+            <textarea
+              id="backup-json-textarea"
+              rows="5"
+              placeholder="Exported backup JSON appears here, or paste valid PageSift backup JSON before clicking Import."
+            ></textarea>
+          </div>
+
+          <details class="raw-disclosure">
+            <summary>Storage &amp; Action Diagnostics (JSON)</summary>
+            <pre id="options-output" class="code-box">Loading storage status...</pre>
+          </details>
+        </section>
+
+        <section class="card" aria-labelledby="sec-privacy-title">
+          <div class="card-header">
+            <h2 id="sec-privacy-title" class="card-title">4. Local Processing vs. Optional External Requests</h2>
+          </div>
+          <div class="kv-grid">
+            <div class="notice-bar">
+              <strong>100% Local by Default:</strong> Inspect, Clone Prompt, Design MD, Colors, Fonts, Measure, Edit Text, Capture, Responsive, Swap Font, Arrange, Design Review, and Tech Stack run locally without contacting any server.
+            </div>
+            <div class="notice-bar">
+              <strong>Explicit User-Initiated Fetches:</strong> Assets ZIP and Clone Page ZIP fetch page-referenced HTTP(S) resources in the background service worker using <code>credentials: 'omit'</code>. Optional NVIDIA AI enhancement requires explicit payload preview confirmation.
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="confirm-clear-modal" class="modal-backdrop" role="presentation">
+      <div
+        class="modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-clear-title"
+        aria-describedby="confirm-clear-desc"
+      >
+        <h3 id="confirm-clear-title" class="card-title" style="font-size: 15px;">
+          Delete all local PageSift projects, artifacts, captures, and jobs?
+        </h3>
+        <p id="confirm-clear-desc" class="muted" style="margin: 0;">
+          This permanently clears PageSift’s local IndexedDB database. Export a backup file first if you want to keep your saved work. Your session NVIDIA key and inspected websites are unaffected.
+        </p>
+        <div class="control-row" style="justify-content: flex-end;">
+          <button id="confirm-clear-cancel-btn" class="secondary" type="button">Cancel</button>
+          <button id="confirm-clear-proceed-btn" class="danger" type="button">
+            Yes, Clear Local Data
+          </button>
+        </div>
       </div>
-      <div class="row">
-        <label for="opt-nvidia-model">Optional NVIDIA Catalog Model ID:</label>
-        <input id="opt-nvidia-model" type="text" placeholder="e.g. meta/llama-3.1-70b-instruct" style="min-width: 260px;" />
-        <button id="save-settings-btn" type="button">Save Preferences</button>
-      </div>
-    </section>
-
-    <section>
-      <h2>2. Optional NVIDIA NIM Session API Key (chrome.storage.session)</h2>
-      <p style="color: var(--muted); margin-top: 0;">
-        All 15 PageSift tools work locally without an API key. If you choose to use NVIDIA AI enhancement, your key is stored only in in-memory <code>chrome.storage.session</code> for the current browser session and is never written to inspected pages, logs, or backup files. Browser storage is not a hardware security vault.
-      </p>
-      <div class="row">
-        <input id="nvidia-api-key-input" type="password" placeholder="Enter user-owned NVIDIA API key (nvapi-...)" style="min-width: 300px;" />
-        <button id="set-nvidia-key-btn" type="button">Set Session Key</button>
-        <button id="clear-nvidia-key-btn" type="button">Clear Key</button>
-        <span id="nvidia-key-status">Status: Checking...</span>
-      </div>
-    </section>
-
-    <section>
-      <h2>3. Local IndexedDB Storage Usage, Backup &amp; Restore</h2>
-      <div class="row">
-        <button id="refresh-usage-btn" type="button">Refresh Usage</button>
-        <button id="export-backup-btn" type="button">Export JSON Backup</button>
-        <button id="download-backup-btn" type="button">Download Backup File</button>
-        <button id="import-backup-btn" type="button">Import JSON Backup</button>
-        <button id="clear-all-data-btn" type="button" style="background: #ef4444; border-color: #ef4444;">Clear All Local Data</button>
-      </div>
-      <textarea id="backup-json-textarea" rows="5" style="width: 100%; margin-bottom: 8px;" placeholder="Backup JSON appears here on export, or paste JSON here before clicking Import"></textarea>
-      <pre id="options-output">Loading storage status...</pre>
-    </section>
+    </div>
 
     <script src="options.js"></script>
   </body>

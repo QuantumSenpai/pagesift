@@ -840,6 +840,7 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       restartedWorker = await context.waitForEvent('serviceworker', { timeout: 15000 });
     }
     const restartedExtId = restartedWorker.url().split('/')[2] ?? extensionId;
+    extensionId = restartedExtId;
     const afterRestartPage = await context.newPage();
     await afterRestartPage.goto(`chrome-extension://${restartedExtId}/workspace.html`, {
       waitUntil: 'domcontentloaded',
@@ -881,4 +882,418 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
     }
     await afterRestartPage.close();
   }, 120000);
+
+  it('recovers interrupted running jobs and preserves responsive session & saved data after real MV3 service-worker stop and message wake', async () => {
+    if (!context) {
+      throw new Error('BrowserContext not initialized');
+    }
+
+    const adminPage = await context.newPage();
+    adminPage.on('pageerror', (err) => {
+      runtimeErrors.push(`sw-recovery-page: ${err.message}`);
+    });
+    await adminPage.goto(`chrome-extension://${extensionId}/workspace.html`, {
+      waitUntil: 'domcontentloaded',
+    });
+
+    await adminPage.evaluate(
+      async ({ targetUrl }: { targetUrl: string }) => {
+        const chromeRuntime = (
+          globalThis as unknown as {
+            chrome: {
+              runtime: {
+                sendMessage: (msg: unknown) => Promise<ExtensionMessageResponse>;
+              };
+            };
+          }
+        ).chrome.runtime;
+
+        await chromeRuntime.sendMessage({
+          schemaVersion: 1,
+          requestId: 'sw-seed-artifact-1',
+          operation: 'SAVE_ARTIFACT_TO_IDB',
+          payload: {
+            projectId: 'proj-default',
+            kind: 'inspect_report',
+            title: 'Pre-Stop Survival Artifact',
+            artifactPayload: { kept: true },
+          },
+        });
+
+        await chromeRuntime.sendMessage({
+          schemaVersion: 1,
+          requestId: 'sw-seed-responsive-1',
+          operation: 'RUN_RESPONSIVE_INSPECT',
+          payload: {
+            targetUrl,
+            openWindows: true,
+            syncEnabled: true,
+            customViewports: [
+              { id: 'mobile-sm', label: 'Mobile', width: 375, height: 700, category: 'mobile' },
+            ],
+          },
+        });
+
+        await new Promise<void>((resolve, reject) => {
+          const openReq = indexedDB.open('pagesift_local_db', 2);
+          openReq.onerror = () => {
+            reject(new Error('Failed to open pagesift_local_db'));
+          };
+          openReq.onsuccess = () => {
+            const db = openReq.result;
+            const tx = db.transaction('jobs', 'readwrite');
+            const nowIso = new Date().toISOString();
+            tx.objectStore('jobs').put({
+              id: 'job-running-before-sw-stop',
+              tool: 'clone_page',
+              tabId: 1,
+              documentId: 'doc-pre-stop',
+              status: 'running',
+              progressPercent: 45,
+              statusMessage: 'In flight before worker stop',
+              createdAt: nowIso,
+              updatedAt: nowIso,
+            });
+            tx.oncomplete = () => {
+              db.close();
+              resolve();
+            };
+            tx.onerror = () => {
+              db.close();
+              reject(new Error('Failed to seed running job'));
+            };
+          };
+        });
+      },
+      { targetUrl: fixtureUrl },
+    );
+
+    const cdp = await context.newCDPSession(adminPage);
+    const waitForCdp = <T>(
+      eventName: string,
+      predicate: (params: Record<string, unknown>) => T | undefined,
+    ): Promise<T> =>
+      new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`Timed out waiting for CDP event ${eventName}`));
+        }, 12000);
+        const handler = (params: Record<string, unknown>): void => {
+          const val = predicate(params);
+          if (val !== undefined) {
+            clearTimeout(timer);
+            cdp.off(eventName as never, handler as never);
+            resolve(val);
+          }
+        };
+        cdp.on(eventName as never, handler as never);
+      });
+
+    const versionPromise = waitForCdp('ServiceWorker.workerVersionUpdated', (params) => {
+      const versions = params['versions'] as
+        | Array<{ versionId?: string; scriptURL?: string; runningStatus?: string }>
+        | undefined;
+      const match = versions?.find(
+        (v) =>
+          (v.scriptURL ?? '').includes(extensionId) &&
+          typeof v.versionId === 'string' &&
+          v.runningStatus === 'running',
+      );
+      return match?.versionId;
+    });
+    await cdp.send('ServiceWorker.enable');
+    const versionId = await versionPromise;
+
+    const stoppedPromise = waitForCdp('ServiceWorker.workerVersionUpdated', (params) => {
+      const versions = params['versions'] as
+        | Array<{ versionId?: string; runningStatus?: string }>
+        | undefined;
+      const match = versions?.find(
+        (v) => v.versionId === versionId && v.runningStatus === 'stopped',
+      );
+      return match ? true : undefined;
+    });
+    await cdp.send('ServiceWorker.stopWorker', { versionId });
+    await stoppedPromise;
+
+    const wakeResult = await adminPage.evaluate(async () => {
+      const chromeRuntime = (
+        globalThis as unknown as {
+          chrome: {
+            runtime: {
+              sendMessage: (msg: unknown) => Promise<ExtensionMessageResponse>;
+            };
+          };
+        }
+      ).chrome.runtime;
+
+      const jobRes = await chromeRuntime.sendMessage({
+        schemaVersion: 1,
+        requestId: 'wake-check-job-status',
+        operation: 'GET_JOB_STATUS',
+        payload: { jobId: 'job-running-before-sw-stop' },
+      });
+      const respRes = await chromeRuntime.sendMessage({
+        schemaVersion: 1,
+        requestId: 'wake-check-responsive',
+        operation: 'GET_RESPONSIVE_SESSION',
+        payload: {},
+      });
+      const usageRes = await chromeRuntime.sendMessage({
+        schemaVersion: 1,
+        requestId: 'wake-check-usage',
+        operation: 'GET_STORAGE_USAGE',
+        payload: {},
+      });
+      const closeRes = await chromeRuntime.sendMessage({
+        schemaVersion: 1,
+        requestId: 'wake-close-responsive',
+        operation: 'CLOSE_RESPONSIVE_SESSION',
+        payload: {},
+      });
+      return { jobRes, respRes, usageRes, closeRes };
+    });
+
+    expect(wakeResult.jobRes.ok).toBe(true);
+    if (wakeResult.jobRes.ok) {
+      const job = (wakeResult.jobRes.data as { job: { status: string } | null }).job;
+      expect(job?.status).toBe('interrupted');
+    }
+    expect(wakeResult.respRes.ok).toBe(true);
+    if (wakeResult.respRes.ok) {
+      const session = (
+        wakeResult.respRes.data as { session: { windows: Array<{ windowId: number }> } | null }
+      ).session;
+      expect(session).not.toBeNull();
+      expect(session?.windows.length).toBeGreaterThanOrEqual(1);
+    }
+    expect(wakeResult.usageRes.ok).toBe(true);
+    if (wakeResult.usageRes.ok) {
+      const usage = (wakeResult.usageRes.data as { usage: { artifactCount: number } }).usage;
+      expect(usage.artifactCount).toBeGreaterThanOrEqual(1);
+    }
+    expect(wakeResult.closeRes.ok).toBe(true);
+    expect(runtimeErrors).toEqual([]);
+
+    await cdp.detach();
+    await adminPage.close();
+  }, 60000);
+
+  it('verifies redesigned popup-to-workspace handoff, structured views, theme persistence, dialog accessibility, on-page dock, and responsive layouts', async () => {
+    if (!context) {
+      throw new Error('BrowserContext not initialized');
+    }
+
+    const fixturePage = await context.newPage();
+    await fixturePage.goto(fixtureUrl, { waitUntil: 'networkidle' });
+
+    const probePage = await context.newPage();
+    await probePage.goto(`chrome-extension://${extensionId}/workspace.html`, {
+      waitUntil: 'domcontentloaded',
+    });
+    const tabId = await probePage.evaluate(async () => {
+      const chromeTabs = (
+        globalThis as unknown as {
+          chrome: {
+            tabs: {
+              query: (q: object) => Promise<Array<{ id?: number }>>;
+              sendMessage: (
+                id: number,
+                msg: unknown,
+              ) => Promise<{ ok?: boolean; data?: { pageUrl?: string } }>;
+            };
+          };
+        }
+      ).chrome.tabs;
+      const tabs = await chromeTabs.query({});
+      for (const tab of tabs) {
+        if (typeof tab.id !== 'number') continue;
+        try {
+          const r = await chromeTabs.sendMessage(tab.id, {
+            schemaVersion: 1,
+            requestId: 'find-ui-fixture',
+            operation: 'GET_DOCUMENT_CONTEXT',
+            payload: {},
+          });
+          if (r.ok && r.data?.pageUrl?.includes('/fixture')) return tab.id;
+        } catch {
+          continue;
+        }
+      }
+      return null;
+    });
+    await probePage.close();
+    expect(typeof tabId).toBe('number');
+    const targetTabId = tabId as number;
+
+    const popupPage = await context.newPage();
+    await popupPage.setViewportSize({ width: 380, height: 560 });
+    await popupPage.goto(
+      `chrome-extension://${extensionId}/popup.html?tabId=${targetTabId}&targetUrl=${encodeURIComponent(fixtureUrl)}`,
+      { waitUntil: 'domcontentloaded' },
+    );
+    await popupPage.waitForFunction(
+      () =>
+        (document.getElementById('popup-page-status-text')?.textContent ?? '').includes(
+          'Ready to inspect',
+        ),
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
+    const popupCheck = await popupPage.evaluate(() => {
+      const iconImg = document.querySelector<HTMLImageElement>('img.brand-icon');
+      return {
+        overflowX: document.documentElement.scrollWidth > window.innerWidth + 1,
+        iconLoaded: Boolean(iconImg && iconImg.complete && iconImg.naturalWidth > 0),
+      };
+    });
+    expect(popupCheck.overflowX).toBe(false);
+    expect(popupCheck.iconLoaded).toBe(true);
+
+    const [handedOffWorkspace] = await Promise.all([
+      context.waitForEvent('page'),
+      popupPage.click('button[data-quick-tool="colors"]'),
+    ]);
+    await popupPage.close();
+    await handedOffWorkspace.waitForLoadState('domcontentloaded');
+    await waitForWorkspaceStatus(handedOffWorkspace, 'Completed ', 15000);
+
+    const swatchesCount = await handedOffWorkspace.locator('.swatch-card').count();
+    expect(swatchesCount).toBeGreaterThan(0);
+
+    await handedOffWorkspace.selectOption('#colors-export-format', 'tailwindV4');
+    const twPreview =
+      (await handedOffWorkspace
+        .locator('#structured-result-container pre.code-box')
+        .textContent()) ?? '';
+    expect(twPreview).toContain('@theme');
+
+    await handedOffWorkspace.click('button[data-tool="inspect"]');
+    await handedOffWorkspace.fill('#target-selector-input', '#hero-title');
+    await handedOffWorkspace.click('#run-tool-btn');
+    await waitForWorkspaceStatus(handedOffWorkspace, 'Completed ', 10000);
+    expect(await handedOffWorkspace.locator('.box-model').count()).toBe(1);
+
+    await handedOffWorkspace.click('#toggle-picker-btn');
+    await waitForWorkspaceStatus(handedOffWorkspace, 'On-page picker', 10000);
+    const dockPresent = await fixturePage.evaluate(() => {
+      const host = document.getElementById('pagesift-root-host');
+      return Boolean(
+        host &&
+        host.getAttribute('data-pagesift-root') === 'true' &&
+        host.shadowRoot?.querySelector('[role="toolbar"]'),
+      );
+    });
+    expect(dockPresent).toBe(true);
+    await fixturePage.keyboard.press('Escape');
+    const dockDismissed = await fixturePage.evaluate(
+      () => document.getElementById('pagesift-root-host') === null,
+    );
+    expect(dockDismissed).toBe(true);
+
+    const optionsPage = await context.newPage();
+    await optionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
+      waitUntil: 'domcontentloaded',
+    });
+    await optionsPage.fill('#opt-nvidia-model', 'meta/llama-3.1-70b-instruct');
+    await optionsPage.click('#save-settings-btn');
+    await optionsPage.waitForFunction(
+      () =>
+        (document.getElementById('options-status-banner')?.textContent ?? '').includes(
+          'Preferences saved',
+        ),
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
+    await optionsPage.click('#clear-all-data-btn');
+    expect(
+      await optionsPage.evaluate(
+        () => document.getElementById('confirm-clear-modal')?.classList.contains('open') === true,
+      ),
+    ).toBe(true);
+    await optionsPage.keyboard.press('Escape');
+    expect(
+      await optionsPage.evaluate(
+        () => document.getElementById('confirm-clear-modal')?.classList.contains('open') === false,
+      ),
+    ).toBe(true);
+    await optionsPage.close();
+
+    await handedOffWorkspace.bringToFront();
+    await handedOffWorkspace.click('button[data-tool="clone_prompt"]');
+    await handedOffWorkspace.click('#run-tool-btn');
+    await waitForWorkspaceStatus(handedOffWorkspace, 'Completed ', 10000);
+    await handedOffWorkspace.click('#preview-nvidia-btn');
+    await handedOffWorkspace.waitForFunction(
+      () => document.getElementById('nvidia-preview-modal')?.classList.contains('open') === true,
+      undefined,
+      { polling: 100, timeout: 10000 },
+    );
+    const modalFocusInDialog = await handedOffWorkspace.evaluate(
+      () => document.activeElement?.id === 'nvidia-modal-close-btn',
+    );
+    expect(modalFocusInDialog).toBe(true);
+    await handedOffWorkspace.keyboard.press('Escape');
+    const modalClosedAndRestored = await handedOffWorkspace.evaluate(() => ({
+      closed: document.getElementById('nvidia-preview-modal')?.classList.contains('open') === false,
+      focusedId: document.activeElement?.id ?? '',
+    }));
+    expect(modalClosedAndRestored.closed).toBe(true);
+    expect(modalClosedAndRestored.focusedId).toBe('preview-nvidia-btn');
+
+    const beforeTheme = await handedOffWorkspace.evaluate(
+      () => document.documentElement.getAttribute('data-theme-pref') ?? 'system',
+    );
+    await handedOffWorkspace.click('#theme-toggle-btn');
+    const toggledTheme = await handedOffWorkspace.evaluate(
+      () => document.documentElement.getAttribute('data-theme-pref') ?? 'system',
+    );
+    expect(toggledTheme).not.toBe(beforeTheme);
+    await handedOffWorkspace.reload({ waitUntil: 'domcontentloaded' });
+    await handedOffWorkspace.waitForFunction(
+      (expected: string) => document.documentElement.getAttribute('data-theme-pref') === expected,
+      toggledTheme,
+      { polling: 100, timeout: 10000 },
+    );
+
+    const viewports = [
+      { width: 360, height: 740 },
+      { width: 390, height: 844 },
+      { width: 768, height: 1024 },
+      { width: 1280, height: 800 },
+      { width: 1440, height: 900 },
+      { width: 640, height: 400 },
+    ];
+    for (const vp of viewports) {
+      await handedOffWorkspace.setViewportSize(vp);
+      const layoutMetrics = await handedOffWorkspace.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        innerWidth: window.innerWidth,
+        menuVisible:
+          getComputedStyle(document.getElementById('mobile-menu-btn') as HTMLElement).display !==
+          'none',
+      }));
+      expect(layoutMetrics.scrollWidth).toBeLessThanOrEqual(layoutMetrics.innerWidth + 1);
+      if (vp.width < 900) {
+        expect(layoutMetrics.menuVisible).toBe(true);
+      }
+    }
+
+    await handedOffWorkspace.setViewportSize({ width: 360, height: 740 });
+    await handedOffWorkspace.click('#mobile-menu-btn');
+    expect(
+      await handedOffWorkspace.evaluate(
+        () => document.getElementById('tool-dock')?.classList.contains('open') === true,
+      ),
+    ).toBe(true);
+    await handedOffWorkspace.keyboard.press('Escape');
+    expect(
+      await handedOffWorkspace.evaluate(
+        () => document.getElementById('tool-dock')?.classList.contains('open') === false,
+      ),
+    ).toBe(true);
+
+    expect(runtimeErrors).toEqual([]);
+    await handedOffWorkspace.close();
+    await fixturePage.close();
+  }, 90000);
 });

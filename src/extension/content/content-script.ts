@@ -102,8 +102,14 @@ export class ContentScriptRuntime {
   private selectedElement: Element | null = null;
   private secondaryElement: Element | null = null;
   private overlayHost: HTMLElement | null = null;
-  private highlightBox: HTMLElement | null = null;
-  private badgeBox: HTMLElement | null = null;
+  private hoverBox: HTMLElement | null = null;
+  private hoverBadge: HTMLElement | null = null;
+  private selectedBox: HTMLElement | null = null;
+  private selectedBadge: HTMLElement | null = null;
+  private measureLineBox: HTMLElement | null = null;
+  private measureBadge: HTMLElement | null = null;
+  private onPageDock: HTMLElement | null = null;
+  private dockStatusEl: HTMLElement | null = null;
   private rafPending = false;
   private lastPointerTarget: Element | null = null;
   private readonly activeAbortControllers = new Map<string, AbortController>();
@@ -260,19 +266,81 @@ export class ContentScriptRuntime {
 
     raf(() => {
       this.rafPending = false;
-      const el = this.lastPointerTarget ?? target;
-      if (!el.isConnected) {
-        return;
-      }
-      const rect = el.getBoundingClientRect();
       this.ensureOverlayDom();
-      if (this.highlightBox && this.badgeBox) {
-        this.highlightBox.style.transform = `translate(${Math.round(rect.left)}px, ${Math.round(rect.top)}px)`;
-        this.highlightBox.style.width = `${Math.max(0, Math.round(rect.width))}px`;
-        this.highlightBox.style.height = `${Math.max(0, Math.round(rect.height))}px`;
-        this.highlightBox.style.display = 'block';
-        this.badgeBox.textContent = `${buildShortSelector(el)} (${Math.round(rect.width)}×${Math.round(rect.height)})`;
+      const hoverEl = this.lastPointerTarget ?? target;
+      if (hoverEl.isConnected && this.hoverBox && this.hoverBadge) {
+        const rect = hoverEl.getBoundingClientRect();
+        this.hoverBox.style.transform = `translate(${Math.round(rect.left)}px, ${Math.round(rect.top)}px)`;
+        this.hoverBox.style.width = `${Math.max(0, Math.round(rect.width))}px`;
+        this.hoverBox.style.height = `${Math.max(0, Math.round(rect.height))}px`;
+        this.hoverBox.style.display = hoverEl === this.selectedElement ? 'none' : 'block';
+        this.hoverBadge.style.top =
+          rect.top < 28 ? `${Math.max(4, Math.round(rect.height) + 4)}px` : '-24px';
+        this.hoverBadge.textContent = `${buildShortSelector(hoverEl)} · ${Math.round(rect.width)}×${Math.round(rect.height)}`;
       }
+      if (this.selectedBox && this.selectedBadge) {
+        if (this.selectedElement && this.selectedElement.isConnected) {
+          const sRect = this.selectedElement.getBoundingClientRect();
+          this.selectedBox.style.transform = `translate(${Math.round(sRect.left)}px, ${Math.round(sRect.top)}px)`;
+          this.selectedBox.style.width = `${Math.max(0, Math.round(sRect.width))}px`;
+          this.selectedBox.style.height = `${Math.max(0, Math.round(sRect.height))}px`;
+          this.selectedBox.style.display = 'block';
+          this.selectedBadge.style.top =
+            sRect.top < 28 ? `${Math.max(4, Math.round(sRect.height) + 4)}px` : '-24px';
+          this.selectedBadge.textContent = `Selected: ${buildShortSelector(this.selectedElement)} · ${Math.round(sRect.width)}×${Math.round(sRect.height)}`;
+        } else {
+          this.selectedBox.style.display = 'none';
+        }
+      }
+      if (this.measureLineBox && this.measureBadge) {
+        if (
+          this.activeTool === 'measure' &&
+          this.selectedElement &&
+          this.selectedElement.isConnected &&
+          this.secondaryElement &&
+          this.secondaryElement.isConnected
+        ) {
+          const a = this.selectedElement.getBoundingClientRect();
+          const b = this.secondaryElement.getBoundingClientRect();
+          const hGap = Math.max(
+            0,
+            Math.round(
+              a.right < b.left ? b.left - a.right : b.right < a.left ? a.left - b.right : 0,
+            ),
+          );
+          const vGap = Math.max(
+            0,
+            Math.round(
+              a.bottom < b.top ? b.top - a.bottom : b.bottom < a.top ? a.top - b.bottom : 0,
+            ),
+          );
+          const midX = Math.round((a.left + a.width / 2 + (b.left + b.width / 2)) / 2);
+          const midY = Math.round((a.top + a.height / 2 + (b.top + b.height / 2)) / 2);
+          this.measureLineBox.style.transform = `translate(${midX}px, ${midY}px)`;
+          this.measureLineBox.style.display = 'block';
+          this.measureBadge.textContent = `Gap: ${hGap}px H · ${vGap}px V`;
+        } else {
+          this.measureLineBox.style.display = 'none';
+        }
+      }
+      this.updateOnPageDockState();
+    });
+  }
+
+  private updateOnPageDockState(): void {
+    if (!this.dockStatusEl || !this.onPageDock) {
+      return;
+    }
+    const toolName = this.activeTool ?? 'idle';
+    const selLabel =
+      this.selectedElement && this.selectedElement.isConnected
+        ? buildShortSelector(this.selectedElement)
+        : 'Click an element';
+    this.dockStatusEl.textContent = `${toolName.replace('_', ' ')} · ${selLabel}`;
+    this.onPageDock.querySelectorAll<HTMLButtonElement>('button[data-dock-tool]').forEach((btn) => {
+      const active = btn.getAttribute('data-dock-tool') === this.activeTool;
+      btn.style.backgroundColor = active ? '#0f766e' : 'transparent';
+      btn.style.color = active ? '#ffffff' : '#cbd5e1';
     });
   }
 
@@ -292,42 +360,196 @@ export class ContentScriptRuntime {
     host.style.pointerEvents = 'none';
 
     const shadow = host.attachShadow({ mode: 'open' });
-    const box = this.doc.createElement('div');
-    box.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
-    box.style.position = 'fixed';
-    box.style.top = '0';
-    box.style.left = '0';
-    box.style.border = '2px solid #3b82f6';
-    box.style.backgroundColor = 'rgba(59, 130, 246, 0.12)';
-    box.style.pointerEvents = 'none';
-    box.style.boxSizing = 'border-box';
-    box.style.display = 'none';
 
-    const badge = this.doc.createElement('div');
-    badge.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
-    badge.style.position = 'absolute';
-    badge.style.top = '-24px';
-    badge.style.left = '0';
-    badge.style.backgroundColor = '#0f172a';
-    badge.style.color = '#f8fafc';
-    badge.style.fontFamily = 'monospace';
-    badge.style.fontSize = '11px';
-    badge.style.padding = '2px 6px';
-    badge.style.borderRadius = '4px';
-    badge.style.whiteSpace = 'nowrap';
+    const hoverBox = this.doc.createElement('div');
+    hoverBox.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+    hoverBox.style.position = 'fixed';
+    hoverBox.style.top = '0';
+    hoverBox.style.left = '0';
+    hoverBox.style.border = '1.5px dashed #14b8a6';
+    hoverBox.style.backgroundColor = 'rgba(20, 184, 166, 0.1)';
+    hoverBox.style.pointerEvents = 'none';
+    hoverBox.style.boxSizing = 'border-box';
+    hoverBox.style.display = 'none';
 
-    box.appendChild(badge);
-    shadow.appendChild(box);
+    const hoverBadge = this.doc.createElement('div');
+    hoverBadge.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+    hoverBadge.style.position = 'absolute';
+    hoverBadge.style.top = '-24px';
+    hoverBadge.style.left = '0';
+    hoverBadge.style.backgroundColor = '#0f172a';
+    hoverBadge.style.color = '#f8fafc';
+    hoverBadge.style.border = '1px solid #14b8a6';
+    hoverBadge.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+    hoverBadge.style.fontSize = '11px';
+    hoverBadge.style.padding = '2px 6px';
+    hoverBadge.style.borderRadius = '4px';
+    hoverBadge.style.whiteSpace = 'nowrap';
+    hoverBox.appendChild(hoverBadge);
+
+    const selectedBox = this.doc.createElement('div');
+    selectedBox.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+    selectedBox.style.position = 'fixed';
+    selectedBox.style.top = '0';
+    selectedBox.style.left = '0';
+    selectedBox.style.border = '2px solid #2dd4bf';
+    selectedBox.style.boxShadow =
+      '0 0 0 1px rgba(15, 23, 42, 0.85), inset 0 0 0 1px rgba(15, 23, 42, 0.45)';
+    selectedBox.style.backgroundColor = 'rgba(45, 212, 191, 0.14)';
+    selectedBox.style.pointerEvents = 'none';
+    selectedBox.style.boxSizing = 'border-box';
+    selectedBox.style.display = 'none';
+
+    const selectedBadge = this.doc.createElement('div');
+    selectedBadge.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+    selectedBadge.style.position = 'absolute';
+    selectedBadge.style.top = '-24px';
+    selectedBadge.style.left = '0';
+    selectedBadge.style.backgroundColor = '#0f172a';
+    selectedBadge.style.color = '#f8fafc';
+    selectedBadge.style.border = '1px solid #2dd4bf';
+    selectedBadge.style.boxShadow = '0 4px 12px rgba(2, 6, 23, 0.45)';
+    selectedBadge.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+    selectedBadge.style.fontSize = '11px';
+    selectedBadge.style.fontWeight = '600';
+    selectedBadge.style.padding = '2px 7px';
+    selectedBadge.style.borderRadius = '4px';
+    selectedBadge.style.whiteSpace = 'nowrap';
+    selectedBox.appendChild(selectedBadge);
+
+    const measureLineBox = this.doc.createElement('div');
+    measureLineBox.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+    measureLineBox.style.position = 'fixed';
+    measureLineBox.style.top = '0';
+    measureLineBox.style.left = '0';
+    measureLineBox.style.pointerEvents = 'none';
+    measureLineBox.style.display = 'none';
+
+    const measureBadge = this.doc.createElement('div');
+    measureBadge.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+    measureBadge.style.backgroundColor = '#0f172a';
+    measureBadge.style.color = '#2dd4bf';
+    measureBadge.style.border = '1px solid #14b8a6';
+    measureBadge.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+    measureBadge.style.fontSize = '11px';
+    measureBadge.style.fontWeight = '600';
+    measureBadge.style.padding = '3px 7px';
+    measureBadge.style.borderRadius = '999px';
+    measureBadge.style.whiteSpace = 'nowrap';
+    measureBadge.style.transform = 'translate(-50%, -50%)';
+    measureLineBox.appendChild(measureBadge);
+
+    const dock = this.doc.createElement('div');
+    dock.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+    dock.setAttribute('role', 'toolbar');
+    dock.setAttribute('aria-label', 'PageSift on-page dock');
+    dock.style.position = 'fixed';
+    dock.style.right = '16px';
+    dock.style.bottom = '16px';
+    dock.style.display = 'flex';
+    dock.style.alignItems = 'center';
+    dock.style.gap = '6px';
+    dock.style.padding = '6px 10px';
+    dock.style.borderRadius = '999px';
+    dock.style.backgroundColor = '#0f172a';
+    dock.style.color = '#f8fafc';
+    dock.style.border = '1px solid #334155';
+    dock.style.boxShadow = '0 10px 28px rgba(2, 6, 23, 0.45)';
+    dock.style.fontFamily = 'system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
+    dock.style.fontSize = '12px';
+    dock.style.pointerEvents = 'auto';
+
+    const brandDot = this.doc.createElement('span');
+    brandDot.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+    brandDot.style.width = '8px';
+    brandDot.style.height = '8px';
+    brandDot.style.borderRadius = '50%';
+    brandDot.style.backgroundColor = '#14b8a6';
+    dock.appendChild(brandDot);
+
+    const statusEl = this.doc.createElement('span');
+    statusEl.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+    statusEl.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+    statusEl.style.fontSize = '11px';
+    statusEl.style.color = '#e2e8f0';
+    statusEl.style.maxWidth = '180px';
+    statusEl.style.overflow = 'hidden';
+    statusEl.style.textOverflow = 'ellipsis';
+    statusEl.style.whiteSpace = 'nowrap';
+    statusEl.textContent = 'PageSift';
+    dock.appendChild(statusEl);
+
+    const dockTools: Array<{ id: ToolId; label: string }> = [
+      { id: 'inspect', label: 'Inspect' },
+      { id: 'measure', label: 'Measure' },
+      { id: 'edit_text', label: 'Edit' },
+      { id: 'arrange', label: 'Arrange' },
+    ];
+    for (const item of dockTools) {
+      const btn = this.doc.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+      btn.setAttribute('data-dock-tool', item.id);
+      btn.textContent = item.label;
+      btn.style.border = '1px solid #334155';
+      btn.style.borderRadius = '999px';
+      btn.style.padding = '3px 8px';
+      btn.style.fontSize = '11px';
+      btn.style.fontWeight = '600';
+      btn.style.cursor = 'pointer';
+      btn.style.backgroundColor = 'transparent';
+      btn.style.color = '#cbd5e1';
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.activeTool = item.id;
+        this.updateOnPageDockState();
+      });
+      dock.appendChild(btn);
+    }
+
+    const closeBtn = this.doc.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.setAttribute(PAGESIFT_ROOT_ATTR, 'true');
+    closeBtn.setAttribute('aria-label', 'Dismiss PageSift overlay (Escape)');
+    closeBtn.textContent = 'Esc';
+    closeBtn.style.border = '1px solid #475569';
+    closeBtn.style.borderRadius = '999px';
+    closeBtn.style.padding = '3px 8px';
+    closeBtn.style.fontSize = '11px';
+    closeBtn.style.fontWeight = '600';
+    closeBtn.style.cursor = 'pointer';
+    closeBtn.style.backgroundColor = '#1e293b';
+    closeBtn.style.color = '#f8fafc';
+    closeBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.deactivateInteractiveTools();
+    });
+    dock.appendChild(closeBtn);
+
+    shadow.appendChild(hoverBox);
+    shadow.appendChild(selectedBox);
+    shadow.appendChild(measureLineBox);
+    shadow.appendChild(dock);
     this.doc.documentElement.appendChild(host);
 
     this.overlayHost = host;
-    this.highlightBox = box;
-    this.badgeBox = badge;
+    this.hoverBox = hoverBox;
+    this.hoverBadge = hoverBadge;
+    this.selectedBox = selectedBox;
+    this.selectedBadge = selectedBadge;
+    this.measureLineBox = measureLineBox;
+    this.measureBadge = measureBadge;
+    this.onPageDock = dock;
+    this.dockStatusEl = statusEl;
+    this.updateOnPageDockState();
   }
 
   public activateInteractiveTool(tool: ToolId): void {
     this.activeTool = tool;
     this.ensureOverlayDom();
+    this.updateOnPageDockState();
     this.doc.addEventListener('mousemove', this.handlePointerMove, true);
     this.doc.addEventListener('click', this.handleClick, true);
   }
@@ -341,8 +563,14 @@ export class ContentScriptRuntime {
       this.overlayHost.remove();
     }
     this.overlayHost = null;
-    this.highlightBox = null;
-    this.badgeBox = null;
+    this.hoverBox = null;
+    this.hoverBadge = null;
+    this.selectedBox = null;
+    this.selectedBadge = null;
+    this.measureLineBox = null;
+    this.measureBadge = null;
+    this.onPageDock = null;
+    this.dockStatusEl = null;
   }
 
   private resolveTargetElement(selector?: unknown): Element {

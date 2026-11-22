@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PageSift</title>
+    <link rel="stylesheet" href="design-system.css" />
+  </head>
+  <body class="popup-body">
+    <header class="popup-header">
+      <div class="brand-lockup">
+        <img class="brand-icon" src="icons/icon-32.png" alt="PageSift icon" width="24" height="24" />
+        <span class="brand-name">PageSift</span>
+        <span class="pill accent">Local-First</span>
+      </div>
+      <div class="control-row">
+        <button id="popup-theme-btn" class="ghost sm" type="button" aria-label="Switch color theme">
+          Theme: System
+        </button>
+        <a class="btn-link sm" href="options.html" target="_blank" rel="noopener">Options</a>
+      </div>
+    </header>
+
+    <section class="popup-page-card" aria-label="Active page status">
+      <div class="card-header" style="margin-bottom: 0;">
+        <span class="pill" id="popup-page-status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="popup-page-status-text">Checking tab...</span>
+        </span>
+        <span class="muted" style="font-size: 11px;">No login required</span>
+      </div>
+      <div id="popup-page-title" class="popup-page-title truncate">Inspecting current tab</div>
+      <div id="popup-page-url" class="popup-page-url truncate">...</div>
+      <div id="popup-restricted-notice" class="notice-bar" style="display: none;" role="alert">
+        Browser-internal or non-HTTP pages cannot be inspected or captured by extensions. Switch to an <code>http://</code> or <code>https://</code> tab, or open Workspace to view saved local projects.
+      </div>
+    </section>
+
+    <div class="control-row" style="flex-direction: column; align-items: stretch;">
+      <button id="popup-open-workspace-btn" type="button" style="min-height: 36px;">
+        Open Persistent Workspace
+      </button>
+      <button id="popup-toggle-dock-btn" class="secondary" type="button">
+        Toggle On-Page Inspector Dock
+      </button>
+    </div>
+
+    <section aria-label="Quick tool launch">
+      <div class="rail-group-label" style="padding-left: 2px;">Quick Launch in Workspace</div>
+      <div class="popup-actions-grid" id="popup-quick-grid">
+        <button type="button" class="secondary popup-action-btn" data-quick-tool="inspect">
+          Inspect Element
+        </button>
+        <button type="button" class="secondary popup-action-btn" data-quick-tool="capture">
+          Capture Page
+        </button>
+        <button type="button" class="secondary popup-action-btn" data-quick-tool="colors">
+          Extract Colors
+        </button>
+        <button type="button" class="secondary popup-action-btn" data-quick-tool="assets">
+          Download Assets
+        </button>
+        <button type="button" class="secondary popup-action-btn" data-quick-tool="design_md">
+          Generate DESIGN.md
+        </button>
+        <button type="button" class="secondary popup-action-btn" data-quick-tool="clone_page">
+          Clone Page ZIP
+        </button>
+      </div>
+    </section>
+
+    <section aria-label="Recent local work">
+      <div class="card-header" style="margin-bottom: 6px;">
+        <span class="rail-group-label" style="padding: 0;">Recent Local Work</span>
+        <span id="popup-storage-summary" class="muted" style="font-size: 11px;">Loading...</span>
+      </div>
+      <div id="popup-recent-list" class="popup-recent-list">
+        <div class="muted" style="font-size: 11.5px;">Loading local projects...</div>
+      </div>
+    </section>
+
+    <div id="popup-status-msg" class="muted" role="status" style="font-size: 11.5px;">
+      Persistent Workspace keeps captures and ZIP exports active even if this popup closes.
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
