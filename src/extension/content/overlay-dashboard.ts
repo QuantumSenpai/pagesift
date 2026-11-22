@@ -447,7 +447,7 @@ export class OnPageOverlayDashboard {
   }
 
   public handleToolbarActionClick(): 'expanded' | 'minimized' | 'closed' {
-    if (this.mode === 'closed') {
+    if (this.mode !== 'expanded') {
       this.openExpanded(false);
       return 'expanded';
     }

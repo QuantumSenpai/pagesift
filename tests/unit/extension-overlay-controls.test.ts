@@ -40,6 +40,12 @@ describe('Overlay edit controls', () => {
     expect(overlay.handleToolbarActionClick()).toBe('expanded');
     expect(overlay.isPipMenuOpen()).toBe(false);
 
+    overlay.minimize('example.com');
+    expect(overlay.getMode()).toBe('minimized');
+    expect(overlay.handleToolbarActionClick()).toBe('expanded');
+    expect(overlay.getMode()).toBe('expanded');
+    expect(overlay.isPipMenuOpen()).toBe(false);
+
     shadow.querySelector<HTMLButtonElement>('button[data-overlay-bar-tool="responsive"]')?.click();
     expect(shadow.querySelector('.ps-drawer.ps-drawer-wide.open')).not.toBeNull();
     expect(shadow.querySelectorAll('iframe[name="pagesift-responsive-frame"]').length).toBe(1);

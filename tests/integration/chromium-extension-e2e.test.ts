@@ -1970,6 +1970,35 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       ),
     ).toBe(true);
 
+    const manifestCheck = JSON.parse(
+      fs.readFileSync(path.join(EXTENSION_DIR, 'manifest.json'), 'utf8'),
+    ) as { permissions: string[] };
+    expect(manifestCheck.permissions).toContain('scripting');
+
+    const scriptingInjectionOk = await handedOffWorkspace.evaluate(async (tid: number) => {
+      const chromeApi = (
+        globalThis as unknown as {
+          chrome: {
+            scripting?: {
+              executeScript: (arg: {
+                target: { tabId: number };
+                files: string[];
+              }) => Promise<unknown>;
+            };
+          };
+        }
+      ).chrome;
+      if (!chromeApi.scripting?.executeScript) {
+        return false;
+      }
+      await chromeApi.scripting.executeScript({
+        target: { tabId: tid },
+        files: ['content-script.js'],
+      });
+      return true;
+    }, targetTabId);
+    expect(scriptingInjectionOk).toBe(true);
+
     expect(runtimeErrors).toEqual([]);
     await handedOffWorkspace.close();
     await fixturePage.close();

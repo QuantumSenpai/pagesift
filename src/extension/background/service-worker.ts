@@ -83,6 +83,7 @@ export interface BackgroundEnvironmentAdapters {
   settingsStore: ExtensionSettingsStore;
   sessionStateArea?: KeyValueArea;
   sendToTab?: (tabId: number, message: RuntimeMessageEnvelope) => Promise<ExtensionMessageResponse>;
+  injectContentScript?: (tabId: number) => Promise<void>;
   getTabInfo?: (tabId: number) => Promise<TargetTabInfo | null>;
   activateTabAndWindow?: (tabId: number, windowId: number) => Promise<void>;
   captureVisibleTab?: (windowId: number | undefined, format: 'png' | 'jpeg') => Promise<string>;
@@ -342,15 +343,62 @@ export class BackgroundCoordinator {
     return saved;
   }
 
+  private async sendToTabWithAutoInject(
+    tabId: number,
+    message: RuntimeMessageEnvelope,
+    knownUrl?: string,
+  ): Promise<ExtensionMessageResponse> {
+    if (!this.env.sendToTab) {
+      throw new Error('sendToTab adapter is unavailable');
+    }
+    let firstError: unknown = null;
+    try {
+      const initialRes = await this.env.sendToTab(tabId, message);
+      if (initialRes.ok) {
+        return initialRes;
+      }
+      if (message.documentId || !this.env.injectContentScript) {
+        return initialRes;
+      }
+    } catch (err: unknown) {
+      firstError = err;
+    }
+
+    if (message.documentId || !this.env.injectContentScript) {
+      throw firstError instanceof Error
+        ? firstError
+        : new Error('Failed to reach tab content script');
+    }
+
+    let resolvedUrl = knownUrl ?? '';
+    if (!resolvedUrl && this.env.getTabInfo) {
+      const info = await this.env.getTabInfo(tabId).catch(() => null);
+      resolvedUrl = info?.url ?? '';
+    }
+    if (!isHttpOrHttpsUrl(resolvedUrl)) {
+      throw firstError instanceof Error
+        ? firstError
+        : new Error('Target tab does not allow script injection');
+    }
+
+    await this.env.injectContentScript(tabId);
+    return await this.env.sendToTab(tabId, message);
+  }
+
   public async handleActionClicked(tab: {
     id?: number | undefined;
     url?: string | undefined;
+    pendingUrl?: string | undefined;
     title?: string | undefined;
   }): Promise<{
     opened: 'overlay' | 'dashboard_double_click' | 'dashboard_fallback' | 'dashboard_unsupported';
   }> {
     await this.ensureInitialized().catch(() => undefined);
-    const tabUrl = tab.url ?? '';
+    let tabUrl = tab.url || tab.pendingUrl || '';
+    if (!tabUrl && typeof tab.id === 'number' && this.env.getTabInfo) {
+      const info = await this.env.getTabInfo(tab.id).catch(() => null);
+      tabUrl = info?.url ?? '';
+    }
     if (typeof tab.id === 'number' && isHttpOrHttpsUrl(tabUrl) && this.env.sendToTab) {
       const now = Date.now();
       const prevClick = this.lastActionClickMsByTab.get(tab.id) ?? 0;
@@ -374,24 +422,29 @@ export class BackgroundCoordinator {
       }
       this.lastActionClickMsByTab.set(tab.id, now);
       try {
-        const res = await this.env.sendToTab(tab.id, {
-          schemaVersion: 1,
-          requestId: `act-toggle-${now}`,
-          operation: 'TOGGLE_OVERLAY_DASHBOARD',
-          tabId: tab.id,
-          payload: { mode: 'action_click' },
-        });
+        const res = await this.sendToTabWithAutoInject(
+          tab.id,
+          {
+            schemaVersion: 1,
+            requestId: `act-toggle-${now}`,
+            operation: 'TOGGLE_OVERLAY_DASHBOARD',
+            tabId: tab.id,
+            payload: { mode: 'action_click' },
+          },
+          tabUrl,
+        );
         if (res.ok) {
           return { opened: 'overlay' };
         }
       } catch {
-        if (this.env.openDashboardTab) {
-          await this.env.openDashboardTab(
-            `workspace.html?tabId=${tab.id}&targetUrl=${encodeURIComponent(tabUrl)}`,
-          );
-        }
-        return { opened: 'dashboard_fallback' };
+        this.lastActionClickMsByTab.delete(tab.id);
       }
+      if (this.env.openDashboardTab) {
+        await this.env.openDashboardTab(
+          `workspace.html?tabId=${tab.id}&targetUrl=${encodeURIComponent(tabUrl)}`,
+        );
+      }
+      return { opened: 'dashboard_fallback' };
     }
 
     if (this.env.openDashboardTab) {
@@ -1779,6 +1832,14 @@ export class BackgroundCoordinator {
 
         default: {
           if (typeof msg.tabId === 'number' && this.env.sendToTab) {
+            if (
+              !msg.documentId &&
+              (msg.operation === 'PING_CONTENT' ||
+                msg.operation === 'GET_DOCUMENT_CONTEXT' ||
+                msg.operation === 'TOGGLE_OVERLAY_DASHBOARD')
+            ) {
+              return await this.sendToTabWithAutoInject(msg.tabId, msg);
+            }
             return await this.env.sendToTab(msg.tabId, msg);
           }
           return createErrorResponse(
@@ -2172,8 +2233,13 @@ interface ChromeGlobalApis {
   };
   action?: {
     onClicked?: {
-      addListener: (cb: (tab: { id?: number; url?: string; title?: string }) => void) => void;
+      addListener: (
+        cb: (tab: { id?: number; url?: string; pendingUrl?: string; title?: string }) => void,
+      ) => void;
     };
+  };
+  scripting?: {
+    executeScript?: (injection: { target: { tabId: number }; files: string[] }) => Promise<unknown>;
   };
   storage?: {
     local?: KeyValueArea;
@@ -2238,6 +2304,15 @@ function bootstrapServiceWorker(): void {
         throw new Error('chrome.tabs.sendMessage is unavailable');
       }
       return chromeApi.tabs.sendMessage(tabId, message);
+    },
+    injectContentScript: async (tabId) => {
+      if (!chromeApi.scripting?.executeScript) {
+        throw new Error('chrome.scripting.executeScript is unavailable');
+      }
+      await chromeApi.scripting.executeScript({
+        target: { tabId },
+        files: ['content-script.js'],
+      });
     },
     getTabInfo: async (tabId) => {
       if (!chromeApi.tabs?.get) {

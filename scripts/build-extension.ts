@@ -117,7 +117,7 @@ async function buildExtension(): Promise<void> {
     version: '1.0.0',
     description:
       'Free, open-source local-first web research, inspection, design token extraction, static snapshot, and activity history toolkit.',
-    permissions: ['activeTab', 'tabs', 'storage', 'downloads', 'unlimitedStorage'],
+    permissions: ['activeTab', 'tabs', 'scripting', 'storage', 'downloads', 'unlimitedStorage'],
     host_permissions: ['<all_urls>'],
     background: {
       service_worker: 'service-worker.js',

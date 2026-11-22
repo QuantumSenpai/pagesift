@@ -411,6 +411,51 @@ describe('Extension Coordinator, Content Script Runtime, Controlled Fixtures, an
       expect(openedWindows.length).toBe(1);
       expect(openedWindows[0]?.url).toContain('pip=1');
       expect(openedWindows[0]?.url).toContain('aiTask=extract_features');
+
+      const openedFallbackTabs: string[] = [];
+      let injectedTabCount = 0;
+      let tabHasScript = false;
+      const recoveryCoordinator = new BackgroundCoordinator({
+        extensionId: TEST_EXT_ID,
+        storage,
+        settingsStore,
+        getTabInfo: () =>
+          Promise.resolve({
+            id: 9,
+            windowId: 1,
+            url: 'https://preexisting.example.com/',
+            active: true,
+          }),
+        injectContentScript: () => {
+          injectedTabCount += 1;
+          tabHasScript = true;
+          return Promise.resolve();
+        },
+        sendToTab: async (_tabId, msg) => {
+          if (!tabHasScript) {
+            throw new Error('Could not establish connection. Receiving end does not exist.');
+          }
+          return runtime.handleMessage(msg);
+        },
+        openDashboardTab: (relativeUrl) => {
+          openedFallbackTabs.push(relativeUrl);
+          return Promise.resolve();
+        },
+      });
+      const recoveredClick = await recoveryCoordinator.handleActionClicked({
+        id: 9,
+        pendingUrl: 'https://preexisting.example.com/',
+      });
+      expect(recoveredClick.opened).toBe('overlay');
+      expect(injectedTabCount).toBe(1);
+      expect(openedFallbackTabs).toEqual([]);
+
+      const internalClick = await recoveryCoordinator.handleActionClicked({
+        id: 10,
+        url: 'chrome://extensions',
+      });
+      expect(internalClick.opened).toBe('dashboard_unsupported');
+      expect(openedFallbackTabs[0]).toContain('unsupportedUrl=chrome%3A%2F%2Fextensions');
     } finally {
       runtime.dispose();
       await storage.close();
