@@ -11,13 +11,25 @@ const REQUIRED_FILES = [
   'manifest.json',
   'service-worker.js',
   'content-script.js',
+  'design-system.css',
+  'popup.html',
+  'popup.js',
   'workspace.html',
   'workspace.js',
   'options.html',
   'options.js',
   'icons/icon-16.png',
+  'icons/icon-32.png',
   'icons/icon-48.png',
   'icons/icon-128.png',
+];
+
+const FORBIDDEN_SECRET_PATTERNS = [
+  /GOCSPX-[A-Za-z0-9_-]+/,
+  /npg_[A-Za-z0-9_-]+/,
+  /DATABASE_URL_UNPOOLED/,
+  /GOOGLE_CLIENT_SECRET/,
+  /JWT_ACCESS_SECRET/,
 ];
 
 function main(): void {
@@ -42,6 +54,8 @@ function main(): void {
     version: string;
     permissions: string[];
     background?: { service_worker?: string };
+    action?: { default_popup?: string; default_icon?: Record<string, string> };
+    icons?: Record<string, string>;
     content_security_policy?: { extension_pages?: string };
   };
 
@@ -50,6 +64,9 @@ function main(): void {
   }
   if (manifest.background?.service_worker !== 'service-worker.js') {
     throw new Error('Manifest must configure background.service_worker = service-worker.js');
+  }
+  if (manifest.action?.default_popup !== 'popup.html') {
+    throw new Error('Manifest must configure action.default_popup = popup.html');
   }
 
   const forbiddenPermissions = ['debugger', 'webRequest', 'webRequestBlocking', '<all_urls>'];
@@ -64,14 +81,37 @@ function main(): void {
     throw new Error(`Insecure extension_pages Content Security Policy: ${csp}`);
   }
 
-  for (const size of [16, 48, 128] as const) {
-    const iconBytes = fs.readFileSync(path.join(EXT_DIR, 'icons', `icon-${size}.png`));
+  for (const size of [16, 32, 48, 128] as const) {
+    const expectedPath = `icons/icon-${size}.png`;
+    if (manifest.icons?.[String(size)] !== expectedPath) {
+      throw new Error(`Manifest icons.${size} must point to ${expectedPath}`);
+    }
+    if (manifest.action.default_icon?.[String(size)] !== expectedPath) {
+      throw new Error(`Manifest action.default_icon.${size} must point to ${expectedPath}`);
+    }
+    const iconBytes = fs.readFileSync(path.join(EXT_DIR, expectedPath));
     const dataUrl = `data:image/png;base64,${iconBytes.toString('base64')}`;
     const verified = verifyCaptureBinaryAndDimensions(dataUrl);
     if (verified.width !== size || verified.height !== size) {
       throw new Error(
         `icon-${size}.png has invalid dimensions ${verified.width}x${verified.height}`,
       );
+    }
+    if (iconBytes.byteLength < 200) {
+      throw new Error(
+        `icon-${size}.png appears to be a degenerate placeholder (${iconBytes.byteLength} bytes)`,
+      );
+    }
+  }
+
+  for (const textFile of REQUIRED_FILES.filter((f) => !f.endsWith('.png'))) {
+    const content = fs.readFileSync(path.join(EXT_DIR, textFile), 'utf8');
+    for (const pattern of FORBIDDEN_SECRET_PATTERNS) {
+      if (pattern.test(content)) {
+        throw new Error(
+          `Extension bundle file ${textFile} matched forbidden secret pattern ${pattern}`,
+        );
+      }
     }
   }
 
@@ -90,6 +130,7 @@ function main(): void {
       manifestVersion: manifest.manifest_version,
       permissions: manifest.permissions,
       verifiedFiles: REQUIRED_FILES.length,
+      iconSizes: [16, 32, 48, 128],
       zipSizeBytes: zipBytes.byteLength,
     }) + '\n',
   );

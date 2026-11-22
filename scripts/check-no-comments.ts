@@ -3,7 +3,15 @@ import * as path from 'node:path';
 import ts from 'typescript';
 
 const ROOT_DIR = process.cwd();
-const IGNORED_DIRS = new Set(['.git', 'node_modules', 'dist', 'coverage', '.pgdata-local', 'docs']);
+const IGNORED_DIRS = new Set([
+  '.git',
+  'node_modules',
+  'dist',
+  'coverage',
+  '.pgdata-local',
+  'docs',
+  'assets',
+]);
 const IGNORED_FILES = new Set(['LICENSE', 'README.md', 'package-lock.json']);
 
 const TS_EXTENSIONS = new Set(['.ts', '.js', '.mjs', '.cjs']);
@@ -118,6 +126,17 @@ function main(): void {
 
     if (TS_EXTENSIONS.has(ext)) {
       violations.push(...checkTypeScriptOrJsFile(filePath, content));
+    } else if (ext === '.css') {
+      const lines = content.split(/\r?\n/);
+      lines.forEach((lineText, idx) => {
+        if (lineText.includes('/*') || lineText.includes('*/')) {
+          violations.push({
+            filePath: path.relative(ROOT_DIR, filePath),
+            line: idx + 1,
+            detail: lineText.trim().slice(0, 80),
+          });
+        }
+      });
     } else if (ext === '.html') {
       const lines = content.split(/\r?\n/);
       lines.forEach((lineText, idx) => {
