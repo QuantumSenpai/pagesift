@@ -71,3 +71,58 @@ jobs:
         env:
           TEST_ADMIN_DATABASE_URL: postgresql://pagesift_test:pagesift_test_password@127.0.0.1:5432/postgres
         run: npm run smoke
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pagesift-extension
+          path: dist/pagesift-extension.zip
+          retention-days: 30
+
+  release:
+    name: Create Release with Extension Artifact
+    runs-on: ubuntu-latest
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - name: Download extension artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pagesift-extension
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: PageSift v${{ github.run_number }}
+          body: |
+            ## PageSift Extension v${{ github.run_number }}
+            
+            **Manifest V3** • **16+ Local Tools** • **Zero Dependencies** • **Optional BYOK AI**
+            
+            ### 🚀 Quick Install
+            1. Download `pagesift-extension.zip` below
+            2. Extract the archive
+            3. Open `chrome://extensions` → Enable **Developer mode** → **Load unpacked** → Select extracted folder
+            
+            ### ✨ What's Inside
+            - **Inspect & Measure** — Element inspection, CSS box metrics, distance measurement
+            - **Extract & Export** — Clone Page, Clone Prompt, Design MD, Assets (ZIP)
+            - **Capture & Viewports** — Full-page screenshots, multi-viewport responsive stage, synced popup windows
+            - **Live Preview & Audit** — Edit Text, Swap Font, Arrange, Design Review (WCAG), Tech Stack detection
+            - **Motion Lab (v1.1.0)** — Reverse-engineer animations: inspect declared CSS/WAAPI, record interactive sessions, replay in isolated preview, compare reference vs reconstruction, import/export Reanimate ZIP/JSON
+            - **Activity History** — Auto-logged per-site runs in IndexedDB with filterable timeline
+            
+            ### 📦 Assets
+            - `pagesift-extension.zip` — Ready-to-load Manifest V3 extension (~920 KB)
+            
+            ---
+            Built from commit ${{ github.sha }}
+          files: dist/pagesift-extension.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

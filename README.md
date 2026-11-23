@@ -6,25 +6,95 @@
   <img src="https://img.shields.io/badge/Tools-16%2B_Local-161b1f?style=flat-square" alt="16+ Local Tools" />
   <img src="https://img.shields.io/badge/Auth-None_Required-161b1f?style=flat-square" alt="No Auth Required" />
   <img src="https://img.shields.io/badge/AI-Optional_BYOK-0d9488?style=flat-square" alt="Optional BYOK AI" />
+  <a href="https://github.com/QuantumSenpai/pagesift/releases/latest">
+    <img src="https://img.shields.io/github/v/release/QuantumSenpai/pagesift?label=Latest%20Release&color=0d9488&style=flat-square" alt="Latest Release" />
+  </a>
+  <a href="https://github.com/QuantumSenpai/pagesift/releases/latest/download/pagesift-extension.zip">
+    <img src="https://img.shields.io/github/downloads/QuantumSenpai/pagesift/total?label=Total%20Downloads&color=161b1f&style=flat-square" alt="Total Downloads" />
+  </a>
 </div>
 
 ---
 
-## Download & Install Extension (`v1.1.0`)
+## 🚀 One-Click Download & Install
 
-PageSift builds both an unpacked Manifest V3 folder and a self-contained ZIP package locally (no account, backend, database, Docker, or AI key required):
+<div align="center" style="margin: 24px 0;">
 
-- **Local build artifacts** produced by `npm run build:extension`:
-  - Downloadable extension archive: `dist/pagesift-extension.zip` (extract the archive, then select the extracted folder in **Load unpacked**)
-  - Direct unpacked extension folder: `dist/extension`
-  - *Release status note*: No pre-built GitHub Release has been published yet on `QuantumSenpai/pagesift`. Build locally with the commands below before loading into Chromium/Chrome/Brave.
+<a href="https://github.com/QuantumSenpai/pagesift/releases/latest/download/pagesift-extension.zip" 
+   target="_blank" rel="noopener noreferrer"
+   style="
+     display: inline-flex;
+     align-items: center;
+     gap: 10px;
+     padding: 14px 28px;
+     background: linear-gradient(135deg, #0d9488 0%, #0f766e 50%, #0d9488 100%);
+     background-size: 200% 200%;
+     animation: shimmer 3s ease-in-out infinite;
+     color: #ffffff;
+     font-weight: 700;
+     font-size: 16px;
+     text-decoration: none;
+     border-radius: 12px;
+     box-shadow: 
+       0 4px 16px rgba(13, 148, 136, 0.4),
+       0 0 0 1px rgba(13, 148, 136, 0.2),
+       inset 0 1px 0 rgba(255,255,255,0.15);
+     transition: transform 0.2s ease, box-shadow 0.2s ease;
+   "
+   onmouseover="this.style.transform='translateY(-2px) scale(1.02)'; this.style.boxShadow='0 8px 24px rgba(13, 148, 136, 0.5), 0 0 0 1px rgba(13, 148, 136, 0.3), inset 0 1px 0 rgba(255,255,255,0.2)'"
+   onmouseout="this.style.transform='translateY(0) scale(1)'; this.style.boxShadow='0 4px 16px rgba(13, 148, 136, 0.4), 0 0 0 1px rgba(13, 148, 136, 0.2), inset 0 1px 0 rgba(255,255,255,0.15)'"
+>
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation: bounce 1.5s ease-in-out infinite;">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+    <polyline points="7 10 12 15 17 10"></polyline>
+    <line x1="12" y1="15" x2="12" y2="3"></line>
+  </svg>
+  <span>Download PageSift v1.1.0 Extension (ZIP)</span>
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 4px; animation: arrowPulse 1.2s ease-in-out infinite;">
+    <path d="M5 12h14"></path>
+    <path d="M12 5l7 7-7 7"></path>
+  </svg>
+</a>
+
+<style>
+@keyframes shimmer {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+@keyframes arrowPulse {
+  0%, 100% { transform: translateX(0); opacity: 1; }
+  50% { transform: translateX(4px); opacity: 0.7; }
+}
+</style>
+
+</div>
+
+> **⚡ Direct link**: [`pagesift-extension.zip`](https://github.com/QuantumSenpai/pagesift/releases/latest/download/pagesift-extension.zip) — Always points to the latest release artifact (~920 KB, Manifest V3, zero dependencies)
+
+**Install in 30 seconds:**
+
+1. Click the button above → saves `pagesift-extension.zip`
+2. Open **`chrome://extensions`** (or **`brave://extensions`** / **`edge://extensions`**)
+3. Enable **Developer mode** (top-right toggle)
+4. Click **Load unpacked** → select the extracted `pagesift-extension` folder
+5. Pin **PageSift** 🔍 in your toolbar — done!
+
+---
+
+## Build Locally (Alternative)
+
+Prefer building from source? Zero external deps, fully reproducible:
 
 ```bash
 git clone https://github.com/QuantumSenpai/pagesift.git
 cd pagesift
 npm ci
-npm run build:extension
-npm run validate:extension
+npm run build:extension        # → dist/extension + dist/pagesift-extension.zip
+npm run validate:extension     # verifies manifest, CSP, icons, fonts, ZIP
 ```
 
 1. Open **`chrome://extensions`** or **`brave://extensions`**.
