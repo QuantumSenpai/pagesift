@@ -20,60 +20,16 @@
 
 <div align="center" style="margin: 24px 0;">
 
-<a href="https://github.com/QuantumSenpai/pagesift/releases/latest/download/pagesift-extension.zip" 
-   target="_blank" rel="noopener noreferrer"
-   style="
-     display: inline-flex;
-     align-items: center;
-     gap: 10px;
-     padding: 14px 28px;
-     background: linear-gradient(135deg, #0d9488 0%, #0f766e 50%, #0d9488 100%);
-     background-size: 200% 200%;
-     animation: shimmer 3s ease-in-out infinite;
-     color: #ffffff;
-     font-weight: 700;
-     font-size: 16px;
-     text-decoration: none;
-     border-radius: 12px;
-     box-shadow: 
-       0 4px 16px rgba(13, 148, 136, 0.4),
-       0 0 0 1px rgba(13, 148, 136, 0.2),
-       inset 0 1px 0 rgba(255,255,255,0.15);
-     transition: transform 0.2s ease, box-shadow 0.2s ease;
-   "
-   onmouseover="this.style.transform='translateY(-2px) scale(1.02)'; this.style.boxShadow='0 8px 24px rgba(13, 148, 136, 0.5), 0 0 0 1px rgba(13, 148, 136, 0.3), inset 0 1px 0 rgba(255,255,255,0.2)'"
-   onmouseout="this.style.transform='translateY(0) scale(1)'; this.style.boxShadow='0 4px 16px rgba(13, 148, 136, 0.4), 0 0 0 1px rgba(13, 148, 136, 0.2), inset 0 1px 0 rgba(255,255,255,0.15)'"
->
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation: bounce 1.5s ease-in-out infinite;">
-    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-    <polyline points="7 10 12 15 17 10"></polyline>
-    <line x1="12" y1="15" x2="12" y2="3"></line>
-  </svg>
-  <span>Download PageSift v1.1.0 Extension (ZIP)</span>
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 4px; animation: arrowPulse 1.2s ease-in-out infinite;">
-    <path d="M5 12h14"></path>
-    <path d="M12 5l7 7-7 7"></path>
-  </svg>
-</a>
-
-<style>
-@keyframes shimmer {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-}
-@keyframes bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
-}
-@keyframes arrowPulse {
-  0%, 100% { transform: translateX(0); opacity: 1; }
-  50% { transform: translateX(4px); opacity: 0.7; }
-}
-</style>
+[![Download PageSift Extension](https://img.shields.io/badge/📥_DOWNLOAD_PageSift_v1.1.0-0d9488?style=for-the-badge&logo=github&logoColor=white&labelColor=0f766e)](https://github.com/QuantumSenpai/pagesift/releases/latest/download/pagesift-extension.zip)
+[![Direct ZIP](https://img.shields.io/badge/💾_pagesift--extension.zip-161b1f?style=for-the-badge&logo=google-chrome&logoColor=white&labelColor=0d9488)](https://github.com/QuantumSenpai/pagesift/releases/latest/download/pagesift-extension.zip)
+[![Latest Release](https://img.shields.io/github/v/release/QuantumSenpai/pagesift?style=for-the-badge&color=0d9488&label=Latest%20Release)](https://github.com/QuantumSenpai/pagesift/releases/latest)
+[![Total Downloads](https://img.shields.io/github/downloads/QuantumSenpai/pagesift/total?style=for-the-badge&color=161b1f&label=Total%20Downloads)](https://github.com/QuantumSenpai/pagesift/releases)
 
 </div>
 
 > **⚡ Direct link**: [`pagesift-extension.zip`](https://github.com/QuantumSenpai/pagesift/releases/latest/download/pagesift-extension.zip) — Always points to the latest release artifact (~920 KB, Manifest V3, zero dependencies)
+
+**Visual preview of the download button above:**
 
 **Install in 30 seconds:**
 
