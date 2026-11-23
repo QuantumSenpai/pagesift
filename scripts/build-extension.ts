@@ -64,7 +64,7 @@ async function buildExtension(): Promise<void> {
   const extensionVersion =
     typeof pkgData.version === 'string' && pkgData.version.trim().length > 0
       ? pkgData.version.trim()
-      : '1.1.0';
+      : '1.2.0';
 
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });

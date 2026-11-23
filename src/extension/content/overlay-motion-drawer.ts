@@ -269,30 +269,24 @@ export function renderMotionLabOverlayDrawer(
 
       const actions: Array<[string, () => void]> = [
         [
-          'Copy CSS',
-          () => {
-            handlers.onCopyText(state.exports?.cssCode ?? '', 'CSS Keyframes');
-          },
-        ],
-        [
-          'Copy WAAPI',
-          () => {
-            handlers.onCopyText(state.exports?.waapiCode ?? '', 'WAAPI Snippet');
-          },
-        ],
-        [
           'Copy MOTION.md',
           () => {
             handlers.onCopyText(state.exports?.motionMd ?? '', 'MOTION.md');
           },
         ],
         [
-          'Download JSON',
+          'Copy AI Prompt',
+          () => {
+            handlers.onCopyText(state.exports?.animationPrompt ?? '', 'Animation Recreation Prompt');
+          },
+        ],
+        [
+          'Download HTML Demo',
           () => {
             handlers.onDownloadText(
-              'pagesift-motion-spec.json',
-              'application/json;charset=utf-8',
-              JSON.stringify(state.spec, null, 2),
+              'motion-demo.html',
+              'text/html;charset=utf-8',
+              state.exports?.htmlDemo ?? '',
             );
           },
         ],

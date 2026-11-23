@@ -60,7 +60,7 @@ export interface MotionLabUiState {
   activeSessionId: string | null;
   trigger: MotionTriggerType;
   durationMs: number;
-  exportTab: 'css' | 'waapi' | 'html' | 'md' | 'prompt' | 'json' | 'handoff';
+  exportTab: 'md' | 'prompt' | 'html';
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -288,7 +288,7 @@ export function renderMotionLabPanel(
     activeSessionId: null,
     trigger: 'hover',
     durationMs: 3000,
-    exportTab: 'css',
+    exportTab: 'md',
   };
 
   if (state.spec && !state.exports) {
@@ -869,56 +869,31 @@ export function renderMotionLabPanel(
 
       if (state.exports) {
         const exp = state.exports;
-        const handoff = buildReanimateHandoffRecipe(spec);
         const expCard = el('article', 'flat-block');
-        expCard.appendChild(el('h3', undefined, '5. Reusable Code Exports & Reanimate Handoff'));
+        expCard.appendChild(el('h3', undefined, '5. Export Animation for AI Recreation'));
 
         const tabRow = el('div', 'control-row');
         const exportMap: Record<
           MotionLabUiState['exportTab'],
           { label: string; filename: string; mime: string; content: string }
         > = {
-          css: {
-            label: 'CSS',
-            filename: 'motion.css',
-            mime: 'text/css;charset=utf-8',
-            content: exp.cssCode,
-          },
-          waapi: {
-            label: 'WAAPI JS',
-            filename: 'motion-waapi.js',
-            mime: 'text/javascript;charset=utf-8',
-            content: exp.waapiCode,
-          },
-          html: {
-            label: 'HTML Demo',
-            filename: 'motion-demo.html',
-            mime: 'text/html;charset=utf-8',
-            content: exp.htmlDemo,
-          },
           md: {
-            label: 'MOTION.md',
+            label: 'MOTION.md (Full Spec)',
             filename: 'MOTION.md',
             mime: 'text/markdown;charset=utf-8',
             content: exp.motionMd,
           },
           prompt: {
-            label: 'AI Prompt',
-            filename: 'motion-prompt.md',
+            label: 'AI Recreation Prompt',
+            filename: 'animation-prompt.md',
             mime: 'text/markdown;charset=utf-8',
-            content: exp.reconstructionPrompt,
+            content: exp.animationPrompt,
           },
-          json: {
-            label: 'Spec JSON',
-            filename: 'motion-spec.json',
-            mime: 'application/json;charset=utf-8',
-            content: JSON.stringify(spec, null, 2),
-          },
-          handoff: {
-            label: 'Reanimate CLI Handoff',
-            filename: 'reanimate-capture-config.json',
-            mime: 'application/json;charset=utf-8',
-            content: `${handoff.explanation}\n\nCLI Command:\n${handoff.cliCommand}\n\ncapture-config.json:\n${handoff.captureConfigJson}`,
+          html: {
+            label: 'HTML Demo (Playable)',
+            filename: 'motion-demo.html',
+            mime: 'text/html;charset=utf-8',
+            content: exp.htmlDemo,
           },
         };
 
@@ -933,7 +908,7 @@ export function renderMotionLabPanel(
         }
 
         const activeExport = exportMap[state.exportTab];
-        const copyExpBtn = el('button', 'secondary sm', 'Copy Active');
+        const copyExpBtn = el('button', 'secondary sm', 'Copy');
         copyExpBtn.type = 'button';
         copyExpBtn.addEventListener('click', () => {
           callbacks.onCopyText(activeExport.content, activeExport.label);

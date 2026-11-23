@@ -264,11 +264,11 @@ describe('Motion Lab engines, schemas, safety & storage', () => {
     expect(parsed.unavailableItems.length).toBeGreaterThanOrEqual(2);
 
     const exportsOut = generateMotionExports(parsed);
-    expect(exportsOut.cssCode).toContain('@keyframes');
-    expect(exportsOut.waapiCode).toContain('.animate(');
-    expect(exportsOut.htmlDemo.toLowerCase()).toContain('<!doctype html>');
     expect(exportsOut.motionMd).toContain('# MOTION.md:');
     expect(exportsOut.motionMd).toContain('#shader-bg');
+    expect(exportsOut.animationPrompt).toContain('Motion Animation Recreation Prompt');
+    expect(exportsOut.htmlDemo.toLowerCase()).toContain('<!doctype html>');
+    expect(exportsOut.htmlDemo).toContain('Replay');
   });
 
   it('sanitizes dangerous CSS payloads and rejects unsafe XSS strings in codegen', () => {

@@ -34,19 +34,17 @@ function sanitizeSafeIdentifier(raw: string, fallback: string): string {
 
 function escapeHtmlText(raw: string): string {
   return raw
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>')
+    .replace(/"/g, '"')
+    .replace(/'/g, '&#39;');}
+
 
 export interface GeneratedMotionExports {
-  cssCode: string;
-  waapiCode: string;
-  htmlDemo: string;
   motionMd: string;
-  reconstructionPrompt: string;
+  animationPrompt: string;
+  htmlDemo: string;
   unsupportedTracks: Array<{ trackId: string; selector: string; property: string; reason: string }>;
 }
 
@@ -134,8 +132,6 @@ function resolveTrackTiming(track: MotionTrack): {
 }
 
 export function generateMotionExports(spec: MotionSpec): GeneratedMotionExports {
-  const cssBlocks: string[] = [];
-  const waapiBlocks: string[] = [];
   const demoFixtures: Array<{
     className: string;
     label: string;
@@ -177,40 +173,9 @@ export function generateMotionExports(spec: MotionSpec): GeneratedMotionExports 
     const safeClass = sanitizeSafeIdentifier(`motion-target-${idx + 1}`, `target-${idx + 1}`);
     const kfName = sanitizeSafeIdentifier(`ps-kf-${idx + 1}-${track.property}`, `ps-kf-${idx + 1}`);
 
-    cssBlocks.push(
-      `@keyframes ${kfName} {\n` +
-        `  from { ${resolved.cssProp}: ${resolved.fromCssVal}; }\n` +
-        `  to { ${resolved.cssProp}: ${resolved.toCssVal}; }\n` +
-        `}\n` +
-        `.${safeClass} {\n` +
-        `  transform-origin: ${origin};\n` +
-        `  animation: ${kfName} ${resolved.durationMs}ms ${resolved.easing} ${resolved.delayMs}ms ${resolved.iterations} ${resolved.fillMode};\n` +
-        `}`,
-    );
-
-    waapiBlocks.push(
-      `const el${idx + 1} = document.querySelector(${JSON.stringify('.' + safeClass)});\n` +
-        `if (el${idx + 1} && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {\n` +
-        `  el${idx + 1}.style.transformOrigin = ${JSON.stringify(origin)};\n` +
-        `  el${idx + 1}.animate(\n` +
-        `    [\n` +
-        `      { ${JSON.stringify(resolved.cssProp)}: ${JSON.stringify(resolved.fromCssVal)} },\n` +
-        `      { ${JSON.stringify(resolved.cssProp)}: ${JSON.stringify(resolved.toCssVal)} }\n` +
-        `    ],\n` +
-        `    {\n` +
-        `      duration: ${resolved.durationMs},\n` +
-        `      delay: ${resolved.delayMs},\n` +
-        `      easing: ${JSON.stringify(resolved.easing)},\n` +
-        `      iterations: ${resolved.iterations === 'infinite' ? 'Infinity' : resolved.iterations},\n` +
-        `      fill: ${JSON.stringify(resolved.fillMode)}\n` +
-        `    }\n` +
-        `  );\n` +
-        `}`,
-    );
-
     demoFixtures.push({
       className: safeClass,
-      label: `${track.selector} (${track.property} · ${track.evidenceClass})`,
+      label: `${track.selector} (${track.property} \u00b7 ${track.evidenceClass})`,
       width: Math.max(48, Math.min(480, Math.round(targetMeta?.initialBox.width || 220))),
       height: Math.max(36, Math.min(200, Math.round(targetMeta?.initialBox.height || 64))),
       transformOrigin: origin,
@@ -226,16 +191,6 @@ export function generateMotionExports(spec: MotionSpec): GeneratedMotionExports 
       evidenceClass: track.evidenceClass,
     });
   });
-
-  const cssCode =
-    cssBlocks.length > 0
-      ? `${cssBlocks.join('\n\n')}\n\n@media (prefers-reduced-motion: reduce) {\n  ${demoFixtures.map((f) => `.${f.className}`).join(', ')} {\n    animation: none !important;\n    transition: none !important;\n  }\n}\n`
-      : '/* No exportable CSS keyframe tracks available in this MotionSpec. */\n';
-
-  const waapiCode =
-    waapiBlocks.length > 0
-      ? `(() => {\n${waapiBlocks.join('\n\n')}\n})();\n`
-      : '// No exportable WAAPI tracks available in this MotionSpec.\n';
 
   const fixtureStyles = demoFixtures
     .map(
@@ -316,24 +271,59 @@ export function generateMotionExports(spec: MotionSpec): GeneratedMotionExports 
 `;
 
   const motionMd = generateMotionMd(spec);
-  const reconstructionPrompt = [
-    `# Motion Reconstruction Prompt (${spec.rootSelector})`,
-    '',
-    'Reconstruct the documented motion below while distinguishing **declared** CSS/WAAPI facts from **inferred** curve estimates:',
-    '',
-    motionMd,
-    '## Generated CSS Reference',
-    '```css',
-    cssCode.trim(),
-    '```',
-  ].join('\n');
+  const animationPrompt = buildAnimationRecreationPrompt(spec, motionMd);
 
   return {
-    cssCode,
-    waapiCode,
-    htmlDemo,
     motionMd,
-    reconstructionPrompt,
+    animationPrompt,
+    htmlDemo,
     unsupportedTracks,
   };
+}
+
+function buildAnimationRecreationPrompt(spec: MotionSpec, motionMd: string): string {
+  const replayableTracks = spec.tracks.filter((t) => t.replaySupported);
+  const declaredTracks = replayableTracks.filter((t) => t.evidenceClass === 'declared');
+  const observedTracks = replayableTracks.filter((t) => t.evidenceClass === 'observed');
+  const inferredTracks = replayableTracks.filter((t) => t.evidenceClass === 'inferred');
+
+  const trackDetails = replayableTracks.map((t) => {
+    const timing = t.timelineDomain === 'scroll_progress_percent' || t.timelineDomain === 'view_progress_percent'
+      ? `scroll-driven: ${Math.round(t.progressStartPct ?? 0)}% \u2192 ${Math.round(t.progressEndPct ?? 100)}%`
+      : `${Math.round(t.durationMs ?? 0)}ms duration, ${Math.round(t.delayMs ?? 0)}ms delay`;
+    const easing = t.declaredEasing
+      ? `declared: ${t.declaredEasing}`
+      : t.inferredEasings[0]
+        ? `inferred: ${t.inferredEasings[0].cssEasing} (RMSE: ${t.inferredEasings[0].rmse.toFixed(3)}, ${t.inferredEasings[0].confidence} confidence)`
+        : 'linear';
+    return `- **${t.selector}** \`${t.property}\` \u2014 ${timing}, ${easing}, ${t.evidenceClass.toUpperCase()}`;
+  }).join('\n');
+
+  return `# Motion Animation Recreation Prompt
+
+Recreate the exact animations captured from **${spec.environment.pageTitle || spec.rootSelector}** (${spec.environment.pageUrl}).
+
+## Animation Summary
+- **Total Tracks**: ${replayableTracks.length} (${declaredTracks.length} declared, ${observedTracks.length} observed, ${inferredTracks.length} inferred)
+- **Viewport**: ${spec.environment.viewport.width}\u00d7${spec.environment.viewport.height} @ ${spec.environment.devicePixelRatio}x
+- **Session**: ${Math.round(spec.session.observedDurationMs)}ms, ${spec.session.sampleCount} samples
+
+## Track Details
+${trackDetails}
+
+## Implementation Guide
+1. **Declared tracks** (CSS/WAAPI source): Use exact timing, easing, keyframes from source
+2. **Observed tracks** (measured): Use sampled values as ground truth; easing is estimated
+3. **Inferred tracks** (JS-driven): Easing/spring params are non-unique estimates \u2014 treat as reference only
+
+## AI Reconstruction Instructions
+- Output **pure CSS @keyframes + WAAPI fallback** for each track
+- Use \`prefers-reduced-motion\` media query to disable
+- Include transform-origin, delay, fill-mode, iterations exactly as captured
+- For scroll-driven: use ScrollTimeline/ViewTimeline with percentage ranges
+- For inferred: add comment \`/* INFERRED \u2014 easing estimated from samples */\`
+
+## Full Motion Spec (MOTION.md)
+${motionMd}
+`;
 }

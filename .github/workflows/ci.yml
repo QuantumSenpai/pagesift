@@ -113,7 +113,7 @@ jobs:
             - **Extract & Export** — Clone Page, Clone Prompt, Design MD, Assets (ZIP)
             - **Capture & Viewports** — Full-page screenshots, multi-viewport responsive stage, synced popup windows
             - **Live Preview & Audit** — Edit Text, Swap Font, Arrange, Design Review (WCAG), Tech Stack detection
-            - **Motion Lab (v1.1.0)** — Reverse-engineer animations: inspect declared CSS/WAAPI, record interactive sessions, replay in isolated preview, compare reference vs reconstruction, import/export Reanimate ZIP/JSON
+            - **Motion Lab (v1.2.0)** — Reverse-engineer animations: inspect declared CSS/WAAPI, record interactive sessions, replay in isolated preview, compare reference vs reconstruction, import/export Reanimate ZIP/JSON, **simplified 3-tab export** (MOTION.md, AI Prompt, HTML Demo) for AI recreation
             - **Activity History** — Auto-logged per-site runs in IndexedDB with filterable timeline
             
             ### 📦 Assets

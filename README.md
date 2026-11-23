@@ -1,7 +1,7 @@
 <div align="center">
   <img src="docs/assets/readme-hero.svg" alt="PageSift Animated Overview" width="100%" />
   <br /><br />
-  <img src="https://img.shields.io/badge/Version-v1.1.0-0d9488?style=flat-square" alt="Version 1.1.0" />
+  <img src="https://img.shields.io/badge/Version-v1.2.0-0d9488?style=flat-square" alt="Version 1.2.0" />
   <img src="https://img.shields.io/badge/Manifest-V3-0d9488?style=flat-square" alt="Manifest V3" />
   <img src="https://img.shields.io/badge/Tools-16%2B_Local-161b1f?style=flat-square" alt="16+ Local Tools" />
   <img src="https://img.shields.io/badge/Auth-None_Required-161b1f?style=flat-square" alt="No Auth Required" />
@@ -20,7 +20,7 @@
 
 <div align="center" style="margin: 24px 0;">
 
-[![Download PageSift Extension](https://img.shields.io/badge/📥_DOWNLOAD_PageSift_v1.1.0-0d9488?style=for-the-badge&logo=github&logoColor=white&labelColor=0f766e)](https://github.com/QuantumSenpai/pagesift/releases/latest/download/pagesift-extension.zip)
+[![Download PageSift Extension](https://img.shields.io/badge/📥_DOWNLOAD_PageSift_v1.2.0-0d9488?style=for-the-badge&logo=github&logoColor=white&labelColor=0f766e)](https://github.com/QuantumSenpai/pagesift/releases/latest/download/pagesift-extension.zip)
 [![Direct ZIP](https://img.shields.io/badge/💾_pagesift--extension.zip-161b1f?style=for-the-badge&logo=google-chrome&logoColor=white&labelColor=0d9488)](https://github.com/QuantumSenpai/pagesift/releases/latest/download/pagesift-extension.zip)
 [![Latest Release](https://img.shields.io/github/v/release/QuantumSenpai/pagesift?style=for-the-badge&color=0d9488&label=Latest%20Release)](https://github.com/QuantumSenpai/pagesift/releases/latest)
 [![Total Downloads](https://img.shields.io/github/downloads/QuantumSenpai/pagesift/total?style=for-the-badge&color=161b1f&label=Total%20Downloads)](https://github.com/QuantumSenpai/pagesift/releases)
@@ -96,7 +96,7 @@ npm run validate:extension     # verifies manifest, CSP, icons, fonts, ZIP
 | **Design Review** | Contrast, spacing, blur/shadow, and heading hierarchy audit |
 | **Tech Stack** | Multi-signal detection with real brand icons & searchable evidence (`React`, `Next.js`, `Framer`, `Webflow`, CDNs, analytics) |
 | **Feature Extract** | Local product/UI feature extractor + optional AI analysis |
-| **Motion Lab (`v1.1.0`)** | Reverse-engineer animations: inspect declared CSS/WAAPI/scroll timelines, record interactive sessions (`Declared`/`Observed`/`Inferred`/`Unavailable`), replay in isolated preview, compare reference vs reconstruction, import/export Reanimate ZIP/JSON, and export CSS, WAAPI, HTML demo, `MOTION.md` |
+| **Motion Lab (`v1.2.0`)** | Reverse-engineer animations: inspect declared CSS/WAAPI/scroll timelines, record interactive sessions (`Declared`/`Observed`/`Inferred`/`Unavailable`), replay in isolated preview, compare reference vs reconstruction, import/export Reanimate ZIP/JSON, **simplified 3-tab export** (MOTION.md, AI Prompt, HTML Demo) for one-click AI recreation |
 | **Activity History** | Auto-logged per-site runs in IndexedDB (`pagesift_local_db v4`), filterable by domain/tool/date, including reopenable Motion Lab sessions |
 
 ---
