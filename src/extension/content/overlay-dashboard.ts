@@ -1,5 +1,8 @@
 import type { AssetAvailabilityStatus, AssetKind } from '../engines/assets-engine.js';
 import type { PageFeatureExtractionReport } from '../engines/feature-extract-engine.js';
+import type { GeneratedMotionExports } from '../engines/motion-codegen-engine.js';
+import type { MotionInspectionResult } from '../engines/motion-observation-engine.js';
+import type { MotionSpec, MotionTriggerType } from '../engines/motion-spec.js';
 import type {
   TechStackDetectionEntry,
   TechStackOrganizedSummary,
@@ -13,9 +16,20 @@ import {
   createTechIconElement,
   triggerTapFeedback,
 } from '../ui/theme.js';
+import {
+  renderMotionLabOverlayDrawer,
+  type OverlayMotionDrawerState,
+} from './overlay-motion-drawer.js';
 
 export type OverlayMode = 'closed' | 'expanded' | 'minimized';
-export type OverlayDrawerTab = 'none' | 'tools' | 'result' | 'editor' | 'customize' | 'responsive';
+export type OverlayDrawerTab =
+  | 'none'
+  | 'tools'
+  | 'result'
+  | 'editor'
+  | 'customize'
+  | 'responsive'
+  | 'motion_lab';
 export type OverlayPosition = ExtensionSettings['overlayPosition'];
 export type OverlayThemeMode = ExtensionSettings['overlayThemeMode'];
 
@@ -166,8 +180,27 @@ export interface OverlayDashboardCallbacks {
       | 'extract_features'
       | 'enhance_clone_prompt'
       | 'interpret_design_review'
-      | 'explain_tech_stack';
+      | 'explain_tech_stack'
+      | 'explain_motion';
   }) => Promise<void>;
+  onInspectMotion?: (selector?: string) => Promise<{
+    selector: string;
+    inspection: MotionInspectionResult;
+  }>;
+  onStartMotionObservation?: (opts: {
+    selector?: string;
+    trigger: MotionTriggerType;
+    durationMs: number;
+  }) => Promise<{
+    sessionId: string;
+    targetSelector: string;
+    inspection: MotionInspectionResult;
+  }>;
+  onStopMotionObservation?: () => Promise<{
+    spec: MotionSpec;
+    exports: GeneratedMotionExports;
+  }>;
+  onCancelMotionObservation?: (reason?: string) => Promise<void>;
   onOpenSettings?: () => Promise<void>;
   onOpenSiteResponsiveWindows?: () => Promise<{ ok: boolean; message: string }>;
   onFetchSiteActivity: () => Promise<ActivityQueryItem[]>;
@@ -681,22 +714,23 @@ export class OnPageOverlayDashboard {
     styleEl.textContent = `
       ${fontsCss}${monoCss}
       .ps-anchor {
-        --bg: #0f1214;
-        --elevated: #171b1f;
-        --subtle: #20262c;
-        --border: #262d35;
-        --border-strong: #343e4a;
-        --text: #f3f4f6;
-        --secondary: #d5d9df;
-        --muted: #94a0ad;
-        --ink: #f3f4f6;
-        --ink-hover: #e5e7eb;
-        --ink-fg: #0b0e10;
-        --accent: #0d9488;
-        --accent-hover: #14b8a6;
-        --accent-surface: #0b2626;
-        --accent-border: #115e59;
-        --accent-text: #5eead4;
+        --bg: #111318;
+        --elevated: #181c24;
+        --tray: #0b0d11;
+        --subtle: #212733;
+        --border: #28303f;
+        --border-strong: #39465a;
+        --text: #f8fafc;
+        --secondary: #cbd5e1;
+        --muted: #94a3b8;
+        --ink: #ffffff;
+        --ink-hover: #e2e8f0;
+        --ink-fg: #111318;
+        --accent: #2563eb;
+        --accent-hover: #3b82f6;
+        --accent-surface: #152548;
+        --accent-border: #2563eb;
+        --accent-text: #93c5fd;
         --beta-bg: #292011;
         --beta-border: #854d0e;
         --beta-text: #fcd34d;
@@ -705,17 +739,17 @@ export class OnPageOverlayDashboard {
         --positive-border: #047857;
         --warning: #f59e0b;
         --danger: #ef4444;
-        --shadow-sm: 0 3px 8px rgba(0, 0, 0, 0.36);
-        --shadow-md: 0 10px 26px rgba(0, 0, 0, 0.48);
-        --shadow-lg: 0 22px 54px rgba(0, 0, 0, 0.68), 0 4px 16px rgba(0, 0, 0, 0.42);
+        --shadow-sm: 0 3px 10px rgba(0, 0, 0, 0.36);
+        --shadow-md: 0 12px 28px rgba(0, 0, 0, 0.5);
+        --shadow-lg: 0 24px 56px rgba(0, 0, 0, 0.72), 0 6px 18px rgba(15, 23, 42, 0.45);
         --ease: cubic-bezier(0.22, 1, 0.36, 1);
         position: fixed;
-        bottom: 16px;
+        bottom: 36px;
         left: 0;
         right: 0;
         margin: 0 auto;
         width: fit-content;
-        max-width: calc(100vw - 20px);
+        max-width: calc(100vw - 28px);
         z-index: 2147483647;
         pointer-events: none;
         font-family: "Instrument Sans", system-ui, -apple-system, sans-serif;
@@ -724,22 +758,23 @@ export class OnPageOverlayDashboard {
         color: var(--text);
       }
       .ps-anchor[data-theme="light"] {
-        --bg: #f8f8f6;
-        --elevated: #ffffff;
-        --subtle: #efefe9;
-        --border: #e1e3dc;
-        --border-strong: #c8cbc1;
-        --text: #11161b;
-        --secondary: #374151;
-        --muted: #64707d;
-        --ink: #11161b;
-        --ink-hover: #242b33;
+        --bg: #ffffff;
+        --elevated: #f8fafc;
+        --tray: #f1f5f9;
+        --subtle: #e2e8f0;
+        --border: #cbd5e1;
+        --border-strong: #94a3b8;
+        --text: #141518;
+        --secondary: #334155;
+        --muted: #64748b;
+        --ink: #141518;
+        --ink-hover: #272b33;
         --ink-fg: #ffffff;
-        --accent: #0f766e;
-        --accent-hover: #0d9488;
-        --accent-surface: #f0fdfa;
-        --accent-border: #99f6e4;
-        --accent-text: #0f766e;
+        --accent: #2563eb;
+        --accent-hover: #1d4ed8;
+        --accent-surface: #eff6ff;
+        --accent-border: #93c5fd;
+        --accent-text: #1d4ed8;
         --beta-bg: #fef3c7;
         --beta-border: #fcd34d;
         --beta-text: #92400e;
@@ -748,17 +783,18 @@ export class OnPageOverlayDashboard {
         --positive-border: #a7f3d0;
         --warning: #b45309;
         --danger: #dc2626;
-        --shadow-sm: 0 2px 6px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-        --shadow-md: 0 8px 22px rgba(15, 23, 42, 0.1), 0 2px 6px rgba(15, 23, 42, 0.05);
-        --shadow-lg: 0 18px 42px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.07);
+        --shadow-sm: 0 2px 6px rgba(20, 21, 24, 0.08), 0 1px 2px rgba(20, 21, 24, 0.05);
+        --shadow-md: 0 10px 24px rgba(20, 21, 24, 0.12), 0 3px 8px rgba(20, 21, 24, 0.06);
+        --shadow-lg: 0 20px 48px rgba(20, 21, 24, 0.18), 0 6px 16px rgba(37, 99, 235, 0.1);
       }
       .ps-anchor[data-pos="bottom-right"] {
         left: auto;
-        right: 18px;
+        right: 24px;
+        bottom: 36px;
         margin: 0;
       }
       .ps-anchor[data-pos="top-center"] {
-        top: 16px;
+        top: 26px;
         bottom: auto;
       }
       .ps-anchor * { box-sizing: border-box; }
@@ -780,11 +816,12 @@ export class OnPageOverlayDashboard {
         display: flex;
         flex-direction: column;
         align-items: stretch;
-        gap: 6px;
-        padding: 7px 10px 6px;
+        gap: 8px;
+        padding: 9px 12px 10px;
         background: var(--bg);
         border: 1px solid var(--border-strong);
-        border-radius: 10px;
+        border-top: 3px solid var(--accent);
+        border-radius: 15px;
         box-shadow: var(--shadow-lg);
         pointer-events: auto;
         max-width: 100%;
@@ -794,7 +831,7 @@ export class OnPageOverlayDashboard {
         align-items: center;
         justify-content: space-between;
         gap: 10px;
-        padding-bottom: 5px;
+        padding: 0 2px 6px;
         border-bottom: 1px solid var(--border);
         flex-wrap: wrap;
       }
@@ -807,10 +844,26 @@ export class OnPageOverlayDashboard {
         font-weight: 600;
         color: var(--text);
       }
+      .ps-dock-brand-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 7px;
+        border-radius: 5px;
+        background: var(--accent-surface);
+        border: 1px solid var(--accent-border);
+        color: var(--accent-text);
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+      }
       .ps-dock-identity img {
-        width: 18px;
-        height: 18px;
-        border-radius: 4px;
+        width: 20px;
+        height: 20px;
+        border-radius: 5px;
+        border: 1px solid var(--border);
+        background: #ffffff;
+        padding: 1px;
       }
       .ps-dock-hint {
         font-size: 11px;
@@ -820,13 +873,13 @@ export class OnPageOverlayDashboard {
       .ps-dock-modes {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
+        gap: 5px;
         flex-wrap: wrap;
       }
       .ps-pill-btn {
-        min-height: 26px;
-        padding: 3px 9px;
-        border-radius: 5px;
+        min-height: 27px;
+        padding: 3px 10px;
+        border-radius: 7px;
         border: 1px solid var(--border-strong);
         background: var(--elevated);
         color: var(--text);
@@ -861,6 +914,11 @@ export class OnPageOverlayDashboard {
         align-items: center;
         justify-content: center;
         gap: 4px;
+        padding: 4px 6px;
+        background: var(--tray);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        max-width: 100%;
       }
       .ps-tools-strip {
         display: flex;
@@ -915,8 +973,12 @@ export class OnPageOverlayDashboard {
       }
       @media (max-width: 1120px) {
         .ps-dock,
+        .ps-dock-body,
         .ps-tools-strip {
           flex-wrap: wrap;
+        }
+        .ps-dock-divider {
+          display: none;
         }
       }
       .ps-dock-tool:hover {
@@ -994,11 +1056,12 @@ export class OnPageOverlayDashboard {
         position: absolute;
         bottom: calc(100% + 10px);
         right: 0;
-        width: 268px;
+        width: min(272px, calc(100vw - 32px));
         padding: 10px;
         background: var(--bg);
         border: 1px solid var(--border-strong);
-        border-radius: 10px;
+        border-top: 2px solid var(--accent);
+        border-radius: 13px;
         box-shadow: var(--shadow-lg);
         pointer-events: auto;
         z-index: 4;
@@ -1070,29 +1133,31 @@ export class OnPageOverlayDashboard {
         display: none;
         align-items: center;
         gap: 8px;
-        padding: 6px 10px;
+        padding: 7px 12px;
         background: var(--bg);
         border: 1px solid var(--border-strong);
-        border-radius: 8px;
+        border-top: 2px solid var(--accent);
+        border-radius: 13px;
         box-shadow: var(--shadow-lg);
         pointer-events: auto;
         max-width: 100%;
       }
       .ps-drawer {
         display: none;
-        width: min(760px, calc(100vw - 24px));
-        max-height: min(64vh, 540px);
+        width: min(760px, calc(100vw - 28px));
+        max-height: min(56vh, 490px);
         overflow-y: auto;
         background: var(--bg);
         border: 1px solid var(--border-strong);
-        border-radius: 10px;
+        border-top: 2px solid var(--accent);
+        border-radius: 14px;
         box-shadow: var(--shadow-lg);
         pointer-events: auto;
         padding: 14px;
       }
       .ps-drawer.ps-drawer-wide {
-        width: min(1060px, calc(100vw - 24px));
-        max-height: min(76vh, 720px);
+        width: min(1060px, calc(100vw - 28px));
+        max-height: min(68vh, 660px);
       }
       .ps-drawer.open {
         display: block;
@@ -1111,10 +1176,10 @@ export class OnPageOverlayDashboard {
         100% { transform: scale(1); }
       }
       .ps-sq-dot {
-        width: 7px;
-        height: 7px;
+        width: 8px;
+        height: 8px;
         border-radius: 2px;
-        background: var(--positive);
+        background: var(--accent);
         flex: 0 0 auto;
       }
       .ps-btn {
@@ -1612,7 +1677,7 @@ export class OnPageOverlayDashboard {
         border-radius: 10px;
         box-shadow: var(--shadow-lg);
         color: var(--text);
-        animation: ps-enter 180ms var(--ease);
+        animation: ps-rise 180ms var(--ease);
       }
       .ps-mac-toast-success { border-left-color: var(--positive); }
       .ps-mac-toast-warning { border-left-color: var(--warning); }
@@ -1761,6 +1826,7 @@ export class OnPageOverlayDashboard {
       bImg.alt = 'PageSift';
       dockIdentity.appendChild(bImg);
     }
+    const brandTag = this.createEl('span', 'ps-dock-brand-pill', 'PageSift');
     const hostTxt = this.createEl(
       'span',
       undefined,
@@ -1771,7 +1837,7 @@ export class OnPageOverlayDashboard {
       'ps-dock-hint',
       'Double-click extension icon for Dashboard',
     );
-    dockIdentity.append(hostTxt, hintTxt);
+    dockIdentity.append(brandTag, hostTxt, hintTxt);
 
     const dockModes = this.doc.createElement('div');
     dockModes.className = 'ps-dock-modes';
@@ -1818,7 +1884,19 @@ export class OnPageOverlayDashboard {
         });
     });
 
-    dockModes.append(pipDashBtn, fullDashBtn, aiExtractBtn);
+    const motionLabBtn = this.doc.createElement('button');
+    motionLabBtn.type = 'button';
+    motionLabBtn.className = 'ps-pill-btn';
+    motionLabBtn.setAttribute('data-ps-action', 'motion-lab');
+    motionLabBtn.title = 'Inspect, observe, replay, and export animations cleanly';
+    motionLabBtn.appendChild(createSvgIcon('motion_lab', '', this.doc));
+    motionLabBtn.appendChild(this.doc.createTextNode('Motion Lab'));
+    motionLabBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      this.openMotionLabDrawer();
+    });
+
+    dockModes.append(pipDashBtn, fullDashBtn, aiExtractBtn, motionLabBtn);
     dockHead.append(dockIdentity, dockModes);
     dockBar.appendChild(dockHead);
 
@@ -2066,6 +2144,12 @@ export class OnPageOverlayDashboard {
       this.pipMenuOpen = false;
       this.syncPipVisibility();
       void this.callbacks.onOpenFullDashboard({ mode: 'tab' });
+    });
+
+    addAction('Motion Lab (Animations)', 'motion_lab', 'motion-lab-menu', () => {
+      this.pipMenuOpen = false;
+      this.syncPipVisibility();
+      this.openMotionLabDrawer();
     });
 
     addAction('Full-Page Screenshot (PNG)', 'capture', 'capture-full-page-menu', () => {
@@ -2810,6 +2894,91 @@ export class OnPageOverlayDashboard {
       return;
     }
 
+    if (this.drawerTab === 'motion_lab') {
+      const targetEl = this.drawerContent;
+      renderMotionLabOverlayDrawer(this.doc, targetEl, this.motionDrawerState, {
+        onPickTarget: () => {
+          this.minimize('Pick element for Motion Lab | Esc cancels');
+          this.callbacks.onStartPickerForTool('motion_lab');
+        },
+        onInspect: async (sel) => {
+          if (!this.callbacks.onInspectMotion) {
+            this.motionDrawerState.status = 'error';
+            this.motionDrawerState.statusText = 'Motion inspection callback unavailable.';
+            this.renderDrawer();
+            return;
+          }
+          const res = await this.callbacks.onInspectMotion(sel);
+          this.motionDrawerState.targetSelector = res.selector;
+          this.motionDrawerState.inspection = res.inspection;
+          this.motionDrawerState.status = 'idle';
+          this.motionDrawerState.statusText = `Declared scan: ${res.inspection.declaredAnimations.length} animation(s) on ${res.inspection.targets.length} target(s).`;
+          this.renderDrawer();
+        },
+        onStartObservation: async (trigger, durationMs, sel) => {
+          if (!this.callbacks.onStartMotionObservation) return;
+          this.motionDrawerState.status = 'observing';
+          this.motionDrawerState.statusText = `Observing "${trigger}" interaction for ${(durationMs / 1000).toFixed(1)}s — interact with ${sel ?? 'the page'} now, then click Finish & Analyze.`;
+          const started = await this.callbacks.onStartMotionObservation({
+            ...(sel ? { selector: sel } : {}),
+            trigger,
+            durationMs,
+          });
+          this.motionDrawerState.activeSessionId = started.sessionId;
+          this.motionDrawerState.targetSelector = started.targetSelector;
+          this.motionDrawerState.inspection = started.inspection;
+          this.renderDrawer();
+        },
+        onStopObservation: async () => {
+          if (!this.callbacks.onStopMotionObservation) return;
+          const res = await this.callbacks.onStopMotionObservation();
+          this.motionDrawerState.activeSessionId = null;
+          this.motionDrawerState.spec = res.spec;
+          this.motionDrawerState.exports = res.exports;
+          this.motionDrawerState.status = 'ready';
+          this.motionDrawerState.statusText = `Captured ${res.spec.tracks.length} track(s) in ${Math.round(res.spec.session.observedDurationMs)}ms (${res.spec.session.sampleCount} samples).`;
+          this.renderDrawer();
+        },
+        onCancelObservation: async () => {
+          await this.callbacks.onCancelMotionObservation?.('Cancelled from overlay drawer');
+          this.motionDrawerState.activeSessionId = null;
+          this.motionDrawerState.status = 'cancelled';
+          this.motionDrawerState.statusText =
+            'Observation cancelled cleanly; listeners cleaned up.';
+          this.renderDrawer();
+        },
+        onOpenFullMotionLab: () => {
+          void this.callbacks.onOpenFullDashboard({ tool: 'motion_lab', mode: 'tab' });
+        },
+        onCopyText: (text, label) => {
+          void navigator.clipboard.writeText(text).then(() => {
+            this.notify({ title: 'Copied', message: `${label} copied cleanly.`, tone: 'success' });
+          });
+        },
+        onDownloadText: (filename, mime, text) => {
+          const blob = new Blob([text], { type: mime });
+          const url = URL.createObjectURL(blob);
+          const a = this.doc.createElement('a');
+          a.href = url;
+          a.download = filename;
+          this.doc.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => {
+            URL.revokeObjectURL(url);
+          }, 1000);
+        },
+        onClose: () => {
+          this.drawerTab = 'none';
+          this.syncDrawerVisibility();
+        },
+        onStateChange: () => {
+          this.renderDrawer();
+        },
+      });
+      return;
+    }
+
     if (this.drawerTab === 'tools') {
       const head = this.doc.createElement('div');
       head.className = 'ps-drawer-head';
@@ -2850,6 +3019,28 @@ export class OnPageOverlayDashboard {
         this.fillToolsGrid(gridContainer);
       });
       this.drawerContent.appendChild(search);
+
+      const motionQuickCard = this.doc.createElement('div');
+      motionQuickCard.style.display = 'flex';
+      motionQuickCard.style.alignItems = 'center';
+      motionQuickCard.style.justifyContent = 'space-between';
+      motionQuickCard.style.gap = '8px';
+      motionQuickCard.style.padding = '8px 10px';
+      motionQuickCard.style.margin = '8px 0';
+      motionQuickCard.style.border = '1px solid var(--border)';
+      motionQuickCard.style.borderRadius = '8px';
+      const motionQuickText = this.createEl(
+        'span',
+        undefined,
+        'Motion Lab: Reverse-engineer CSS, WAAPI, scroll & observed animations',
+      );
+      const motionQuickBtn = this.createButton('Open Motion Lab', 'ps-btn primary', () => {
+        this.openMotionLabDrawer();
+      });
+      motionQuickBtn.setAttribute('data-ps-action', 'motion-lab-drawer');
+      motionQuickCard.append(motionQuickText, motionQuickBtn);
+      this.drawerContent.appendChild(motionQuickCard);
+
       this.fillToolsGrid(gridContainer);
       this.drawerContent.appendChild(gridContainer);
 
@@ -3298,6 +3489,34 @@ export class OnPageOverlayDashboard {
       grid.append(posWrap, themeWrap);
       this.drawerContent.appendChild(grid);
     }
+  }
+
+  private motionDrawerState: OverlayMotionDrawerState = {
+    targetSelector: 'body',
+    trigger: 'hover',
+    durationMs: 3000,
+    status: 'idle',
+    statusText:
+      'Select an element or inspect declared CSS/WAAPI animations, then observe interaction.',
+    activeSessionId: null,
+    inspection: null,
+    spec: null,
+    exports: null,
+  };
+
+  public openMotionLabDrawer(selector?: string, inspection?: MotionInspectionResult | null): void {
+    if (selector) {
+      this.motionDrawerState.targetSelector = selector;
+    }
+    if (inspection) {
+      this.motionDrawerState.inspection = inspection;
+      this.motionDrawerState.spec = null;
+      this.motionDrawerState.exports = null;
+      this.motionDrawerState.statusText = `Inspected ${inspection.targets.length} target(s): ${inspection.declaredAnimations.length} declared animation(s). Start observation to record live motion.`;
+    }
+    this.drawerTab = 'motion_lab';
+    this.syncDrawerVisibility();
+    this.renderDrawer();
   }
 
   private fillToolsGrid(container: HTMLElement): void {

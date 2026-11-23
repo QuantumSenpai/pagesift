@@ -1197,6 +1197,17 @@ export function renderStructuredToolResult(
       return renderDesignReviewView(data, callbacks);
     case 'tech_stack':
       return renderTechStackView(data);
+    case 'motion_lab': {
+      const wrap = el('div', 'structured-view');
+      wrap.appendChild(
+        el(
+          'div',
+          'empty-state',
+          'Interactive Motion Lab is mounted above. Select a target or import a Reanimate archive.',
+        ),
+      );
+      return wrap;
+    }
     case 'edit_text':
     case 'swap_font':
     case 'arrange':

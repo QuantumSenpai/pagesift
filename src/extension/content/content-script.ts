@@ -29,6 +29,18 @@ import { extractPageFeaturesLocal } from '../engines/feature-extract-engine.js';
 import { extractPageFonts } from '../engines/fonts-engine.js';
 import { inspectElement } from '../engines/inspect-engine.js';
 import { measureElements } from '../engines/measure-engine.js';
+import { buildMotionSpecFromObservation } from '../engines/motion-analysis-engine.js';
+import {
+  generateMotionExports,
+  type GeneratedMotionExports,
+} from '../engines/motion-codegen-engine.js';
+import {
+  inspectDeclaredMotion,
+  MotionObservationSession,
+  type MotionInspectionResult,
+  type MotionObservationRawResult,
+} from '../engines/motion-observation-engine.js';
+import type { MotionSpec, MotionTriggerType } from '../engines/motion-spec.js';
 import { detectPageTechStack } from '../engines/tech-stack-engine.js';
 import {
   createErrorResponse,
@@ -85,6 +97,8 @@ const UNBOUND_CONTENT_OPERATIONS = new Set<MessageOperation>([
   'CANCEL_JOB',
   'CAPTURE_RESTORE',
   'TOGGLE_OVERLAY_DASHBOARD',
+  'STOP_MOTION_OBSERVATION',
+  'CANCEL_MOTION_OBSERVATION',
 ]);
 
 function uint8ToBase64(bytes: Uint8Array): string {
@@ -145,6 +159,15 @@ export class ContentScriptRuntime {
   private suppressScrollEmitUntilMs = 0;
   private scrollEmitTimer: ReturnType<typeof setTimeout> | null = null;
   private lastScrollEmitMs = 0;
+  private activeMotionSession: {
+    sessionId: string;
+    instance: MotionObservationSession;
+    completionPromise: Promise<MotionObservationRawResult>;
+    trigger: MotionTriggerType;
+    selector: string;
+  } | null = null;
+  private lastMotionSpec: MotionSpec | null = null;
+  private lastMotionExports: GeneratedMotionExports | null = null;
 
   public constructor(doc: Document, win: Window, adapters: ContentScriptAdapters = {}) {
     this.doc = doc;
@@ -162,6 +185,7 @@ export class ContentScriptRuntime {
   }
 
   public dispose(): void {
+    this.disposeActiveMotionSession('Content script disposed');
     this.restoreCaptureDomState();
     this.deactivateInteractiveTools();
     this.editController.resetAll();
@@ -301,6 +325,13 @@ export class ContentScriptRuntime {
       if (shouldCompleteMeasure) {
         this.restoreOverlayAfterPick = false;
         this.stopInteractivePickerOnly();
+        if (pickedTool === 'motion_lab') {
+          const sel = buildShortSelector(target);
+          const inspection = inspectDeclaredMotion(target, this.doc, this.win, 24);
+          this.overlayDashboard.openExpanded();
+          this.overlayDashboard.openMotionLabDrawer(sel, inspection);
+          return;
+        }
         if (pickedTool === 'edit_text' || pickedTool === 'swap_font' || pickedTool === 'arrange') {
           this.overlayDashboard.showEditor(
             pickedTool,
@@ -649,6 +680,20 @@ export class ContentScriptRuntime {
         },
         onRunOverlayTool: (tool, options) => this.executeOverlayTool(tool, options),
         onRunFeatureExtract: () => this.executeOverlayFeatureExtraction(),
+        onInspectMotion: (selector) => {
+          const target = this.resolveTargetElement(selector);
+          const inspection = inspectDeclaredMotion(target, this.doc, this.win, 24);
+          return Promise.resolve({ selector: buildShortSelector(target), inspection });
+        },
+        onStartMotionObservation: (opts) => {
+          return Promise.resolve(this.startMotionObservationInternal(opts));
+        },
+        onStopMotionObservation: async () => {
+          return this.stopMotionObservationInternal();
+        },
+        onCancelMotionObservation: async (reason) => {
+          await this.cancelMotionObservationInternal(reason);
+        },
         onEditHistoryCommand: (command) => {
           if (command === 'EDIT_UNDO') this.editController.undo();
           else if (command === 'EDIT_REDO') this.editController.redo();
@@ -818,9 +863,9 @@ export class ContentScriptRuntime {
     }
   }
 
-  public toggleOverlayDashboard(
+  public async toggleOverlayDashboard(
     mode: 'toggle' | 'open' | 'close' | 'minimize' | 'action_click' | 'pip' = 'toggle',
-  ): 'expanded' | 'minimized' | 'closed' {
+  ): Promise<'expanded' | 'minimized' | 'closed'> {
     if (this.win.name === 'pagesift-responsive-frame') {
       return 'closed';
     }
@@ -833,7 +878,7 @@ export class ContentScriptRuntime {
     if (this.onPageDock) {
       this.onPageDock.style.display = 'none';
     }
-    void this.syncOverlayThemeFromSettings();
+    await this.syncOverlayThemeFromSettings();
     if (mode === 'action_click') {
       return dash.handleToolbarActionClick();
     }
@@ -1642,7 +1687,7 @@ export class ContentScriptRuntime {
               | 'action_click'
               | 'pip'
               | undefined) ?? 'toggle';
-          const nextMode = this.toggleOverlayDashboard(reqMode);
+          const nextMode = await this.toggleOverlayDashboard(reqMode);
           return createSuccessResponse(
             msg,
             { overlayMode: nextMode, documentId: this.documentId },
@@ -2120,6 +2165,49 @@ export class ContentScriptRuntime {
           );
         }
 
+        case 'RUN_MOTION_INSPECT': {
+          const target = this.resolveTargetElement(msg.payload['selector']);
+          const maxTargets =
+            typeof msg.payload['maxTargets'] === 'number' ? msg.payload['maxTargets'] : 24;
+          const inspection = inspectDeclaredMotion(target, this.doc, this.win, maxTargets);
+          return createSuccessResponse(
+            msg,
+            {
+              targetSelector: buildShortSelector(target),
+              inspection,
+              lastSpec: this.lastMotionSpec,
+              lastExports: this.lastMotionExports,
+            },
+            this.documentId,
+          );
+        }
+
+        case 'START_MOTION_OBSERVATION': {
+          const started = this.startMotionObservationInternal({
+            ...(typeof msg.payload['selector'] === 'string'
+              ? { selector: msg.payload['selector'] }
+              : {}),
+            trigger: (msg.payload['trigger'] as MotionTriggerType | undefined) ?? 'manual',
+            durationMs:
+              typeof msg.payload['durationMs'] === 'number' ? msg.payload['durationMs'] : 3000,
+            maxTargets:
+              typeof msg.payload['maxTargets'] === 'number' ? msg.payload['maxTargets'] : 24,
+          });
+          return createSuccessResponse(msg, started, this.documentId);
+        }
+
+        case 'STOP_MOTION_OBSERVATION': {
+          const completed = await this.stopMotionObservationInternal();
+          return createSuccessResponse(msg, completed, this.documentId);
+        }
+
+        case 'CANCEL_MOTION_OBSERVATION': {
+          await this.cancelMotionObservationInternal(
+            typeof msg.payload['reason'] === 'string' ? msg.payload['reason'] : 'Cancelled by user',
+          );
+          return createSuccessResponse(msg, { cancelled: true }, this.documentId);
+        }
+
         default:
           return createErrorResponse(
             msg.requestId,
@@ -2137,6 +2225,128 @@ export class ContentScriptRuntime {
         msg.operation,
       );
     }
+  }
+
+  private startMotionObservationInternal(opts: {
+    selector?: string;
+    trigger: MotionTriggerType;
+    durationMs: number;
+    maxTargets?: number;
+  }): {
+    sessionId: string;
+    targetSelector: string;
+    inspection: MotionInspectionResult;
+    trigger: MotionTriggerType;
+    durationMs: number;
+  } {
+    this.disposeActiveMotionSession('Replaced by new Motion Lab observation');
+    const target = this.resolveTargetElement(opts.selector);
+    const targetSelector = buildShortSelector(target);
+    let resolveRaw!: (raw: MotionObservationRawResult) => void;
+    const completionPromise = new Promise<MotionObservationRawResult>((resolve) => {
+      resolveRaw = resolve;
+    });
+    const session = new MotionObservationSession({
+      rootElement: target,
+      doc: this.doc,
+      win: this.win,
+      trigger: opts.trigger,
+      maxDurationMs: opts.durationMs,
+      maxTargets: opts.maxTargets ?? 24,
+      onComplete: (raw) => {
+        const spec = buildMotionSpecFromObservation(raw);
+        const exports = generateMotionExports(spec);
+        this.lastMotionSpec = spec;
+        this.lastMotionExports = exports;
+        if (this.activeMotionSession?.sessionId === raw.sessionId) {
+          this.activeMotionSession = null;
+        }
+        resolveRaw(raw);
+      },
+    });
+    const inspection = session.getInspection();
+    session.start();
+    const sessionId = `motion-${Date.now().toString(36)}`;
+    this.activeMotionSession = {
+      sessionId,
+      instance: session,
+      completionPromise,
+      trigger: opts.trigger,
+      selector: targetSelector,
+    };
+    return {
+      sessionId,
+      targetSelector,
+      inspection,
+      trigger: opts.trigger,
+      durationMs: opts.durationMs,
+    };
+  }
+
+  private async stopMotionObservationInternal(): Promise<{
+    spec: MotionSpec;
+    exports: GeneratedMotionExports;
+  }> {
+    if (this.activeMotionSession) {
+      const active = this.activeMotionSession;
+      active.instance.stopEarly();
+      const raw = await active.completionPromise;
+      active.instance.dispose();
+      const spec = buildMotionSpecFromObservation(raw);
+      const exports = generateMotionExports(spec);
+      this.lastMotionSpec = spec;
+      this.lastMotionExports = exports;
+      this.activeMotionSession = null;
+      void this.recordOverlayActivity({
+        activityId: `motion-${Date.now().toString(36)}`,
+        tool: 'motion_lab',
+        actionLabel: 'Motion Lab Observation',
+        status: 'completed',
+        durationMs: Math.round(spec.session.observedDurationMs),
+        optionsSummary: {
+          selector: active.selector,
+          trigger: active.trigger,
+          maxDurationMs: spec.session.observedDurationMs,
+        },
+        resultSummary: `Captured ${spec.tracks.length} track(s) on ${spec.rootSelector}`,
+      }).catch(() => undefined);
+      return { spec, exports };
+    }
+    if (this.lastMotionSpec && this.lastMotionExports) {
+      return { spec: this.lastMotionSpec, exports: this.lastMotionExports };
+    }
+    const target = this.resolveTargetElement();
+    const session = new MotionObservationSession({
+      rootElement: target,
+      doc: this.doc,
+      win: this.win,
+      trigger: 'manual',
+      maxDurationMs: 250,
+    });
+    session.start();
+    const raw = session.stopEarly();
+    session.dispose();
+    const spec = buildMotionSpecFromObservation(raw);
+    const exports = generateMotionExports(spec);
+    this.lastMotionSpec = spec;
+    this.lastMotionExports = exports;
+    return { spec, exports };
+  }
+
+  private async cancelMotionObservationInternal(reason?: string): Promise<void> {
+    if (!this.activeMotionSession) return;
+    const active = this.activeMotionSession;
+    active.instance.cancel(reason ?? 'Cancelled by user');
+    await active.completionPromise.catch(() => undefined);
+    active.instance.dispose();
+    this.activeMotionSession = null;
+  }
+
+  private disposeActiveMotionSession(reason: string): void {
+    if (!this.activeMotionSession) return;
+    this.activeMotionSession.instance.cancel(reason);
+    this.activeMotionSession.instance.dispose();
+    this.activeMotionSession = null;
   }
 }
 

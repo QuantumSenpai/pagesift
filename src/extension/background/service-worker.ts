@@ -1104,6 +1104,125 @@ export class BackgroundCoordinator {
           return createSuccessResponse(msg, { deleted: true, artifactId });
         }
 
+        case 'SAVE_MOTION_MEDIA_TO_IDB': {
+          const nowIso = new Date().toISOString();
+          const projectId =
+            typeof msg.payload['projectId'] === 'string'
+              ? msg.payload['projectId']
+              : 'proj-default';
+          const existingProject = await this.env.storage.getProject(projectId);
+          if (!existingProject) {
+            await this.env.storage.saveProject({
+              id: projectId,
+              name: 'Default Workspace',
+              description: 'Local PageSift project',
+              sourceDomain: null,
+              createdAt: nowIso,
+              updatedAt: nowIso,
+            });
+          }
+          const b64 =
+            typeof msg.payload['base64Data'] === 'string' ? msg.payload['base64Data'] : '';
+          const binaryStr = atob(b64);
+          const bytes = new Uint8Array(binaryStr.length);
+          for (let i = 0; i < binaryStr.length; i += 1) {
+            bytes[i] = binaryStr.charCodeAt(i);
+          }
+          const saved = await this.env.storage.saveMotionMedia({
+            id: typeof msg.payload['id'] === 'string' ? msg.payload['id'] : `mm-${Date.now()}`,
+            projectId,
+            sessionId:
+              typeof msg.payload['sessionId'] === 'string'
+                ? msg.payload['sessionId']
+                : 'sess-default',
+            kind: msg.payload['kind'] === 'frame' ? 'frame' : 'video',
+            mimeType:
+              (msg.payload['mimeType'] as
+                | 'video/webm'
+                | 'image/png'
+                | 'image/jpeg'
+                | 'image/webp'
+                | undefined) ?? 'video/webm',
+            width: typeof msg.payload['width'] === 'number' ? msg.payload['width'] : 0,
+            height: typeof msg.payload['height'] === 'number' ? msg.payload['height'] : 0,
+            durationMs:
+              typeof msg.payload['durationMs'] === 'number' ? msg.payload['durationMs'] : 0,
+            tMs: typeof msg.payload['tMs'] === 'number' ? msg.payload['tMs'] : 0,
+            bytes,
+            createdAt: nowIso,
+          });
+          return createSuccessResponse(msg, {
+            media: {
+              id: saved.id,
+              projectId: saved.projectId,
+              sessionId: saved.sessionId,
+              kind: saved.kind,
+              mimeType: saved.mimeType,
+              byteLength: saved.byteLength,
+            },
+          });
+        }
+
+        case 'GET_MOTION_MEDIA_FROM_IDB': {
+          if (typeof msg.payload['id'] === 'string') {
+            const item = await this.env.storage.getMotionMedia(msg.payload['id']);
+            if (!item) return createSuccessResponse(msg, { media: null });
+            return createSuccessResponse(msg, {
+              media: {
+                id: item.id,
+                projectId: item.projectId,
+                sessionId: item.sessionId,
+                kind: item.kind,
+                mimeType: item.mimeType,
+                width: item.width,
+                height: item.height,
+                durationMs: item.durationMs,
+                tMs: item.tMs,
+                byteLength: item.byteLength,
+                base64Data: encodeBytesToBase64(item.bytes),
+                createdAt: item.createdAt,
+              },
+            });
+          }
+          if (typeof msg.payload['sessionId'] === 'string') {
+            const list = await this.env.storage.listMotionMediaBySession(msg.payload['sessionId']);
+            return createSuccessResponse(msg, {
+              items: list.map((item) => ({
+                id: item.id,
+                projectId: item.projectId,
+                sessionId: item.sessionId,
+                kind: item.kind,
+                mimeType: item.mimeType,
+                width: item.width,
+                height: item.height,
+                durationMs: item.durationMs,
+                tMs: item.tMs,
+                byteLength: item.byteLength,
+                createdAt: item.createdAt,
+              })),
+            });
+          }
+          return createSuccessResponse(msg, { items: [] });
+        }
+
+        case 'DELETE_MOTION_MEDIA_FROM_IDB': {
+          if (typeof msg.payload['id'] === 'string') {
+            await this.env.storage.deleteMotionMedia(msg.payload['id']);
+            return createSuccessResponse(msg, { deleted: true, id: msg.payload['id'] });
+          }
+          if (typeof msg.payload['sessionId'] === 'string') {
+            const removedCount = await this.env.storage.deleteMotionMediaBySession(
+              msg.payload['sessionId'],
+            );
+            return createSuccessResponse(msg, {
+              deleted: true,
+              removedCount,
+              sessionId: msg.payload['sessionId'],
+            });
+          }
+          return createSuccessResponse(msg, { deleted: false });
+        }
+
         case 'OPEN_OPTIONS_PAGE': {
           if (this.env.openDashboardTab) {
             await this.env.openDashboardTab('options.html');

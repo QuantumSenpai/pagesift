@@ -8,6 +8,9 @@ import {
   type CaptureMode,
   type CaptureRect,
 } from '../engines/capture-engine.js';
+import { generateMotionExports } from '../engines/motion-codegen-engine.js';
+import type { MotionInspectionResult } from '../engines/motion-observation-engine.js';
+import type { MotionSpec } from '../engines/motion-spec.js';
 import {
   DEFAULT_RESPONSIVE_PRESETS,
   type ResponsiveViewportPreset,
@@ -25,6 +28,7 @@ import {
   type ActivityQueryResult,
 } from '../storage/activity-history.js';
 import type { LocalArtifactKind } from '../storage/idb-storage.js';
+import { renderMotionLabPanel } from './motion-lab-panel.js';
 import { pushMacNotification } from './notifications.js';
 import {
   applyThemePreference,
@@ -89,6 +93,7 @@ const TOOL_TITLES: Record<ToolId, string> = {
   arrange: '13. Reversible Element Arrange',
   design_review: '14. Evidence-Based Design & Contrast Review',
   tech_stack: '15. Public Tech Stack Detector',
+  motion_lab: '16. Motion Lab — Animation Reverse Engineering',
 };
 
 const TOOL_SHORT_LABELS: Record<ToolId, string> = {
@@ -107,6 +112,7 @@ const TOOL_SHORT_LABELS: Record<ToolId, string> = {
   arrange: 'Arrange',
   design_review: 'Design Review',
   tech_stack: 'Tech Stack',
+  motion_lab: 'Motion Lab',
 };
 
 const TOOL_SUBTITLES: Record<ToolId, string> = {
@@ -130,6 +136,8 @@ const TOOL_SUBTITLES: Record<ToolId, string> = {
   design_review: 'Audit typographic hierarchy, spacing scale, and WCAG contrast with evidence.',
   tech_stack:
     'Detect public frontend frameworks, CSS libraries, and platforms with confidence notes.',
+  motion_lab:
+    'Inspect declared animations, observe live interaction tracks, replay in isolation, compare & export.',
 };
 
 const TOOL_TO_ARTIFACT_KIND: Record<ToolId, LocalArtifactKind> = {
@@ -148,6 +156,7 @@ const TOOL_TO_ARTIFACT_KIND: Record<ToolId, LocalArtifactKind> = {
   arrange: 'inspect_report',
   design_review: 'design_review',
   tech_stack: 'tech_stack',
+  motion_lab: 'motion_lab',
 };
 
 const ARTIFACT_KIND_TO_TOOL: Record<string, ToolId> = {
@@ -161,6 +170,7 @@ const ARTIFACT_KIND_TO_TOOL: Record<string, ToolId> = {
   capture_image: 'capture',
   design_review: 'design_review',
   tech_stack: 'tech_stack',
+  motion_lab: 'motion_lab',
 };
 
 const TOOLS_WITH_SELECTOR = new Set<ToolId>([
@@ -170,6 +180,7 @@ const TOOLS_WITH_SELECTOR = new Set<ToolId>([
   'swap_font',
   'arrange',
   'capture',
+  'motion_lab',
 ]);
 const TOOLS_WITH_SECONDARY = new Set<ToolId>(['measure', 'edit_text', 'swap_font']);
 const TOOLS_WITH_MODE = new Set<ToolId>(['clone_prompt', 'arrange']);
@@ -179,6 +190,7 @@ const TOOLS_WITH_AI_ENHANCE = new Set<ToolId>([
   'design_md',
   'design_review',
   'tech_stack',
+  'motion_lab',
 ]);
 
 const HISTORY_PAGE_SIZE = 25;
@@ -206,7 +218,9 @@ let confirmedNvidiaTaskType:
   | 'interpret_design_review'
   | 'explain_tech_stack'
   | 'extract_features'
+  | 'explain_motion'
   | null = null;
+let activeMotionPanelCleanup: (() => void) | null = null;
 let activeJobRequestId: string | null = null;
 let pickerActive = false;
 let currentThemePref: ThemePreference = readCachedTheme();
@@ -294,6 +308,14 @@ function summarizeToolResultShort(tool: ToolId, data: Record<string, unknown>): 
   if (tool === 'tech_stack') {
     const rep = data['report'] as { detections?: unknown[] } | undefined;
     return `Detected ${rep?.detections?.length ?? 0} technology signals`;
+  }
+  if (tool === 'motion_lab') {
+    const spec = data['spec'] as MotionSpec | undefined;
+    if (spec) {
+      return `Captured ${spec.tracks.length} motion track(s) on ${spec.rootSelector}`;
+    }
+    const ins = data['inspection'] as MotionInspectionResult | undefined;
+    return `Inspected ${ins?.declaredAnimations.length ?? 0} declared animations`;
   }
   if (tool === 'edit_text' || tool === 'swap_font' || tool === 'arrange') {
     return `Applied reversible ${TOOL_SHORT_LABELS[tool].toLowerCase()} preview`;
@@ -584,11 +606,167 @@ async function copyTextWithFeedback(text: string, label: string): Promise<void> 
 }
 
 function renderCurrentStructuredOutput(tool: ToolId, data: Record<string, unknown>): void {
+  if (activeMotionPanelCleanup) {
+    activeMotionPanelCleanup();
+    activeMotionPanelCleanup = null;
+  }
   const container = document.getElementById('structured-result-container');
   if (!container) {
     return;
   }
   container.textContent = '';
+  if (tool === 'motion_lab') {
+    activeMotionPanelCleanup = renderMotionLabPanel(container, data, {
+      getSelectorInput: () => {
+        const input = document.getElementById('target-selector-input') as HTMLInputElement | null;
+        return input?.value.trim() || undefined;
+      },
+      onStatus: (msg, variant) => {
+        setStatus(msg, variant);
+      },
+      onCopyText: (text, label) => {
+        void copyTextWithFeedback(text, label);
+      },
+      onDownloadFile: (filename, mimeType, content) => {
+        if (typeof content === 'string') {
+          triggerFileDownload({ filename, mimeType, textContent: content });
+        } else {
+          triggerFileDownload({ filename, mimeType, bytes: content });
+        }
+      },
+      onInspect: async (sel) => {
+        const { tabId } = await resolveTargetTabId();
+        if (tabId === null) {
+          throw new Error('No active target tab bound for inspection.');
+        }
+        const docCtx = await getBoundDocumentContext(tabId);
+        const res = await sendContentMessage(
+          tabId,
+          'RUN_MOTION_INSPECT',
+          sel ? { selector: sel } : {},
+          docCtx.documentId,
+        );
+        if (!res.ok) throw new Error(res.error.message);
+        const resData = res.data as { targetSelector: string; inspection: MotionInspectionResult };
+        lastResultTool = 'motion_lab';
+        lastResultData = res.data as Record<string, unknown>;
+        return resData;
+      },
+      onStartObservation: async (opts) => {
+        const { tabId } = await resolveTargetTabId();
+        if (tabId === null) {
+          throw new Error('No active target tab bound for observation.');
+        }
+        const docCtx = await getBoundDocumentContext(tabId);
+        const res = await sendContentMessage(
+          tabId,
+          'START_MOTION_OBSERVATION',
+          opts,
+          docCtx.documentId,
+        );
+        if (!res.ok) throw new Error(res.error.message);
+        return res.data as {
+          sessionId: string;
+          targetSelector: string;
+          inspection: MotionInspectionResult;
+        };
+      },
+      onStopObservation: async () => {
+        const { tabId } = await resolveTargetTabId();
+        if (tabId === null) {
+          throw new Error('No active target tab bound to finish observation.');
+        }
+        const docCtx = await getBoundDocumentContext(tabId);
+        const res = await sendContentMessage(
+          tabId,
+          'STOP_MOTION_OBSERVATION',
+          {},
+          docCtx.documentId,
+        );
+        if (!res.ok) throw new Error(res.error.message);
+        const resData = res.data as {
+          spec: MotionSpec;
+          exports: ReturnType<typeof generateMotionExports>;
+        };
+        lastResultTool = 'motion_lab';
+        lastResultData = res.data as Record<string, unknown>;
+        const built = buildDownloadableForTool(
+          'motion_lab',
+          lastResultData,
+          makeSlug(resData.spec.environment.pageTitle || lastTargetPageTitle),
+        );
+        lastDownloadable = built.downloadable;
+        lastCopyableText = built.copyableText;
+        updateActionButtons();
+        void sendBackgroundMessage('RECORD_LOCAL_ACTIVITY', {
+          activityId: `act-motion-${Date.now().toString(36)}`,
+          tool: 'motion_lab',
+          actionLabel: 'Motion Lab',
+          sourceUrl: resData.spec.environment.pageUrl || lastTargetPageUrl,
+          pageTitle: resData.spec.environment.pageTitle || lastTargetPageTitle,
+          status: 'completed',
+          durationMs: Math.round(resData.spec.session.observedDurationMs),
+          optionsSummary: {
+            selector: resData.spec.rootSelector,
+            trigger: resData.spec.tracks[0]?.trigger ?? 'manual',
+            durationMs: Math.round(resData.spec.session.observedDurationMs),
+          },
+          resultSummary: `Captured ${resData.spec.tracks.length} track(s) on ${resData.spec.rootSelector}`,
+        });
+        return resData;
+      },
+      onCancelObservation: async () => {
+        const { tabId } = await resolveTargetTabId();
+        if (tabId === null) return;
+        const docCtx = await getBoundDocumentContext(tabId).catch(() => null);
+        await sendContentMessage(
+          tabId,
+          'CANCEL_MOTION_OBSERVATION',
+          { reason: 'Cancelled in Motion Lab panel' },
+          docCtx?.documentId,
+        );
+      },
+      onSaveSpecArtifact: async (spec, title) => {
+        const select = document.getElementById('project-select') as HTMLSelectElement | null;
+        const projectId = select?.value || 'proj-default';
+        const res = await sendBackgroundMessage('SAVE_ARTIFACT_TO_IDB', {
+          projectId,
+          kind: 'motion_lab',
+          title,
+          sourceUrl: spec.environment.pageUrl || null,
+          artifactPayload: {
+            spec,
+            exports: generateMotionExports(spec),
+          },
+        });
+        if (res.ok) {
+          setStatus('Saved Motion Lab session to IndexedDB project.', 'success');
+          void refreshProjectsDropdown();
+        } else {
+          setStatus(`Failed to save Motion Lab artifact: ${res.error.message}`, 'error');
+        }
+      },
+      onSaveRecordedMedia: async (sessionId, result) => {
+        if (!result.videoBlob) return;
+        const select = document.getElementById('project-select') as HTMLSelectElement | null;
+        const projectId = select?.value || 'proj-default';
+        const buf = new Uint8Array(await result.videoBlob.arrayBuffer());
+        await sendBackgroundMessage('SAVE_MOTION_MEDIA_TO_IDB', {
+          id: `media-${sessionId}-video`,
+          projectId,
+          sessionId,
+          kind: 'video',
+          mimeType: 'video/webm',
+          width: result.viewport.width,
+          height: result.viewport.height,
+          durationMs: Math.round(result.durationMs),
+          tMs: 0,
+          base64Data: encodeBytesToBase64(buf),
+        });
+      },
+    });
+    return;
+  }
   const view = renderStructuredToolResult(tool, data, {
     onCopyText: (text, label) => {
       void copyTextWithFeedback(text, label);
@@ -721,6 +899,19 @@ function buildDownloadableForTool(
         bytes,
       },
       copyableText: null,
+    };
+  }
+
+  if (tool === 'motion_lab') {
+    const spec = data['spec'] as MotionSpec | undefined;
+    const jsonText = JSON.stringify(spec ?? data, null, 2);
+    return {
+      downloadable: {
+        filename: `pagesift-motion-${slug}.json`,
+        mimeType: 'application/json;charset=utf-8',
+        textContent: jsonText,
+      },
+      copyableText: jsonText,
     };
   }
 
@@ -1891,6 +2082,7 @@ async function executeSelectedTool(): Promise<void> {
       arrange: 'RUN_ARRANGE',
       design_review: 'RUN_DESIGN_REVIEW',
       tech_stack: 'RUN_TECH_STACK',
+      motion_lab: 'RUN_MOTION_INSPECT',
     };
 
     const payload: Record<string, unknown> = {};
@@ -1899,7 +2091,8 @@ async function executeSelectedTool(): Promise<void> {
       (currentTool === 'inspect' ||
         currentTool === 'edit_text' ||
         currentTool === 'swap_font' ||
-        currentTool === 'arrange')
+        currentTool === 'arrange' ||
+        currentTool === 'motion_lab')
     ) {
       payload['selector'] = selector;
     }
@@ -2129,6 +2322,9 @@ function selectActiveTool(tool: ToolId): void {
     b.setAttribute('aria-current', isSelected ? 'page' : 'false');
   });
   updateSubPanelsForTool(tool);
+  if (tool === 'motion_lab' && lastResultTool !== 'motion_lab') {
+    renderCurrentStructuredOutput('motion_lab', {});
+  }
   if (tool !== 'capture') {
     document.getElementById('capture-preview-wrap')?.classList.remove('visible');
   } else if (lastCaptureState) {
@@ -2237,6 +2433,10 @@ function initWorkspaceUi(): void {
   const outputEl = document.getElementById('tool-output');
 
   window.addEventListener('pagehide', () => {
+    if (activeMotionPanelCleanup) {
+      activeMotionPanelCleanup();
+      activeMotionPanelCleanup = null;
+    }
     for (const url of activeObjectUrls) {
       URL.revokeObjectURL(url);
     }
@@ -2694,6 +2894,7 @@ function initWorkspaceUi(): void {
     'fonts',
     'inspect',
     'tech_stack',
+    'motion_lab',
   ]);
 
   const executeConfirmedNvidiaSend = async (): Promise<void> => {
@@ -2773,17 +2974,21 @@ function initWorkspaceUi(): void {
         | 'enhance_clone_prompt'
         | 'interpret_design_review'
         | 'explain_tech_stack'
-        | 'extract_features' =
+        | 'extract_features'
+        | 'explain_motion' =
         chosenTask === 'extract_features' ||
         chosenTask === 'enhance_clone_prompt' ||
         chosenTask === 'interpret_design_review' ||
-        chosenTask === 'explain_tech_stack'
+        chosenTask === 'explain_tech_stack' ||
+        chosenTask === 'explain_motion'
           ? chosenTask
-          : currentTool === 'tech_stack' || lastResultTool === 'tech_stack'
-            ? 'explain_tech_stack'
-            : currentTool === 'design_review' || lastResultTool === 'design_review'
-              ? 'interpret_design_review'
-              : 'enhance_clone_prompt';
+          : currentTool === 'motion_lab' || lastResultTool === 'motion_lab'
+            ? 'explain_motion'
+            : currentTool === 'tech_stack' || lastResultTool === 'tech_stack'
+              ? 'explain_tech_stack'
+              : currentTool === 'design_review' || lastResultTool === 'design_review'
+                ? 'interpret_design_review'
+                : 'enhance_clone_prompt';
       const sourceTool =
         resolvedTask === 'extract_features'
           ? 'feature_extract'
@@ -2887,6 +3092,7 @@ function initWorkspaceUi(): void {
       'enhance_clone_prompt',
       'interpret_design_review',
       'explain_tech_stack',
+      'explain_motion',
     ].includes(initialAiTask)
   ) {
     aiTaskSel.value = initialAiTask;

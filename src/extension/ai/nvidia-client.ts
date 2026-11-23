@@ -8,7 +8,8 @@ export type NvidiaTaskType =
   | 'enhance_clone_prompt'
   | 'interpret_design_review'
   | 'explain_tech_stack'
-  | 'extract_features';
+  | 'extract_features'
+  | 'explain_motion';
 export type NvidiaSupportedSourceTool =
   | 'clone_prompt'
   | 'design_review'
@@ -17,7 +18,8 @@ export type NvidiaSupportedSourceTool =
   | 'fonts'
   | 'inspect'
   | 'tech_stack'
-  | 'feature_extract';
+  | 'feature_extract'
+  | 'motion_lab';
 
 export interface NvidiaEgressPreview {
   endpoint: string;
@@ -148,6 +150,18 @@ const ALLOWLIST_BY_TASK: Record<NvidiaTaskType, Set<string>> = {
     'topColors',
     'fontFamilies',
     'markdown',
+  ]),
+  explain_motion: new Set([
+    'pageTitle',
+    'sourceUrl',
+    'rootSelector',
+    'tracks',
+    'targets',
+    'evidenceBreakdown',
+    'motionMd',
+    'detectedEngines',
+    'unavailableItems',
+    'comparisonSummary',
   ]),
 };
 
@@ -382,7 +396,9 @@ export async function invokeNvidiaChatCompletion(
         ? 'You are a staff web platform engineer. Given public technology stack signals detected on a webpage, organize a short, factual architectural summary by layer (framework, styling, UI libraries, hosting/platform, analytics) and highlight what is verified vs inferred.'
         : options.taskType === 'extract_features'
           ? 'You are a product & frontend systems architect. Given allowlisted structural features, CTAs, navigation items, UI pattern counts, tech stack summary, and visual tokens extracted from a webpage, produce a clear Feature Extraction & Product Architecture Spec in Markdown covering: 1. Core Value Proposition & User Flow, 2. Extracted Features & Functional Modules, 3. UI Component Inventory, 4. Styling Tokens & Implementation Prompt.'
-          : 'You are a UI/UX accessibility and design reviewer. Given observable layout, typography, spacing, and WCAG contrast findings (untrusted page metadata), prioritize the top improvements and provide a clean CSS remediation guide in Markdown.';
+          : options.taskType === 'explain_motion'
+            ? 'You are a motion systems engineer. Given declared, observed, inferred, and unavailable animation tracks from Motion Lab (untrusted metadata), explain the choreography, clearly separate verified declarations from inferred curves, avoid claiming unverified spring parameters or unreadable shader logic as exact code, and output clean CSS or WAAPI implementation guidance.'
+            : 'You are a UI/UX accessibility and design reviewer. Given observable layout, typography, spacing, and WCAG contrast findings (untrusted page metadata), prioritize the top improvements and provide a clean CSS remediation guide in Markdown.';
 
   const userPrompt = `Untrusted extracted design metadata JSON:\n${egressPreview.serializedPayloadPreview}`;
 

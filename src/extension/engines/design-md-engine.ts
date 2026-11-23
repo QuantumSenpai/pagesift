@@ -17,6 +17,7 @@ import {
   type StyleAdaptationReport,
 } from './style-adaptation-engine.js';
 import { detectPageTechStack } from './tech-stack-engine.js';
+import { summarizeMotionSpecCounts, type MotionSpec } from './motion-spec.js';
 
 export interface DesignSiteOverview {
   metaDescription?: string;
@@ -213,6 +214,7 @@ export interface PageDesignSnapshotInput {
   };
   assetsAndMotion?: DesignAssetsAndMotionSpec;
   styleAdaptation?: StyleAdaptationReport;
+  motionSpec?: MotionSpec;
 }
 
 export interface DesignTokenConflict {
@@ -2169,6 +2171,37 @@ export function generateDesignMdFromPages(
     lines.push('### Post-Rebuild Fidelity Verification Targets');
     for (const assertion of adapt.reconstructionAssertions) {
       lines.push(`- ${assertion}`);
+    }
+    lines.push('');
+  }
+
+  const motionSpecs = pages
+    .map((p) => p.motionSpec)
+    .filter((m): m is MotionSpec => m !== undefined);
+  if (motionSpecs.length > 0) {
+    lines.push('## 11. Motion Lab Temporal & Interaction Specification');
+    lines.push('');
+    for (const ms of motionSpecs) {
+      const counts = summarizeMotionSpecCounts(ms);
+      lines.push(
+        `- **Scope**: \`${ms.rootSelector}\` (${ms.session.state}, ${Math.round(ms.session.observedDurationMs)} ms, ${ms.session.sampleCount} samples · ${counts.declaredCount} declared, ${counts.observedCount} observed, ${counts.inferredCount} inferred, ${counts.unavailableCount} unavailable)`,
+      );
+      for (const track of ms.tracks.slice(0, 12)) {
+        const timing =
+          track.timelineDomain === 'scroll_progress_percent' ||
+          track.timelineDomain === 'view_progress_percent'
+            ? `scroll ${track.progressStartPct ?? 0}%–${track.progressEndPct ?? 100}%`
+            : `${Math.round(track.durationMs ?? 0)}ms / delay ${Math.round(track.delayMs ?? 0)}ms`;
+        const easing = track.declaredEasing ?? track.inferredEasings[0]?.cssEasing ?? 'linear';
+        lines.push(
+          `  - \`${track.selector}\` \`${track.property}\` [${track.evidenceClass} · ${track.category} · ${track.trigger}]: ${timing}, easing \`${easing}\`${track.staggerFromPrevMs ? `, stagger +${Math.round(track.staggerFromPrevMs)}ms` : ''}`,
+        );
+      }
+      if (ms.unavailableItems.length > 0) {
+        for (const item of ms.unavailableItems.slice(0, 6)) {
+          lines.push(`  - Unavailable (${item.category} on \`${item.target}\`): ${item.reason}`);
+        }
+      }
     }
     lines.push('');
   }

@@ -75,6 +75,7 @@ const overlayToolIdSchema = z.enum([
   'arrange',
   'design_review',
   'tech_stack',
+  'motion_lab',
 ]);
 
 export const extensionSettingsSchema = z.strictObject({

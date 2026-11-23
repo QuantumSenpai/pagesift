@@ -18,6 +18,7 @@ export const toolIdSchema = z.enum([
   'arrange',
   'design_review',
   'tech_stack',
+  'motion_lab',
 ]);
 
 export type ToolId = z.infer<typeof toolIdSchema>;
@@ -49,6 +50,13 @@ export const messageOperationSchema = z.enum([
   'RUN_ARRANGE',
   'RUN_DESIGN_REVIEW',
   'RUN_TECH_STACK',
+  'RUN_MOTION_INSPECT',
+  'START_MOTION_OBSERVATION',
+  'STOP_MOTION_OBSERVATION',
+  'CANCEL_MOTION_OBSERVATION',
+  'SAVE_MOTION_MEDIA_TO_IDB',
+  'GET_MOTION_MEDIA_FROM_IDB',
+  'DELETE_MOTION_MEDIA_FROM_IDB',
   'EDIT_UNDO',
   'EDIT_REDO',
   'EDIT_RESET',
@@ -61,6 +69,9 @@ export const messageOperationSchema = z.enum([
   'SAVE_ARTIFACT_TO_IDB',
   'GET_ARTIFACT_FROM_IDB',
   'DELETE_ARTIFACT_FROM_IDB',
+  'SAVE_MOTION_MEDIA_TO_IDB',
+  'GET_MOTION_MEDIA_FROM_IDB',
+  'DELETE_MOTION_MEDIA_FROM_IDB',
   'SAVE_CAPTURE_TO_IDB',
   'LIST_PROJECTS_FROM_IDB',
   'GET_STORAGE_USAGE',
@@ -107,6 +118,9 @@ const PRIVILEGED_EXTENSION_PAGE_OPERATIONS = new Set<MessageOperation>([
   'SAVE_ARTIFACT_TO_IDB',
   'GET_ARTIFACT_FROM_IDB',
   'DELETE_ARTIFACT_FROM_IDB',
+  'SAVE_MOTION_MEDIA_TO_IDB',
+  'GET_MOTION_MEDIA_FROM_IDB',
+  'DELETE_MOTION_MEDIA_FROM_IDB',
   'SAVE_CAPTURE_TO_IDB',
   'LIST_PROJECTS_FROM_IDB',
   'GET_STORAGE_USAGE',
@@ -265,6 +279,7 @@ const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = 
       'interpret_design_review',
       'explain_tech_stack',
       'extract_features',
+      'explain_motion',
     ]),
     modelId: z.string().trim().max(160).optional(),
     sourceTool: z
@@ -277,6 +292,7 @@ const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = 
         'inspect',
         'tech_stack',
         'feature_extract',
+        'motion_lab',
       ])
       .default('clone_prompt'),
     toolOutput: z.record(z.string(), z.unknown()).default({}),
@@ -302,8 +318,59 @@ const OPERATION_PAYLOAD_SCHEMAS: Partial<Record<MessageOperation, z.ZodType>> = 
         'enhance_clone_prompt',
         'interpret_design_review',
         'explain_tech_stack',
+        'explain_motion',
       ])
       .optional(),
+  }),
+  RUN_MOTION_INSPECT: z.strictObject({
+    selector: z.string().trim().max(512).optional(),
+    maxTargets: z.number().int().min(1).max(24).optional(),
+  }),
+  START_MOTION_OBSERVATION: z.strictObject({
+    selector: z.string().trim().max(512).optional(),
+    trigger: z
+      .enum([
+        'load',
+        'hover',
+        'leave',
+        'click',
+        'scroll',
+        'focus',
+        'pointer_move',
+        'drag',
+        'loop',
+        'manual',
+      ])
+      .default('manual'),
+    durationMs: z.number().int().min(200).max(15000).default(3000),
+    maxTargets: z.number().int().min(1).max(24).default(24),
+  }),
+  STOP_MOTION_OBSERVATION: z.strictObject({
+    sessionId: z.string().trim().max(128).optional(),
+  }),
+  CANCEL_MOTION_OBSERVATION: z.strictObject({
+    sessionId: z.string().trim().max(128).optional(),
+    reason: z.string().trim().max(240).optional(),
+  }),
+  SAVE_MOTION_MEDIA_TO_IDB: z.strictObject({
+    id: z.string().trim().min(1).max(128),
+    projectId: z.string().trim().min(1).max(128),
+    sessionId: z.string().trim().min(1).max(128),
+    kind: z.enum(['video', 'frame']),
+    mimeType: z.enum(['video/webm', 'image/png', 'image/jpeg', 'image/webp']),
+    width: z.number().int().min(0).max(8192).default(0),
+    height: z.number().int().min(0).max(8192).default(0),
+    durationMs: z.number().min(0).max(300000).default(0),
+    tMs: z.number().min(0).max(300000).default(0),
+    base64Data: z.string().min(4),
+  }),
+  GET_MOTION_MEDIA_FROM_IDB: z.strictObject({
+    id: z.string().trim().min(1).max(128).optional(),
+    sessionId: z.string().trim().min(1).max(128).optional(),
+  }),
+  DELETE_MOTION_MEDIA_FROM_IDB: z.strictObject({
+    id: z.string().trim().min(1).max(128).optional(),
+    sessionId: z.string().trim().min(1).max(128).optional(),
   }),
   OPEN_OPTIONS_PAGE: z.strictObject({}),
   OPEN_SITE_RESPONSIVE_WINDOWS: z.strictObject({

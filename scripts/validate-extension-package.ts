@@ -52,18 +52,36 @@ function main(): void {
     }
   }
 
+  const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8')) as {
+    version?: string;
+  };
+  const pkgLock = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package-lock.json'), 'utf8')) as {
+    version?: string;
+  };
+
   const manifestRaw = fs.readFileSync(path.join(EXT_DIR, 'manifest.json'), 'utf8');
   const manifest = JSON.parse(manifestRaw) as {
     manifest_version: number;
     name: string;
     version: string;
     permissions: string[];
+    optional_permissions?: string[];
     background?: { service_worker?: string };
     action?: { default_popup?: string; default_icon?: Record<string, string> };
     icons?: Record<string, string>;
     content_security_policy?: { extension_pages?: string };
   };
 
+  if (!pkgJson.version || manifest.version !== pkgJson.version) {
+    throw new Error(
+      `Version mismatch: package.json has ${pkgJson.version ?? 'missing'} while manifest.json has ${manifest.version}`,
+    );
+  }
+  if (pkgLock.version !== pkgJson.version) {
+    throw new Error(
+      `Lockfile mismatch: package-lock.json has ${pkgLock.version ?? 'missing'} while package.json has ${pkgJson.version}`,
+    );
+  }
   if (manifest.manifest_version !== 3) {
     throw new Error('Manifest must declare manifest_version: 3');
   }
@@ -84,9 +102,14 @@ function main(): void {
     '<all_urls>',
   ];
   for (const perm of manifest.permissions) {
-    if (forbiddenPermissions.includes(perm)) {
+    if (forbiddenPermissions.includes(perm) || perm === 'tabCapture') {
       throw new Error(`Manifest contains prohibited default permission: ${perm}`);
     }
+  }
+  if (!manifest.optional_permissions?.includes('tabCapture')) {
+    throw new Error(
+      'Manifest must declare tabCapture under optional_permissions for opt-in recording',
+    );
   }
 
   const csp = manifest.content_security_policy?.extension_pages ?? '';
@@ -138,12 +161,23 @@ function main(): void {
       throw new Error(`ZIP package is missing required file: ${reqFile}`);
     }
   }
+  for (const zipEntry of zipFileNames) {
+    if (
+      zipEntry.endsWith('.map') ||
+      zipEntry.endsWith('.ts') ||
+      zipEntry.includes('node_modules')
+    ) {
+      throw new Error(`ZIP package contains unexpected source/dev artifact: ${zipEntry}`);
+    }
+  }
 
   process.stdout.write(
     JSON.stringify({
       event: 'extension_package_validated',
+      version: manifest.version,
       manifestVersion: manifest.manifest_version,
       permissions: manifest.permissions,
+      optionalPermissions: manifest.optional_permissions ?? [],
       verifiedFiles: REQUIRED_FILES.length,
       iconSizes: [16, 32, 48, 128],
       bundledFontsCount: 7,

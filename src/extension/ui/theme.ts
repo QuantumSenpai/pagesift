@@ -115,6 +115,7 @@ const ICON_PATHS: Record<string, string[]> = {
   ],
   design_review: ['M9 11l3 3L22 4', 'M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'],
   tech_stack: ['M12 3l9 4.5-9 4.5-9-4.5L12 3z', 'M3 12l9 4.5 9-4.5', 'M3 16.5L12 21l9-4.5'],
+  motion_lab: ['M2 12h3l2-5 4 10 3-8 2 3h6'],
   download: ['M12 3v12', 'M7 10l5 5 5-5', 'M4 20h16'],
   copy: ['M9 9h10v10H9z', 'M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1'],
   menu: ['M4 6h16', 'M4 12h16', 'M4 18h16'],

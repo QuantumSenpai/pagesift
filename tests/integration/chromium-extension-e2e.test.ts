@@ -304,37 +304,52 @@ async function waitForWorkspaceStatus(
   expectedSubstring: string,
   timeoutMs = 15000,
 ): Promise<string> {
-  const handle = await page.waitForFunction(
-    (expected: string) => {
-      const text = document.getElementById('status-message')?.textContent ?? '';
-      if (text.includes(expected)) {
-        return { done: true, error: false, text };
-      }
-      if (text.startsWith('Error:')) {
-        return {
-          done: true,
-          error: true,
-          text,
-          output: document.getElementById('tool-output')?.textContent ?? '',
-        };
-      }
-      return null;
-    },
-    expectedSubstring,
-    { polling: 100, timeout: timeoutMs },
-  );
-  const result = (await handle.jsonValue()) as {
-    done: boolean;
-    error: boolean;
-    text: string;
-    output?: string;
-  };
-  if (result.error) {
+  try {
+    const handle = await page.waitForFunction(
+      (expected: string) => {
+        const text = document.getElementById('status-message')?.textContent ?? '';
+        if (text.includes(expected)) {
+          return { done: true, error: false, text };
+        }
+        if (text.startsWith('Error:')) {
+          return {
+            done: true,
+            error: true,
+            text,
+            output: document.getElementById('tool-output')?.textContent ?? '',
+          };
+        }
+        return null;
+      },
+      expectedSubstring,
+      { polling: 100, timeout: timeoutMs },
+    );
+    const result = (await handle.jsonValue()) as {
+      done: boolean;
+      error: boolean;
+      text: string;
+      output?: string;
+    };
+    if (result.error) {
+      throw new Error(
+        `Workspace reported error while waiting for "${expectedSubstring}": ${result.text}\n${result.output ?? ''}`,
+      );
+    }
+    return result.text;
+  } catch (err) {
+    const diag = await page
+      .evaluate(() => ({
+        status: document.getElementById('status-message')?.textContent ?? '',
+        hasInspect: Boolean(document.getElementById('motion-inspect-btn')),
+        hasStart: Boolean(document.getElementById('motion-start-btn')),
+        hasStop: Boolean(document.getElementById('motion-stop-btn')),
+      }))
+      .catch(() => null);
     throw new Error(
-      `Workspace reported error while waiting for "${expectedSubstring}": ${result.text}\n${result.output ?? ''}`,
+      `waitForWorkspaceStatus("${expectedSubstring}") failed (${err instanceof Error ? err.message : String(err)}); diag=${JSON.stringify(diag)}`,
+      { cause: err },
     );
   }
-  return result.text;
 }
 
 describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', () => {
@@ -942,7 +957,7 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
         });
 
         await new Promise<void>((resolve, reject) => {
-          const openReq = indexedDB.open('pagesift_local_db', 3);
+          const openReq = indexedDB.open('pagesift_local_db');
           openReq.onerror = () => {
             reject(new Error('Failed to open pagesift_local_db'));
           };
@@ -1513,7 +1528,7 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
       const header = sr?.querySelector<HTMLElement>('.ps-dock-header');
       const styleText = sr?.querySelector('style')?.textContent ?? '';
       return {
-        distinctPalette: styleText.includes('#0f1214') && styleText.includes('#0d9488'),
+        distinctPalette: styleText.includes('#111318') && styleText.includes('#2563eb'),
         hasDockHeader: Boolean(header),
         hasNotifyStack: Boolean(sr?.querySelector('.ps-notify-stack')),
         theme: anchor?.getAttribute('data-theme') ?? '',
@@ -2002,5 +2017,249 @@ describe('Real Chromium Manifest V3 Extension Acceptance Suite (Slices 1-6)', ()
     expect(runtimeErrors).toEqual([]);
     await handedOffWorkspace.close();
     await fixturePage.close();
+  }, 90000);
+
+  it('executes full Motion Lab workflow in Chromium: inspect, observe hover/WAAPI, replay preview, compare, export, and reopen', async () => {
+    const motionServer = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Motion Lab Fixture</title>
+  <style>
+    @keyframes pulseSlide {
+      from { transform: translateX(0px); opacity: 0.7; }
+      to { transform: translateX(24px); opacity: 1; }
+    }
+    body { margin: 0; padding: 32px; background: #0f1214; color: #f8fafc; font-family: sans-serif; }
+    #motion-card {
+      width: 240px; height: 96px; padding: 16px; border-radius: 10px;
+      background: #0d9488; transition: transform 350ms cubic-bezier(0.22, 1, 0.36, 1), opacity 350ms ease-out;
+      animation: pulseSlide 800ms ease-in-out 1 both;
+    }
+    #motion-card:hover { transform: translateY(-18px) scale(1.04); opacity: 0.9; }
+    #gl-canvas { width: 120px; height: 60px; margin-top: 16px; display: block; }
+  </style>
+</head>
+<body>
+  <div id="motion-card">Hover or Click Card</div>
+  <canvas id="gl-canvas" width="120" height="60"></canvas>
+  <script>
+    const card = document.getElementById('motion-card');
+    card.addEventListener('click', () => {
+      card.animate([{ transform: 'translateX(0px)' }, { transform: 'translateX(48px)' }], {
+        duration: 420,
+        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+        fill: 'forwards',
+      });
+    });
+  </script>
+</body>
+</html>`);
+    });
+
+    await new Promise<void>((resolve) => motionServer.listen(0, '127.0.0.1', resolve));
+    const addr = motionServer.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    const motionPageUrl = `http://127.0.0.1:${port}/`;
+
+    const activeContext = context;
+    if (!activeContext) throw new Error('BrowserContext not initialized');
+
+    const motionPage = await activeContext.newPage();
+    await motionPage.goto(motionPageUrl, { waitUntil: 'load' });
+    await motionPage.waitForTimeout(200);
+
+    const idleCountBefore = await motionPage.evaluate(
+      () => document.querySelectorAll('[data-pagesift-root="true"]').length,
+    );
+    expect(idleCountBefore).toBe(0);
+
+    const helperPage = await activeContext.newPage();
+    await helperPage.goto(`chrome-extension://${extensionId}/workspace.html`);
+
+    const resolvedTabId = await helperPage.evaluate(async (targetUrl: string) => {
+      const chromeApi = (
+        globalThis as unknown as {
+          chrome: {
+            tabs: {
+              query: (q: object) => Promise<Array<{ id?: number; url?: string }>>;
+              sendMessage: (tabId: number, msg: unknown) => Promise<unknown>;
+            };
+          };
+        }
+      ).chrome;
+      const tabs = await chromeApi.tabs.query({});
+      const match = tabs.find((t) => (t.url ?? '').startsWith(targetUrl));
+      if (!match?.id) throw new Error('Target Motion Lab tab not found');
+      await chromeApi.tabs.sendMessage(match.id, {
+        schemaVersion: 1,
+        requestId: 'motion-e2e-toggle',
+        operation: 'TOGGLE_OVERLAY_DASHBOARD',
+        payload: { mode: 'open' },
+      });
+      return match.id;
+    }, motionPageUrl);
+    await helperPage.close();
+
+    await motionPage.waitForFunction(() => {
+      const host = document.getElementById('pagesift-root-host');
+      return Boolean(host?.shadowRoot?.querySelector('[data-ps-action="motion-lab"]'));
+    });
+
+    const overlayVisualMetrics = await motionPage.evaluate(() => {
+      const host = document.getElementById('pagesift-root-host');
+      const root = host?.shadowRoot;
+      const anchor = root?.querySelector<HTMLElement>('.ps-anchor');
+      const dock = root?.querySelector<HTMLElement>('.ps-dock');
+      const accentPill = root?.querySelector<HTMLElement>('.ps-pill-btn.accent');
+      const dockRect = dock?.getBoundingClientRect();
+      const pillCs = accentPill ? getComputedStyle(accentPill) : null;
+      return {
+        bottomClearancePx: dockRect ? window.innerHeight - dockRect.bottom : -1,
+        leftPx: dockRect?.left ?? -1,
+        rightOverflowPx: dockRect ? dockRect.right - window.innerWidth : 999,
+        topPx: dockRect?.top ?? -1,
+        accentBg: pillCs?.backgroundColor ?? '',
+        hasBrandPill: Boolean(root?.querySelector('.ps-dock-brand-pill')),
+        theme: anchor?.getAttribute('data-theme'),
+      };
+    });
+    expect(overlayVisualMetrics.bottomClearancePx).toBeGreaterThanOrEqual(30);
+    expect(overlayVisualMetrics.leftPx).toBeGreaterThanOrEqual(0);
+    expect(overlayVisualMetrics.rightOverflowPx).toBeLessThanOrEqual(0);
+    expect(overlayVisualMetrics.topPx).toBeGreaterThanOrEqual(0);
+    expect(overlayVisualMetrics.accentBg).toBe('rgb(37, 99, 235)');
+    expect(overlayVisualMetrics.hasBrandPill).toBe(true);
+
+    const initialTheme = await motionPage.evaluate(() => {
+      const root = document.getElementById('pagesift-root-host')?.shadowRoot;
+      return root?.querySelector('.ps-anchor')?.getAttribute('data-theme') ?? 'dark';
+    });
+    await motionPage.evaluate(() => {
+      const root = document.getElementById('pagesift-root-host')?.shadowRoot;
+      root?.querySelector<HTMLButtonElement>('[data-ps-action="toggle-theme"]')?.click();
+    });
+    const toggledTheme = await motionPage.evaluate(() => {
+      const root = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const anchor = root?.querySelector<HTMLElement>('.ps-anchor');
+      const dock = anchor?.querySelector<HTMLElement>('.ps-dock');
+      return {
+        theme: anchor?.getAttribute('data-theme'),
+        dockBg: dock ? getComputedStyle(dock).backgroundColor : '',
+      };
+    });
+    expect(toggledTheme.theme).toBe(initialTheme === 'dark' ? 'light' : 'dark');
+    expect(toggledTheme.dockBg).toBe(toggledTheme.theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(17, 19, 24)');
+
+    await motionPage.setViewportSize({ width: 390, height: 844 });
+    const narrowOverlayCheck = await motionPage.evaluate(() => {
+      const root = document.getElementById('pagesift-root-host')?.shadowRoot;
+      const dock = root?.querySelector<HTMLElement>('.ps-dock');
+      const divider = root?.querySelector<HTMLElement>('.ps-dock-divider');
+      const r = dock?.getBoundingClientRect();
+      return {
+        bottomClearancePx: r ? window.innerHeight - r.bottom : -1,
+        leftPx: r?.left ?? -1,
+        rightOverflowPx: r ? r.right - window.innerWidth : 999,
+        topPx: r?.top ?? -1,
+        dividerDisplay: divider ? getComputedStyle(divider).display : 'missing',
+      };
+    });
+    expect(narrowOverlayCheck.bottomClearancePx).toBeGreaterThanOrEqual(30);
+    expect(narrowOverlayCheck.leftPx).toBeGreaterThanOrEqual(0);
+    expect(narrowOverlayCheck.rightOverflowPx).toBeLessThanOrEqual(0);
+    expect(narrowOverlayCheck.topPx).toBeGreaterThanOrEqual(0);
+    expect(narrowOverlayCheck.dividerDisplay).toBe('none');
+    await motionPage.setViewportSize({ width: 1280, height: 800 });
+
+    const overlayInspectCounts = await motionPage.evaluate(() => {
+      const host = document.getElementById('pagesift-root-host');
+      const root = host?.shadowRoot;
+      const barTools = root?.querySelectorAll('button[data-overlay-bar-tool]').length ?? 0;
+      const motionPill = root?.querySelector<HTMLButtonElement>('[data-ps-action="motion-lab"]');
+      motionPill?.click();
+      const drawerRect = root?.querySelector<HTMLElement>('.ps-drawer')?.getBoundingClientRect();
+      return {
+        barTools,
+        hasDrawer: Boolean(root?.querySelector('[data-ps-motion-action="inspect"]')),
+        drawerTopPx: drawerRect?.top ?? -1,
+        drawerRightOverflowPx: drawerRect ? drawerRect.right - window.innerWidth : 999,
+      };
+    });
+    expect(overlayInspectCounts.barTools).toBe(15);
+    expect(overlayInspectCounts.hasDrawer).toBe(true);
+    expect(overlayInspectCounts.drawerTopPx).toBeGreaterThanOrEqual(0);
+    expect(overlayInspectCounts.drawerRightOverflowPx).toBeLessThanOrEqual(0);
+
+    await motionPage.keyboard.press('Escape');
+    const idleCountAfter = await motionPage.evaluate(
+      () => document.querySelectorAll('[data-pagesift-root="true"]').length,
+    );
+    expect(idleCountAfter).toBe(0);
+
+    const wsPage = await activeContext.newPage();
+    await wsPage.goto(
+      `chrome-extension://${extensionId}/workspace.html?tabId=${resolvedTabId}&targetUrl=${encodeURIComponent(motionPageUrl)}&tool=motion_lab`,
+      { waitUntil: 'load' },
+    );
+
+    await wsPage.waitForSelector('#motion-inspect-btn', { timeout: 10000 });
+    await wsPage.fill('#target-selector-input', '#motion-card');
+    await wsPage.click('#motion-inspect-btn');
+    await waitForWorkspaceStatus(wsPage, 'declared animation(s)', 10000);
+
+    await wsPage.click('#motion-start-btn');
+    await waitForWorkspaceStatus(wsPage, 'Observing', 10000);
+
+    await motionPage.bringToFront();
+    await motionPage.hover('#motion-card');
+    await motionPage.click('#motion-card');
+    await motionPage.waitForTimeout(300);
+
+    await wsPage.bringToFront();
+    await wsPage.click('#motion-stop-btn');
+    await waitForWorkspaceStatus(wsPage, 'Captured', 10000);
+
+    const uiSummary = await wsPage.evaluate(() => {
+      const trackRows = document.querySelectorAll('.motion-track-row').length;
+      const hasPreviewNode = Boolean(document.querySelector('[data-motion-preview-node]'));
+      const stageText = document.getElementById('structured-result-container')?.textContent ?? '';
+      return { trackRows, hasPreviewNode, stageText };
+    });
+    expect(uiSummary.trackRows).toBeGreaterThan(0);
+    expect(uiSummary.hasPreviewNode).toBe(true);
+    expect(uiSummary.stageText).toContain('Comparison Status: not_compared');
+
+    await wsPage.click('#motion-preview-play');
+    await wsPage.fill('#motion-preview-scrub', '500');
+    await wsPage.dispatchEvent('#motion-preview-scrub', 'input');
+    await wsPage.click('#motion-reduced-motion-toggle');
+    await wsPage.click('#motion-compare-parity-btn');
+    const comparedText = await wsPage.evaluate(
+      () => document.getElementById('structured-result-container')?.textContent ?? '',
+    );
+    expect(comparedText).toContain('Comparison Status: matched');
+
+    await wsPage.click('#motion-save-artifact-btn');
+    await waitForWorkspaceStatus(wsPage, 'Saved Motion Lab session', 10000);
+
+    await wsPage.click('#nav-saved-btn');
+    await wsPage.waitForSelector('#saved-work-list button', { timeout: 10000 });
+    const reopenedOk = await wsPage.evaluate(() => {
+      const openBtns = Array.from(
+        document.querySelectorAll<HTMLButtonElement>('#saved-work-list button'),
+      );
+      const openBtn = openBtns.find((b) => b.textContent === 'Open');
+      openBtn?.click();
+      return Boolean(openBtn);
+    });
+    expect(reopenedOk).toBe(true);
+    await waitForWorkspaceStatus(wsPage, 'Loaded saved artifact: Motion Lab', 10000);
+
+    await wsPage.close();
+    await motionPage.close();
+    motionServer.close();
   }, 90000);
 });

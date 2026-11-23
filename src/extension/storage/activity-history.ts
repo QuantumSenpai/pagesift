@@ -79,6 +79,11 @@ const ALLOWED_OPTION_KEYS = new Set([
   'format',
   'exportFormat',
   'fontFamily',
+  'trigger',
+  'durationMs',
+  'maxDurationMs',
+  'sourceKind',
+  'recordVideo',
 ]);
 
 const SENSITIVE_KEY_PATTERN =

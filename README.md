@@ -1,15 +1,23 @@
 <div align="center">
   <img src="docs/assets/readme-hero.svg" alt="PageSift Animated Overview" width="100%" />
   <br /><br />
+  <img src="https://img.shields.io/badge/Version-v1.1.0-0d9488?style=flat-square" alt="Version 1.1.0" />
   <img src="https://img.shields.io/badge/Manifest-V3-0d9488?style=flat-square" alt="Manifest V3" />
-  <img src="https://img.shields.io/badge/Tools-15%2B_Local-161b1f?style=flat-square" alt="15+ Local Tools" />
+  <img src="https://img.shields.io/badge/Tools-16%2B_Local-161b1f?style=flat-square" alt="16+ Local Tools" />
   <img src="https://img.shields.io/badge/Auth-None_Required-161b1f?style=flat-square" alt="No Auth Required" />
   <img src="https://img.shields.io/badge/AI-Optional_BYOK-0d9488?style=flat-square" alt="Optional BYOK AI" />
 </div>
 
 ---
 
-## Install & Load (30 Seconds)
+## Download & Install Extension (`v1.1.0`)
+
+PageSift builds both an unpacked Manifest V3 folder and a self-contained ZIP package locally (no account, backend, database, Docker, or AI key required):
+
+- **Local build artifacts** produced by `npm run build:extension`:
+  - Downloadable extension archive: `dist/pagesift-extension.zip` (extract the archive, then select the extracted folder in **Load unpacked**)
+  - Direct unpacked extension folder: `dist/extension`
+  - *Release status note*: No pre-built GitHub Release has been published yet on `QuantumSenpai/pagesift`. Build locally with the commands below before loading into Chromium/Chrome/Brave.
 
 ```bash
 git clone https://github.com/QuantumSenpai/pagesift.git
@@ -19,9 +27,9 @@ npm run build:extension
 npm run validate:extension
 ```
 
-1. Open **`brave://extensions`** or **`chrome://extensions`**.
+1. Open **`chrome://extensions`** or **`brave://extensions`**.
 2. Enable **Developer mode** (top-right).
-3. Click **Load unpacked** -> select **`dist/extension`** (or use **`dist/pagesift-extension.zip`**).
+3. Click **Load unpacked** -> select **`dist/extension`** (or extract **`dist/pagesift-extension.zip`** and load that folder).
 4. Pin **PageSift** in the toolbar.
 
 > After updating code, rebuild with `npm run build:extension` and click **Reload** on the extension card.
@@ -62,7 +70,8 @@ npm run validate:extension
 | **Design Review** | Contrast, spacing, blur/shadow, and heading hierarchy audit |
 | **Tech Stack** | Multi-signal detection with real brand icons & searchable evidence (`React`, `Next.js`, `Framer`, `Webflow`, CDNs, analytics) |
 | **Feature Extract** | Local product/UI feature extractor + optional AI analysis |
-| **Activity History** | Auto-logged per-site runs in IndexedDB (`pagesift_local_db v3`), filterable by domain/tool/date |
+| **Motion Lab (`v1.1.0`)** | Reverse-engineer animations: inspect declared CSS/WAAPI/scroll timelines, record interactive sessions (`Declared`/`Observed`/`Inferred`/`Unavailable`), replay in isolated preview, compare reference vs reconstruction, import/export Reanimate ZIP/JSON, and export CSS, WAAPI, HTML demo, `MOTION.md` |
+| **Activity History** | Auto-logged per-site runs in IndexedDB (`pagesift_local_db v4`), filterable by domain/tool/date, including reopenable Motion Lab sessions |
 
 ---
 
@@ -97,4 +106,5 @@ npm run typecheck           # TypeScript check
 - [Optional AI Guide](docs/nvidia-ai-guide.md)
 - [Performance Report](docs/performance-report.md)
 - [Design System & Icon](docs/design-system-and-icon.md)
+- [Motion Lab & Reanimate Architecture](docs/motion-lab-reanimate-architecture.md)
 - [Sources](docs/sources.md)

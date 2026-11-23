@@ -1,5 +1,6 @@
 import { extractPageAssets } from './assets-engine.js';
 import { extractPageDesignSnapshot, type PageDesignSnapshotInput } from './design-md-engine.js';
+import { summarizeMotionSpecCounts, type MotionSpec } from './motion-spec.js';
 
 export type PromptTargetFramework = 'generic' | 'react_tailwind' | 'html_css' | 'vue_css';
 
@@ -35,6 +36,7 @@ export function generateLocalClonePrompt(
   doc: Document,
   win: Window,
   targetFramework: PromptTargetFramework = 'react_tailwind',
+  motionSpec?: MotionSpec,
 ): ClonePromptReport {
   const snapshot: PageDesignSnapshotInput = extractPageDesignSnapshot(doc, win);
   const assetsReport = extractPageAssets(doc, win);
@@ -122,6 +124,19 @@ export function generateLocalClonePrompt(
       (a, i) => `${i + 5}. Verify: ${a}`,
     ) ?? []),
   ];
+
+  if (motionSpec) {
+    const counts = summarizeMotionSpecCounts(motionSpec);
+    promptLines.push(
+      '',
+      '## Observed & Declared Motion Specifications (Motion Lab)',
+      `- Scope \`${motionSpec.rootSelector}\`: ${counts.declaredCount} declared, ${counts.observedCount} observed, ${counts.inferredCount} inferred, ${counts.unavailableCount} unavailable.`,
+      ...motionSpec.tracks.slice(0, 10).map((t) => {
+        const easing = t.declaredEasing ?? t.inferredEasings[0]?.cssEasing ?? 'linear';
+        return `- [${t.evidenceClass}] \`${t.selector}\` \`${t.property}\` (${t.trigger}, ${Math.round(t.durationMs ?? 0)}ms, easing \`${easing}\`): ${String(t.fromValue ?? 'start')} -> ${String(t.toValue ?? 'end')}`;
+      }),
+    );
+  }
 
   return {
     prompt: promptLines.join('\n') + '\n',

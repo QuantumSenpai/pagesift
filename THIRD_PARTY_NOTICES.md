@@ -55,3 +55,35 @@ It incorporates or depends on the following open-source packages and bundled typ
     - License: MIT
     - Repository: https://github.com/panva/openid-client & https://github.com/panva/jose
     - Copyright (c) Filip Skokan
+
+## Motion Lab Reference & Ported Algorithms
+
+11. **Reanimate**
+    - License: MIT
+    - Repository: https://github.com/NiazMorshed2007/reanimate
+    - Copyright (c) 2026 Niaz Morshed
+    - Notice: PageSift's Motion Lab specification, cubic-bezier curve-fitting tables/algorithmic structure, frame comparison metrics, and Reanimate artifact importer were informed by and incorporate MIT-licensed reference designs from Reanimate (`skills/reanimate`). The full MIT License text from Reanimate is preserved below:
+
+```text
+MIT License
+
+Copyright (c) 2026 Niaz Morshed
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

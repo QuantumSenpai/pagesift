@@ -12,7 +12,7 @@ import {
 } from './activity-history.js';
 
 export const LOCAL_DB_NAME = 'pagesift_local_db';
-export const LOCAL_DB_VERSION = 3;
+export const LOCAL_DB_VERSION = 4;
 export const DEFAULT_SOFT_QUOTA_BYTES = 50 * 1024 * 1024;
 
 export const localProjectSchema = z.strictObject({
@@ -37,6 +37,7 @@ export const localArtifactKindSchema = z.enum([
   'capture_image',
   'design_review',
   'tech_stack',
+  'motion_lab',
 ]);
 
 export type LocalArtifactKind = z.infer<typeof localArtifactKindSchema>;
@@ -151,6 +152,29 @@ export interface PageSiftIndexedDbSchema extends DBSchema {
       'by-session': string;
     };
   };
+  motion_media: {
+    key: string;
+    value: LocalMotionMediaRecord;
+    indexes: {
+      'by-project': string;
+      'by-session': string;
+    };
+  };
+}
+
+export interface LocalMotionMediaRecord {
+  id: string;
+  projectId: string;
+  sessionId: string;
+  kind: 'video' | 'frame';
+  mimeType: 'video/webm' | 'image/png' | 'image/jpeg' | 'image/webp';
+  width: number;
+  height: number;
+  durationMs: number;
+  tMs: number;
+  byteLength: number;
+  bytes: Uint8Array;
+  createdAt: string;
 }
 
 export interface StorageUsageReport {
@@ -159,6 +183,7 @@ export interface StorageUsageReport {
   captureCount: number;
   jobCount: number;
   activityCount: number;
+  motionMediaCount: number;
   usedBytes: number;
   softQuotaBytes: number;
   percentUsed: number;
@@ -225,6 +250,14 @@ export async function openPageSiftDb(
           actStore.createIndex('by-session', 'sessionId');
         }
       }
+
+      if (oldVersion < 4) {
+        if (!db.objectStoreNames.contains('motion_media')) {
+          const mediaStore = db.createObjectStore('motion_media', { keyPath: 'id' });
+          mediaStore.createIndex('by-project', 'projectId');
+          mediaStore.createIndex('by-session', 'sessionId');
+        }
+      }
     },
   });
 }
@@ -260,15 +293,16 @@ export class LocalExtensionStorage {
   public async getStorageUsage(): Promise<StorageUsageReport> {
     const db = await this.getDb();
     const tx = db.transaction(
-      ['projects', 'artifacts', 'captures', 'jobs', 'activities'],
+      ['projects', 'artifacts', 'captures', 'jobs', 'activities', 'motion_media'],
       'readonly',
     );
-    const [projects, artifacts, captures, jobs, activities] = await Promise.all([
+    const [projects, artifacts, captures, jobs, activities, motionMedia] = await Promise.all([
       tx.objectStore('projects').getAll(),
       tx.objectStore('artifacts').getAll(),
       tx.objectStore('captures').getAll(),
       tx.objectStore('jobs').getAll(),
       tx.objectStore('activities').getAll(),
+      tx.objectStore('motion_media').getAll(),
     ]);
     await tx.done;
 
@@ -288,6 +322,9 @@ export class LocalExtensionStorage {
     for (const act of activities) {
       usedBytes += measureRecordBytes(act);
     }
+    for (const mm of motionMedia) {
+      usedBytes += mm.byteLength;
+    }
 
     const percentUsed =
       this.softQuotaBytes > 0
@@ -300,6 +337,7 @@ export class LocalExtensionStorage {
       captureCount: captures.length,
       jobCount: jobs.length,
       activityCount: activities.length,
+      motionMediaCount: motionMedia.length,
       usedBytes,
       softQuotaBytes: this.softQuotaBytes,
       percentUsed,
@@ -338,7 +376,7 @@ export class LocalExtensionStorage {
 
   public async deleteProject(projectId: string): Promise<void> {
     const db = await this.getDb();
-    const tx = db.transaction(['projects', 'artifacts', 'captures'], 'readwrite');
+    const tx = db.transaction(['projects', 'artifacts', 'captures', 'motion_media'], 'readwrite');
     await tx.objectStore('projects').delete(projectId);
 
     const artifactIndex = tx.objectStore('artifacts').index('by-project');
@@ -353,7 +391,57 @@ export class LocalExtensionStorage {
       await tx.objectStore('captures').delete(key);
     }
 
+    const mediaIndex = tx.objectStore('motion_media').index('by-project');
+    const mediaKeys = await mediaIndex.getAllKeys(projectId);
+    for (const key of mediaKeys) {
+      await tx.objectStore('motion_media').delete(key);
+    }
+
     await tx.done;
+  }
+
+  public async saveMotionMedia(
+    input: Omit<LocalMotionMediaRecord, 'byteLength'>,
+  ): Promise<LocalMotionMediaRecord> {
+    const byteLength = input.bytes.byteLength;
+    await this.ensureQuotaAvailable(byteLength + 256);
+    const record: LocalMotionMediaRecord = {
+      ...input,
+      byteLength,
+    };
+    const db = await this.getDb();
+    const tx = db.transaction('motion_media', 'readwrite');
+    await tx.objectStore('motion_media').put(record);
+    await tx.done;
+    return record;
+  }
+
+  public async getMotionMedia(id: string): Promise<LocalMotionMediaRecord | undefined> {
+    const db = await this.getDb();
+    return db.get('motion_media', id);
+  }
+
+  public async listMotionMediaBySession(sessionId: string): Promise<LocalMotionMediaRecord[]> {
+    const db = await this.getDb();
+    return db.getAllFromIndex('motion_media', 'by-session', sessionId);
+  }
+
+  public async deleteMotionMedia(id: string): Promise<void> {
+    const db = await this.getDb();
+    const tx = db.transaction('motion_media', 'readwrite');
+    await tx.objectStore('motion_media').delete(id);
+    await tx.done;
+  }
+
+  public async deleteMotionMediaBySession(sessionId: string): Promise<number> {
+    const db = await this.getDb();
+    const tx = db.transaction('motion_media', 'readwrite');
+    const keys = await tx.objectStore('motion_media').index('by-session').getAllKeys(sessionId);
+    for (const key of keys) {
+      await tx.objectStore('motion_media').delete(key);
+    }
+    await tx.done;
+    return keys.length;
   }
 
   public async saveArtifact(
@@ -719,7 +807,7 @@ export class LocalExtensionStorage {
   public async clearAll(): Promise<void> {
     const db = await this.getDb();
     const tx = db.transaction(
-      ['projects', 'artifacts', 'captures', 'jobs', 'activities'],
+      ['projects', 'artifacts', 'captures', 'jobs', 'activities', 'motion_media'],
       'readwrite',
     );
     await Promise.all([
@@ -728,6 +816,7 @@ export class LocalExtensionStorage {
       tx.objectStore('captures').clear(),
       tx.objectStore('jobs').clear(),
       tx.objectStore('activities').clear(),
+      tx.objectStore('motion_media').clear(),
     ]);
     await tx.done;
   }

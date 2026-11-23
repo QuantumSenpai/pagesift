@@ -59,6 +59,13 @@ function collectDirectoryFilesForZip(
 }
 
 async function buildExtension(): Promise<void> {
+  const pkgPath = path.join(ROOT_DIR, 'package.json');
+  const pkgData = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version?: string };
+  const extensionVersion =
+    typeof pkgData.version === 'string' && pkgData.version.trim().length > 0
+      ? pkgData.version.trim()
+      : '1.1.0';
+
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.mkdirSync(path.join(OUT_DIR, 'icons'), { recursive: true });
@@ -114,10 +121,11 @@ async function buildExtension(): Promise<void> {
   const manifest = {
     manifest_version: 3,
     name: 'PageSift',
-    version: '1.0.0',
+    version: extensionVersion,
     description:
-      'Free, open-source local-first web research, inspection, design token extraction, static snapshot, and activity history toolkit.',
+      'Free, open-source local-first web research, Motion Lab animation reverse engineering, design token extraction, static snapshot, and activity history toolkit.',
     permissions: ['activeTab', 'tabs', 'scripting', 'storage', 'downloads', 'unlimitedStorage'],
+    optional_permissions: ['tabCapture'],
     host_permissions: ['<all_urls>'],
     background: {
       service_worker: 'service-worker.js',
@@ -162,6 +170,7 @@ async function buildExtension(): Promise<void> {
   process.stdout.write(
     JSON.stringify({
       event: 'extension_build_completed',
+      version: extensionVersion,
       unpackedDir: OUT_DIR,
       zipPath: ZIP_PATH,
       zipSizeBytes: zipBytes.byteLength,
